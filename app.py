@@ -14,7 +14,6 @@ Deploy no Streamlit Community Cloud: aponte para este repositório / app.py.
 
 import io
 import re
-import zipfile
 
 import numpy as np
 import pandas as pd
@@ -257,44 +256,3 @@ with st.expander("➕ Ver também: posição e velocidade (cinemática)"):
             st.plotly_chart(fig, use_container_width=True)
     else:
         st.caption("Nenhum outro grupo de sinal disponível nesta aba.")
-
-# ---- Exportação em lote -----------------------------------------------------
-st.divider()
-st.subheader("📦 Exportar todos os gráficos (todas as combinações)")
-st.caption("Gera um PNG para cada combinação de região × dispositivo × eixo, em um .zip.")
-
-if st.button("Gerar pacote de gráficos (.zip)"):
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        progress = st.progress(0.0, text="Gerando gráficos...")
-        combos = []
-        for sn in sheet_names:
-            cat = build_catalog(sheets[sn])
-            for grp, axes in cat.items():
-                for ax_name, col in axes.items():
-                    combos.append((sn, grp, ax_name, col))
-        total = len(combos) or 1
-        for i, (sn, grp, ax_name, col) in enumerate(combos):
-            d = sheets[sn]
-            fig = go.Figure()
-            add_cycle_shading(fig, mark_times)
-            fig.add_trace(go.Scatter(x=d[time_column(d)], y=d[col], mode="lines", name=col))
-            fig.update_layout(
-                title=f"{sn} — {grp} — Eixo {ax_name} ({col})",
-                xaxis_title="Tempo (s)", yaxis_title=col,
-                width=1000, height=450,
-            )
-            safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{sn}_{grp}_{ax_name}")
-            png_bytes = fig.to_image(format="png")
-            zf.writestr(f"{sn}/{safe_name}.png", png_bytes)
-            progress.progress((i + 1) / total, text=f"Gerando gráficos... ({i+1}/{total})")
-    buf.seek(0)
-    st.download_button(
-        "⬇️ Baixar graficos.zip", data=buf, file_name="graficos_dropdown_analysis.zip",
-        mime="application/zip",
-    )
-
-st.caption(
-    "Dica: para exportar imagens estáticas (PNG), este app usa Kaleido "
-    "(incluído no requirements.txt)."
-)

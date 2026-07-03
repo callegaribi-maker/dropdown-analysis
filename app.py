@@ -517,7 +517,7 @@ for col_i, choice in enumerate(KINEM_ORDER, start=1):
 
 fig_kinem.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_kinem.update_yaxes(showgrid=False)
-fig_kinem.update_layout(width=900, height=340, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white")
+fig_kinem.update_layout(width=900, height=370, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white")
 st.plotly_chart(fig_kinem, use_container_width=False, key="kinem_chart")
 
 st.divider()
@@ -569,3 +569,89 @@ fig_imu.update_layout(
     width=300 * n_trials, height=670, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white",
 )
 st.plotly_chart(fig_imu, use_container_width=False, key="imu_matrix")
+
+st.divider()
+
+# ---- Seção 3: média de todos os trials, com sombra de desvio padrão --------
+st.subheader(f"📈 {body_sheet} — Média de todos os trials (sombra = ±1 desvio padrão)")
+st.caption(
+    "Cada gráfico combina os {} trials: linha = média, sombra = ±1 desvio padrão, por eixo "
+    "(X, Y, Z juntos). Inclui Cinemática (Deslocamento, Velocidade, Aceleração) e IMU (ACC, GYR). "
+    "Tempo normalizado (0–1) por ciclo antes de calcular a média.".format(n_trials)
+)
+
+GRID = np.linspace(0.0, 1.0, 101)
+
+
+def hex_to_rgba(hex_color, alpha):
+    hex_color = hex_color.lstrip("#")
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def ensemble_mean_std(grp, axis):
+    curves = []
+    for trial_idx in range(1, n_trials + 1):
+        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
+        norm_t, _, _ = make_helpers(cycle_start, d_start, v_trial, cycle_end)
+        trial_mask = (df_t >= cycle_start) & (df_t <= cycle_end)
+        colname = catalog.get(grp, {}).get(axis)
+        if colname is None:
+            continue
+        x_trial = norm_t(df_t[trial_mask])
+        y_trial = df[colname].to_numpy()[trial_mask]
+        if len(x_trial) < 2:
+            continue
+        order = np.argsort(x_trial)
+        curves.append(np.interp(GRID, x_trial[order], y_trial[order]))
+    if not curves:
+        return None, None
+    arr = np.vstack(curves)
+    return arr.mean(axis=0), arr.std(axis=0)
+
+
+AVG_GROUPS = [
+    (KINEM_LABEL_MAP["Posição"], KINEM_GROUP_MAP["Posição"], KINEM_UNIT_MAP["Posição"]),
+    (KINEM_LABEL_MAP["Velocidade"], KINEM_GROUP_MAP["Velocidade"], KINEM_UNIT_MAP["Velocidade"]),
+    (KINEM_LABEL_MAP["Aceleração"], KINEM_GROUP_MAP["Aceleração"], KINEM_UNIT_MAP["Aceleração"]),
+    (acc_label, "IMU - Acelerômetro", acc_unit),
+    (gyr_label, "IMU - Giroscópio", gyr_unit),
+]
+
+fig_avg = make_subplots(
+    rows=1, cols=len(AVG_GROUPS),
+    subplot_titles=[f"{label} (X, Y, Z)" for label, _, _ in AVG_GROUPS],
+    shared_xaxes=True,
+)
+
+for col_i, (label, grp, unit) in enumerate(AVG_GROUPS, start=1):
+    for axis in AXES:
+        mean_y, std_y = ensemble_mean_std(grp, axis)
+        if mean_y is None:
+            continue
+        color = AXIS_COLORS[axis]
+        upper = mean_y + std_y
+        lower = mean_y - std_y
+        fig_avg.add_trace(
+            go.Scatter(
+                x=np.concatenate([GRID, GRID[::-1]]), y=np.concatenate([upper, lower[::-1]]),
+                fill="toself", fillcolor=hex_to_rgba(color, 0.2),
+                line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
+            ),
+            row=1, col=col_i,
+        )
+        fig_avg.add_trace(
+            go.Scatter(
+                x=GRID, y=mean_y, mode="lines", line=dict(color=color), name=axis,
+                showlegend=(col_i == 1), legendgroup=axis,
+            ),
+            row=1, col=col_i,
+        )
+    fig_avg.update_yaxes(title_text=f"{label} ({unit})", row=1, col=col_i)
+
+fig_avg.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
+fig_avg.update_yaxes(showgrid=False)
+fig_avg.update_layout(
+    width=300 * len(AVG_GROUPS), height=370, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white",
+)
+st.plotly_chart(fig_avg, use_container_width=False, key="avg_chart")

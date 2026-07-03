@@ -522,27 +522,27 @@ st.plotly_chart(fig_kinem, use_container_width=False, key="kinem_chart")
 
 st.divider()
 
-# ---- Seção 2: ACC/GYR — matriz N trials × 2 (ACC, GYR), eixos sempre juntos -
+# ---- Seção 2: ACC/GYR — matriz 2 (ACC, GYR) × N trials, eixos sempre juntos -
 st.subheader(f"📈 {body_sheet} — ACC / GYR — todos os {n_trials} trials")
 st.caption(
-    f"Cada linha é um trial (1 a {n_trials}); colunas: {acc_label} e {gyr_label}, sempre com "
+    f"Cada coluna é um trial (1 a {n_trials}); linhas: {acc_label} e {gyr_label}, sempre com "
     "X, Y, Z juntos no mesmo gráfico."
 )
 
 imu_titles = []
-for i in range(1, n_trials + 1):
-    imu_titles.append(f"Trial {i} — {acc_label}")
-    imu_titles.append(f"Trial {i} — {gyr_label}")
+for grp in IMU_ROWS:
+    for i in range(1, n_trials + 1):
+        imu_titles.append(f"Trial {i}")
 
-fig_imu = make_subplots(rows=n_trials, cols=2, subplot_titles=imu_titles, shared_xaxes=True)
+fig_imu = make_subplots(rows=2, cols=n_trials, subplot_titles=imu_titles, shared_xaxes=True)
 
-for row_i, trial_idx in enumerate(range(1, n_trials + 1), start=1):
-    cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
-    norm_t, add_phase, add_events = make_helpers(cycle_start, d_start, v_trial, cycle_end)
-    trial_mask = (df_t >= cycle_start) & (df_t <= cycle_end)
+for row_i, grp in enumerate(IMU_ROWS, start=1):
+    label, unit = IMU_LABELS[grp]
+    for col_j, trial_idx in enumerate(range(1, n_trials + 1), start=1):
+        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
+        norm_t, add_phase, add_events = make_helpers(cycle_start, d_start, v_trial, cycle_end)
+        trial_mask = (df_t >= cycle_start) & (df_t <= cycle_end)
 
-    for col_j, grp in enumerate(IMU_ROWS, start=1):
-        label, unit = IMU_LABELS[grp]
         has_trace = False
         for axis in AXES:
             colname = catalog.get(grp, {}).get(axis)
@@ -560,11 +560,12 @@ for row_i, trial_idx in enumerate(range(1, n_trials + 1), start=1):
         if has_trace:
             add_phase(fig_imu, row_i, col_j)
             add_events(fig_imu, row_i, col_j)
-            fig_imu.update_yaxes(title_text=f"{label} ({unit})", row=row_i, col=col_j)
+            if col_j == 1:
+                fig_imu.update_yaxes(title_text=f"{label} ({unit})", row=row_i, col=col_j)
 
 fig_imu.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_imu.update_yaxes(showgrid=False)
 fig_imu.update_layout(
-    width=600, height=300 * n_trials + 70, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white",
+    width=300 * n_trials, height=670, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white",
 )
 st.plotly_chart(fig_imu, use_container_width=False, key="imu_matrix")

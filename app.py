@@ -502,9 +502,16 @@ st.caption(
 acc_label, acc_unit = IMU_LABELS["IMU - Acelerômetro"]
 gyr_label, gyr_unit = IMU_LABELS["IMU - Giroscópio"]
 
-same_scale = st.checkbox(
-    "Mesma escala (Y) para ACC e GYR — usa a escala do gráfico de maior variação", value=False
+combine_imu_axes = st.checkbox(
+    "ACC e GYR: mostrar X, Y, Z juntos no 1º gráfico (2º e 3º ficam vazios)", value=False
 )
+
+if combine_imu_axes:
+    row2_titles = [f"{acc_label} (X, Y, Z)", "", ""]
+    row3_titles = [f"{gyr_label} (X, Y, Z)", "", ""]
+else:
+    row2_titles = [f"{acc_label} — X", f"{acc_label} — Y", f"{acc_label} — Z"]
+    row3_titles = [f"{gyr_label} — X", f"{gyr_label} — Y", f"{gyr_label} — Z"]
 
 fig_matrix = make_subplots(
     rows=3, cols=3,
@@ -512,8 +519,8 @@ fig_matrix = make_subplots(
         f"{KINEM_LABEL_MAP['Posição']} (X, Y, Z)",
         f"{KINEM_LABEL_MAP['Velocidade']} (X, Y, Z)",
         f"{KINEM_LABEL_MAP['Aceleração']} (X, Y, Z)",
-        f"{acc_label} — X", f"{acc_label} — Y", f"{acc_label} — Z",
-        f"{gyr_label} — X", f"{gyr_label} — Y", f"{gyr_label} — Z",
+        *row2_titles,
+        *row3_titles,
     ],
     shared_xaxes=True,
 )
@@ -544,41 +551,45 @@ for col_i, choice in enumerate(KINEM_ORDER, start=1):
         add_event_lines_subplot(fig_matrix, 1, col_i)
         fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=1, col=col_i)
 
-# Linhas 2-3: ACC e GYR, um gráfico por eixo (como antes).
+# Linhas 2-3: ACC e GYR. Modo normal = um gráfico por eixo. Modo combinado = X, Y, Z
+# juntos só no 1º gráfico da linha, com o 2º e o 3º vazios.
 for i, grp in enumerate(IMU_ROWS, start=2):
     label, unit = IMU_LABELS[grp]
-    for j, axis in enumerate(AXES, start=1):
-        colname = catalog.get(grp, {}).get(axis)
-        if colname is None:
-            continue
-        fig_matrix.add_trace(
-            go.Scatter(
-                x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
-                mode="lines", line=dict(color=IMU_ROW_COLORS[grp]), showlegend=False, name=colname,
-            ),
-            row=i, col=j,
-        )
-        add_phase_shading_subplot(fig_matrix, i, j)
-        add_event_lines_subplot(fig_matrix, i, j)
-        if j == 1:
-            fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=i, col=j)
-
-# Escala compartilhada (opcional): aplica a mesma faixa Y aos 3 eixos de ACC e,
-# separadamente, aos 3 eixos de GYR — usando a maior variação (amplitude) entre X/Y/Z.
-if same_scale:
-    for i, grp in enumerate(IMU_ROWS, start=2):
-        vals = []
+    if combine_imu_axes:
+        has_trace = False
         for axis in AXES:
             colname = catalog.get(grp, {}).get(axis)
             if colname is None:
                 continue
-            vals.append(df[colname].to_numpy()[trial_mask])
-        if vals:
-            max_abs = float(np.max(np.abs(np.concatenate(vals))))
-            pad = max_abs * 0.05 if max_abs > 0 else 1.0
-            y_range = [-(max_abs + pad), max_abs + pad]
-            for j in range(1, 4):
-                fig_matrix.update_yaxes(range=y_range, row=i, col=j)
+            fig_matrix.add_trace(
+                go.Scatter(
+                    x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
+                    mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis,
+                    showlegend=False, legendgroup=axis,
+                ),
+                row=i, col=1,
+            )
+            has_trace = True
+        if has_trace:
+            add_phase_shading_subplot(fig_matrix, i, 1)
+            add_event_lines_subplot(fig_matrix, i, 1)
+            fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=i, col=1)
+    else:
+        for j, axis in enumerate(AXES, start=1):
+            colname = catalog.get(grp, {}).get(axis)
+            if colname is None:
+                continue
+            fig_matrix.add_trace(
+                go.Scatter(
+                    x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
+                    mode="lines", line=dict(color=IMU_ROW_COLORS[grp]), showlegend=False, name=colname,
+                ),
+                row=i, col=j,
+            )
+            add_phase_shading_subplot(fig_matrix, i, j)
+            add_event_lines_subplot(fig_matrix, i, j)
+            if j == 1:
+                fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=i, col=j)
 
 fig_matrix.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_matrix.update_yaxes(showgrid=False)

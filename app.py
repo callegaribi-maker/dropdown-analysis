@@ -418,18 +418,28 @@ IMU_LABELS = {
     "IMU - Acelerômetro": ("Aceleração Linear", "m/s²"),
     "IMU - Giroscópio": ("Velocidade Angular", "°/s"),
 }
-AXIS_COLORS = {"X": "#1f77b4", "Y": "#ff7f0e", "Z": "#2ca02c"}
-
 # Mapeamento anatômico dos eixos — diferente entre Kinem (sistema óptico) e o
 # celular (ACC/GYR): no Kinem, Z=Vertical, Y=Anteroposterior, X=Mediolateral.
 # No celular, Y=Vertical, Z=Mediolateral, X=Anteroposterior.
 KINEM_AXIS_LABEL = {"X": "ML", "Y": "AP", "Z": "Vertical"}
 IMU_AXIS_LABEL = {"X": "AP", "Y": "Vertical", "Z": "ML"}
 
+# Cor por DIREÇÃO anatômica (não pelo eixo bruto) — assim Vertical é sempre a
+# mesma cor tanto no Kinem (Z) quanto no celular (Y), e o mesmo vale para AP e ML.
+DIR_COLORS = {"Vertical": "#2ca02c", "AP": "#1f77b4", "ML": "#d62728"}
+
+
+def axis_direction(is_kinem, axis):
+    mapping = KINEM_AXIS_LABEL if is_kinem else IMU_AXIS_LABEL
+    return mapping[axis]
+
+
+def axis_color(is_kinem, axis):
+    return DIR_COLORS[axis_direction(is_kinem, axis)]
+
 
 def axis_name(is_kinem, axis):
-    mapping = KINEM_AXIS_LABEL if is_kinem else IMU_AXIS_LABEL
-    return f"{axis} ({mapping[axis]})"
+    return f"{axis} ({axis_direction(is_kinem, axis)})"
 
 df = sheets[body_sheet]
 catalog = build_catalog(df)
@@ -543,7 +553,7 @@ for col_i, choice in enumerate(KINEM_ORDER, start=1):
         fig_kinem.add_trace(
             go.Scatter(
                 x=k_norm_t(df_t[k_trial_mask]), y=df[colname].to_numpy()[k_trial_mask],
-                mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis_name(True, axis),
+                mode="lines", line=dict(color=axis_color(True, axis)), name=axis_name(True, axis),
                 showlegend=(col_i == 1), legendgroup=axis_name(True, axis),
             ),
             row=1, col=col_i,
@@ -596,7 +606,7 @@ for row_i, grp in enumerate(IMU_ROWS, start=1):
             fig_imu.add_trace(
                 go.Scatter(
                     x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
-                    mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis_name(False, axis),
+                    mode="lines", line=dict(color=axis_color(False, axis)), name=axis_name(False, axis),
                     showlegend=(row_i == 1 and col_j == 1), legendgroup=axis_name(False, axis),
                 ),
                 row=row_i, col=col_j,
@@ -676,7 +686,8 @@ for col_i, (label, grp, unit) in enumerate(AVG_GROUPS, start=1):
         mean_y, std_y = ensemble_mean_std(grp, axis)
         if mean_y is None:
             continue
-        color = AXIS_COLORS[axis]
+        color = axis_color(is_kinem, axis)
+        direction = axis_direction(is_kinem, axis)
         upper = mean_y + std_y
         lower = mean_y - std_y
         fig_avg.add_trace(
@@ -687,14 +698,12 @@ for col_i, (label, grp, unit) in enumerate(AVG_GROUPS, start=1):
             ),
             row=1, col=col_i,
         )
-        # Legenda mostrada 1x para o grupo Kinem (1ª coluna) e 1x para o grupo IMU
-        # (1ª coluna de ACC/GYR), já que o mapeamento anatômico de cada letra muda.
-        show_lgd = (col_i == 1) or (is_kinem is False and col_i == 4)
+        # Cor = direção anatômica (Vertical/AP/ML), consistente entre Kinem e IMU,
+        # então 1 legenda só (pela direção) já vale pro gráfico inteiro.
         fig_avg.add_trace(
             go.Scatter(
                 x=GRID, y=mean_y, mode="lines", line=dict(color=color),
-                name=axis_name(is_kinem, axis), showlegend=show_lgd,
-                legendgroup=axis_name(is_kinem, axis),
+                name=direction, showlegend=(col_i == 1), legendgroup=direction,
             ),
             row=1, col=col_i,
         )

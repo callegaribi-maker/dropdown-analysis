@@ -419,10 +419,21 @@ IMU_LABELS = {
     "IMU - Giroscópio": ("Velocidade Angular", "°/s"),
 }
 # Mapeamento anatômico dos eixos — diferente entre Kinem (sistema óptico) e o
-# celular (ACC/GYR): no Kinem, Z=Vertical, Y=Anteroposterior, X=Mediolateral.
-# No celular, Y=Vertical, Z=Mediolateral, X=Anteroposterior.
+# celular (ACC/GYR), e no celular o mapeamento do ACC/GYR também muda conforme a
+# região (Joelho vs L5), porque a orientação do celular no corpo é diferente:
+#   Kinem:        Z = Vertical, Y = Anteroposterior (AP), X = Mediolateral (ML)
+#   ACC/GYR Joelho: Y = Vertical, Z = Mediolateral (ML),   X = Anteroposterior (AP)
+#   ACC/GYR L5:     Y = Vertical, Z = Anteroposterior (AP), X = Mediolateral (ML)
 KINEM_AXIS_LABEL = {"X": "ML", "Y": "AP", "Z": "Vertical"}
-IMU_AXIS_LABEL = {"X": "AP", "Y": "Vertical", "Z": "ML"}
+IMU_AXIS_LABEL_JOELHO = {"X": "AP", "Y": "Vertical", "Z": "ML"}
+IMU_AXIS_LABEL_L5 = {"X": "ML", "Y": "Vertical", "Z": "AP"}
+
+
+def get_imu_axis_label(region_name):
+    return IMU_AXIS_LABEL_L5 if "l5" in region_name.lower() else IMU_AXIS_LABEL_JOELHO
+
+
+IMU_AXIS_LABEL = get_imu_axis_label(body_sheet)
 
 # Cor por DIREÇÃO anatômica (não pelo eixo bruto) — assim Vertical é sempre a
 # mesma cor tanto no Kinem (Z) quanto no celular (Y), e o mesmo vale para AP e ML.
@@ -575,10 +586,10 @@ st.divider()
 
 # ---- Seção 2: ACC/GYR — matriz 2 (ACC, GYR) × N trials, eixos sempre juntos -
 st.subheader(f"📈 {body_sheet} — ACC / GYR — todos os {n_trials} trials")
+_imu_dir_desc = ", ".join(f"{ax} = {IMU_AXIS_LABEL[ax]}" for ax in AXES)
 st.caption(
     f"Cada coluna é um trial (1 a {n_trials}); linhas: {acc_label} e {gyr_label}, sempre com "
-    "X, Y, Z juntos no mesmo gráfico. No celular (ACC/GYR): Y = Vertical, "
-    "Z = Mediolateral (ML), X = Anteroposterior (AP)."
+    f"X, Y, Z juntos no mesmo gráfico. No celular (ACC/GYR) em {body_sheet}: {_imu_dir_desc}."
 )
 
 imu_titles = []
@@ -628,12 +639,13 @@ st.divider()
 
 # ---- Seção 3: média de todos os trials, com sombra de desvio padrão --------
 st.subheader(f"📈 {body_sheet} — Média de todos os trials (sombra = ±1 desvio padrão)")
+_kinem_dir_desc = ", ".join(f"{ax} = {KINEM_AXIS_LABEL[ax]}" for ax in AXES)
 st.caption(
-    "Cada gráfico combina os {} trials: linha = média, sombra = ±1 desvio padrão, por eixo "
-    "(X, Y, Z juntos). Inclui Cinemática (Deslocamento, Velocidade, Aceleração) e IMU (ACC, GYR). "
-    "Tempo normalizado (0–1) por ciclo antes de calcular a média. Atenção: o mapeamento "
-    "anatômico muda — no Kinem Z=Vertical/Y=AP/X=ML; no ACC/GYR Y=Vertical/Z=ML/X=AP "
-    "(por isso a legenda mostra os dois grupos).".format(n_trials)
+    f"Cada gráfico combina os {n_trials} trials: linha = média, sombra = ±1 desvio padrão, por "
+    "direção anatômica (Vertical/AP/ML — mesma cor em todos os gráficos). Inclui Cinemática "
+    "(Deslocamento, Velocidade, Aceleração) e IMU (ACC, GYR). Tempo normalizado (0–1) por ciclo "
+    f"antes de calcular a média. No Kinem: {_kinem_dir_desc}. No celular (ACC/GYR) em "
+    f"{body_sheet}: {_imu_dir_desc}."
 )
 
 GRID = np.linspace(0.0, 1.0, 101)

@@ -427,153 +427,144 @@ df_t = df[tcol].to_numpy()
 
 st.divider()
 
-# ---- Todos os trials na mesma tela (sem navegação) --------------------------
+# ---- Helpers de ciclo/fases por trial ---------------------------------------
 if n_trials == 0:
     st.info("Mantenha pelo menos um par início/fim marcado no gráfico acima para definir um trial.")
     st.stop()
 
 IMU_ROWS = ["IMU - Acelerômetro", "IMU - Giroscópio"]
-IMU_ROW_COLORS = {"IMU - Acelerômetro": "#1f77b4", "IMU - Giroscópio": "#d62728"}
 AXES = ["X", "Y", "Z"]
-
-st.subheader(f"📈 {body_sheet} — todos os {n_trials} trials")
-st.caption(
-    "1ª linha: Cinemática — Deslocamento, Velocidade e Aceleração, cada um com X, Y, Z juntos "
-    "no mesmo gráfico. 2ª e 3ª linhas: Acelerômetro e Giroscópio, um gráfico por eixo. Fundo "
-    "cinza = platô, laranja = descida, verde = subida. Linha azul = início da descida, laranja "
-    "pontilhada = vale, verde = fim da subida. Só o ciclo completo é exibido. Troque só a Região "
-    "(L5/Joelho) acima para atualizar todos os trials."
-)
-
 acc_label, acc_unit = IMU_LABELS["IMU - Acelerômetro"]
 gyr_label, gyr_unit = IMU_LABELS["IMU - Giroscópio"]
 
-combine_imu_axes = st.checkbox(
-    "ACC e GYR: mostrar X, Y, Z juntos no 1º gráfico (2º e 3º ficam vazios)", value=False
-)
 
-if combine_imu_axes:
-    row2_titles = [f"{acc_label} (X, Y, Z)", "", ""]
-    row3_titles = [f"{gyr_label} (X, Y, Z)", "", ""]
-else:
-    row2_titles = [f"{acc_label} — X", f"{acc_label} — Y", f"{acc_label} — Z"]
-    row3_titles = [f"{gyr_label} — X", f"{gyr_label} — Y", f"{gyr_label} — Z"]
-
-for trial_idx in range(1, n_trials + 1):
-    st.divider()
-
-    # Ciclo completo = platô (do fim do ciclo anterior, ou início da gravação, até o
-    # início da descida) + descida + subida. Nada fora dessas 3 fases é mostrado.
+def trial_bounds(trial_idx):
+    """Ciclo completo = platô (do fim do ciclo anterior, ou início da gravação, até o
+    início da descida) + descida + subida."""
     cycle_start = sel_ends[trial_idx - 2] if trial_idx > 1 else t[0]
     d_start = sel_starts[trial_idx - 1]
     cycle_end = sel_ends[trial_idx - 1]
-    st.markdown(f"**Trial {trial_idx} de {n_trials}** — {cycle_start:.2f}s a {cycle_end:.2f}s "
-                f"(platô {cycle_start:.2f}–{d_start:.2f}s + descida/subida {d_start:.2f}–{cycle_end:.2f}s)")
-
-    # Janela exibida = o ciclo completo (platô + descida + subida), nada além disso.
-    trial_mask = (df_t >= cycle_start) & (df_t <= cycle_end)
-
     valley_in_cycle = valley_times[(valley_times > d_start) & (valley_times < cycle_end)]
     v_trial = valley_in_cycle[0] if len(valley_in_cycle) else (d_start + cycle_end) / 2
+    return cycle_start, d_start, v_trial, cycle_end
 
-    def norm_t(x, cycle_start=cycle_start, cycle_end=cycle_end):
-        """Normaliza tempo absoluto para fração do ciclo: 0 = início do platô, 1 = fim da subida."""
+
+def make_helpers(cycle_start, d_start, v_trial, cycle_end):
+    def norm_t(x):
         return (x - cycle_start) / (cycle_end - cycle_start) if (cycle_end - cycle_start) != 0 else 0.0
 
-    def add_phase_shading_subplot(fig, row, col, cycle_start=cycle_start, d_start=d_start,
-                                   v_trial=v_trial, cycle_end=cycle_end, norm_t=norm_t):
+    def add_phase_shading_subplot(fig, row, col):
         if cycle_start < d_start:
             fig.add_vrect(x0=norm_t(cycle_start), x1=norm_t(d_start), fillcolor=PLATEAU_COLOR, line_width=0, layer="below", row=row, col=col)
         fig.add_vrect(x0=norm_t(d_start), x1=norm_t(v_trial), fillcolor=DESCIDA_COLOR, line_width=0, layer="below", row=row, col=col)
         fig.add_vrect(x0=norm_t(v_trial), x1=norm_t(cycle_end), fillcolor=SUBIDA_COLOR, line_width=0, layer="below", row=row, col=col)
 
-    def add_event_lines_subplot(fig, row, col, d_start=d_start, v_trial=v_trial,
-                                 cycle_end=cycle_end, norm_t=norm_t):
+    def add_event_lines_subplot(fig, row, col):
         fig.add_vline(x=norm_t(d_start), line_dash="dash", line_color="#1f77b4", opacity=0.9, row=row, col=col)
         fig.add_vline(x=norm_t(v_trial), line_dash="dot", line_color="orange", opacity=0.9, row=row, col=col)
         fig.add_vline(x=norm_t(cycle_end), line_dash="dash", line_color="#2ca02c", opacity=0.9, row=row, col=col)
 
-    fig_matrix = make_subplots(
-        rows=3, cols=3,
-        subplot_titles=[
-            f"{KINEM_LABEL_MAP['Posição']} (X, Y, Z)",
-            f"{KINEM_LABEL_MAP['Velocidade']} (X, Y, Z)",
-            f"{KINEM_LABEL_MAP['Aceleração']} (X, Y, Z)",
-            *row2_titles,
-            *row3_titles,
-        ],
-        shared_xaxes=True,
-    )
+    return norm_t, add_phase_shading_subplot, add_event_lines_subplot
 
-    # Linha 1: cada tipo de cinemática num quadrado próprio, com os 3 eixos juntos no gráfico.
-    for col_i, choice in enumerate(KINEM_ORDER, start=1):
-        grp = KINEM_GROUP_MAP[choice]
-        label = KINEM_LABEL_MAP[choice]
-        unit = KINEM_UNIT_MAP[choice]
+
+# ---- Seção 1: Cinemática — 1 trial por vez, eixos sempre juntos -------------
+st.subheader(f"📈 {body_sheet} — Cinemática")
+st.caption(
+    "Deslocamento, Velocidade e Aceleração lado a lado, cada um com X, Y, Z juntos no mesmo "
+    "gráfico. Fundo cinza = platô, laranja = descida, verde = subida."
+)
+
+kinem_trial_idx = st.selectbox(
+    "Trial (só afeta a Cinemática)", list(range(1, n_trials + 1)), key="kinem_trial_idx"
+)
+
+k_cycle_start, k_d_start, k_v_trial, k_cycle_end = trial_bounds(kinem_trial_idx)
+k_norm_t, k_add_phase, k_add_events = make_helpers(k_cycle_start, k_d_start, k_v_trial, k_cycle_end)
+k_trial_mask = (df_t >= k_cycle_start) & (df_t <= k_cycle_end)
+
+fig_kinem = make_subplots(
+    rows=1, cols=3,
+    subplot_titles=[
+        f"{KINEM_LABEL_MAP['Posição']} (X, Y, Z)",
+        f"{KINEM_LABEL_MAP['Velocidade']} (X, Y, Z)",
+        f"{KINEM_LABEL_MAP['Aceleração']} (X, Y, Z)",
+    ],
+    shared_xaxes=True,
+)
+for col_i, choice in enumerate(KINEM_ORDER, start=1):
+    grp = KINEM_GROUP_MAP[choice]
+    label = KINEM_LABEL_MAP[choice]
+    unit = KINEM_UNIT_MAP[choice]
+    has_trace = False
+    for axis in AXES:
+        colname = catalog.get(grp, {}).get(axis)
+        if colname is None:
+            continue
+        fig_kinem.add_trace(
+            go.Scatter(
+                x=k_norm_t(df_t[k_trial_mask]), y=df[colname].to_numpy()[k_trial_mask],
+                mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis,
+                showlegend=(col_i == 1), legendgroup=axis,
+            ),
+            row=1, col=col_i,
+        )
+        has_trace = True
+    if has_trace:
+        # IMPORTANTE: o traço precisa existir ANTES do add_vrect/add_vline com row/col.
+        k_add_phase(fig_kinem, 1, col_i)
+        k_add_events(fig_kinem, 1, col_i)
+        fig_kinem.update_yaxes(title_text=f"{label} ({unit})", row=1, col=col_i)
+
+fig_kinem.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
+fig_kinem.update_yaxes(showgrid=False)
+fig_kinem.update_layout(width=900, height=340, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white")
+st.plotly_chart(fig_kinem, use_container_width=False, key="kinem_chart")
+
+st.divider()
+
+# ---- Seção 2: ACC/GYR — matriz N trials × 2 (ACC, GYR), eixos sempre juntos -
+st.subheader(f"📈 {body_sheet} — ACC / GYR — todos os {n_trials} trials")
+st.caption(
+    f"Cada linha é um trial (1 a {n_trials}); colunas: {acc_label} e {gyr_label}, sempre com "
+    "X, Y, Z juntos no mesmo gráfico."
+)
+
+imu_titles = []
+for i in range(1, n_trials + 1):
+    imu_titles.append(f"Trial {i} — {acc_label}")
+    imu_titles.append(f"Trial {i} — {gyr_label}")
+
+fig_imu = make_subplots(rows=n_trials, cols=2, subplot_titles=imu_titles, shared_xaxes=True)
+
+for row_i, trial_idx in enumerate(range(1, n_trials + 1), start=1):
+    cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
+    norm_t, add_phase, add_events = make_helpers(cycle_start, d_start, v_trial, cycle_end)
+    trial_mask = (df_t >= cycle_start) & (df_t <= cycle_end)
+
+    for col_j, grp in enumerate(IMU_ROWS, start=1):
+        label, unit = IMU_LABELS[grp]
         has_trace = False
         for axis in AXES:
             colname = catalog.get(grp, {}).get(axis)
             if colname is None:
                 continue
-            fig_matrix.add_trace(
+            fig_imu.add_trace(
                 go.Scatter(
                     x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
                     mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis,
-                    showlegend=(col_i == 1), legendgroup=axis,
+                    showlegend=(row_i == 1 and col_j == 1), legendgroup=axis,
                 ),
-                row=1, col=col_i,
+                row=row_i, col=col_j,
             )
             has_trace = True
         if has_trace:
-            # IMPORTANTE: o traço precisa existir ANTES do add_vrect/add_vline com row/col,
-            # senão o plotly não sabe em qual eixo ancorar a forma e ela não aparece.
-            add_phase_shading_subplot(fig_matrix, 1, col_i)
-            add_event_lines_subplot(fig_matrix, 1, col_i)
-            fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=1, col=col_i)
+            add_phase(fig_imu, row_i, col_j)
+            add_events(fig_imu, row_i, col_j)
+            fig_imu.update_yaxes(title_text=f"{label} ({unit})", row=row_i, col=col_j)
 
-    # Linhas 2-3: ACC e GYR. Modo normal = um gráfico por eixo. Modo combinado = X, Y, Z
-    # juntos só no 1º gráfico da linha, com o 2º e o 3º vazios.
-    for i, grp in enumerate(IMU_ROWS, start=2):
-        label, unit = IMU_LABELS[grp]
-        if combine_imu_axes:
-            has_trace = False
-            for axis in AXES:
-                colname = catalog.get(grp, {}).get(axis)
-                if colname is None:
-                    continue
-                fig_matrix.add_trace(
-                    go.Scatter(
-                        x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
-                        mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis,
-                        showlegend=False, legendgroup=axis,
-                    ),
-                    row=i, col=1,
-                )
-                has_trace = True
-            if has_trace:
-                add_phase_shading_subplot(fig_matrix, i, 1)
-                add_event_lines_subplot(fig_matrix, i, 1)
-                fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=i, col=1)
-        else:
-            for j, axis in enumerate(AXES, start=1):
-                colname = catalog.get(grp, {}).get(axis)
-                if colname is None:
-                    continue
-                fig_matrix.add_trace(
-                    go.Scatter(
-                        x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
-                        mode="lines", line=dict(color=IMU_ROW_COLORS[grp]), showlegend=False, name=colname,
-                    ),
-                    row=i, col=j,
-                )
-                add_phase_shading_subplot(fig_matrix, i, j)
-                add_event_lines_subplot(fig_matrix, i, j)
-                if j == 1:
-                    fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=i, col=j)
-
-    fig_matrix.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
-    fig_matrix.update_yaxes(showgrid=False)
-    fig_matrix.update_layout(
-        width=900, height=900, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white",
-    )
-    st.plotly_chart(fig_matrix, use_container_width=False, key=f"matrix_trial_{trial_idx}")
+fig_imu.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
+fig_imu.update_yaxes(showgrid=False)
+fig_imu.update_layout(
+    width=600, height=300 * n_trials + 70, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white",
+)
+st.plotly_chart(fig_imu, use_container_width=False, key="imu_matrix")

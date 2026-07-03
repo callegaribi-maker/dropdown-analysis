@@ -502,6 +502,10 @@ st.caption(
 acc_label, acc_unit = IMU_LABELS["IMU - Acelerômetro"]
 gyr_label, gyr_unit = IMU_LABELS["IMU - Giroscópio"]
 
+same_scale = st.checkbox(
+    "Mesma escala (Y) para ACC e GYR — usa a escala do gráfico de maior variação", value=False
+)
+
 fig_matrix = make_subplots(
     rows=3, cols=3,
     subplot_titles=[
@@ -559,7 +563,26 @@ for i, grp in enumerate(IMU_ROWS, start=2):
         if j == 1:
             fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=i, col=j)
 
+# Escala compartilhada (opcional): aplica a mesma faixa Y aos 3 eixos de ACC e,
+# separadamente, aos 3 eixos de GYR — usando a maior variação (amplitude) entre X/Y/Z.
+if same_scale:
+    for i, grp in enumerate(IMU_ROWS, start=2):
+        vals = []
+        for axis in AXES:
+            colname = catalog.get(grp, {}).get(axis)
+            if colname is None:
+                continue
+            vals.append(df[colname].to_numpy()[trial_mask])
+        if vals:
+            max_abs = float(np.max(np.abs(np.concatenate(vals))))
+            pad = max_abs * 0.05 if max_abs > 0 else 1.0
+            y_range = [-(max_abs + pad), max_abs + pad]
+            for j in range(1, 4):
+                fig_matrix.update_yaxes(range=y_range, row=i, col=j)
+
 fig_matrix.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_matrix.update_yaxes(showgrid=False)
-fig_matrix.update_layout(height=780, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white")
-st.plotly_chart(fig_matrix, use_container_width=True)
+fig_matrix.update_layout(
+    width=900, height=900, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white",
+)
+st.plotly_chart(fig_matrix, use_container_width=False)

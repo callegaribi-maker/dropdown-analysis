@@ -503,13 +503,9 @@ def make_helpers(cycle_start, d_start, v_trial, cycle_end):
 # do espaço em "gaps" entre subplots (horizontal_spacing/vertical_spacing), então
 # largura e altura totais precisam compensar isso — não basta usar cell*cols e
 # cell*rows direto, senão o resultado fica mais alto que largo (ou o contrário).
-# Além disso, limitamos a largura total (MAX_WIDTH): figuras muito largas (ex:
-# 2000px+ para 5-6 trials) ficam maiores que a área visível do Streamlit, que
-# comprime só a largura ao exibir — isso destrói o quadrado mesmo com a conta
-# certa. Por isso o tamanho da célula encolhe (mantendo-se quadrada) quando há
-# muitas colunas, para a figura inteira caber sem ser redimensionada.
+# Sem limite de largura: célula sempre no mesmo tamanho (300px), e se não couber
+# na tela o Streamlit mostra barra de rolagem horizontal em vez de encolher.
 CELL_PX = 300
-MAX_WIDTH = 1100
 MARGIN = dict(l=10, r=10, t=60, b=10)
 H_SPACING = 0.06
 V_SPACING = 0.12
@@ -518,10 +514,8 @@ V_SPACING = 0.12
 def square_fig_size(rows, cols):
     col_frac = (1 - H_SPACING * (cols - 1)) / cols
     row_frac = (1 - V_SPACING * (rows - 1)) / rows if rows > 1 else 1.0
-    max_plot_w = MAX_WIDTH - MARGIN["l"] - MARGIN["r"]
-    cell = min(CELL_PX, max_plot_w * col_frac)
-    plot_w = cell / col_frac
-    plot_h = cell / row_frac
+    plot_w = CELL_PX / col_frac
+    plot_h = CELL_PX / row_frac
     width = int(round(plot_w)) + MARGIN["l"] + MARGIN["r"]
     height = int(round(plot_h)) + MARGIN["t"] + MARGIN["b"]
     return width, height
@@ -678,51 +672,65 @@ def ensemble_mean_std(grp, axis):
     return arr.mean(axis=0), arr.std(axis=0)
 
 
-AVG_GROUPS = [
-    (KINEM_LABEL_MAP["Posição"], KINEM_GROUP_MAP["Posição"], KINEM_UNIT_MAP["Posição"]),
-    (KINEM_LABEL_MAP["Velocidade"], KINEM_GROUP_MAP["Velocidade"], KINEM_UNIT_MAP["Velocidade"]),
-    (KINEM_LABEL_MAP["Aceleração"], KINEM_GROUP_MAP["Aceleração"], KINEM_UNIT_MAP["Aceleração"]),
-    (acc_label, "IMU - Acelerômetro", acc_unit),
-    (gyr_label, "IMU - Giroscópio", gyr_unit),
+# Layout 2 linhas x 3 colunas: Velocidade Angular (GYR) embaixo de Velocidade,
+# Aceleração Linear (ACC) embaixo de Aceleração. Deslocamento não tem par no IMU.
+AVG_GRID = [
+    [
+        (KINEM_LABEL_MAP["Posição"], KINEM_GROUP_MAP["Posição"], KINEM_UNIT_MAP["Posição"]),
+        (KINEM_LABEL_MAP["Velocidade"], KINEM_GROUP_MAP["Velocidade"], KINEM_UNIT_MAP["Velocidade"]),
+        (KINEM_LABEL_MAP["Aceleração"], KINEM_GROUP_MAP["Aceleração"], KINEM_UNIT_MAP["Aceleração"]),
+    ],
+    [
+        None,
+        (gyr_label, "IMU - Giroscópio", gyr_unit),
+        (acc_label, "IMU - Acelerômetro", acc_unit),
+    ],
 ]
+AVG_ROWS, AVG_COLS = len(AVG_GRID), len(AVG_GRID[0])
 
 fig_avg = make_subplots(
-    rows=1, cols=len(AVG_GROUPS),
-    subplot_titles=[f"{label} (X, Y, Z)" for label, _, _ in AVG_GROUPS],
-    shared_xaxes=True, horizontal_spacing=H_SPACING,
+    rows=AVG_ROWS, cols=AVG_COLS,
+    subplot_titles=[
+        f"{cell[0]} (X, Y, Z)" if cell else "" for row in AVG_GRID for cell in row
+    ],
+    shared_xaxes=True, horizontal_spacing=H_SPACING, vertical_spacing=V_SPACING,
 )
 
-for col_i, (label, grp, unit) in enumerate(AVG_GROUPS, start=1):
-    is_kinem = grp.startswith("Cinemática")
-    for axis in AXES:
-        mean_y, std_y = ensemble_mean_std(grp, axis)
-        if mean_y is None:
+for row_i, row in enumerate(AVG_GRID, start=1):
+    for col_i, cell in enumerate(row, start=1):
+        if cell is None:
             continue
-        color = axis_color(is_kinem, axis)
-        direction = axis_direction(is_kinem, axis)
-        upper = mean_y + std_y
-        lower = mean_y - std_y
-        fig_avg.add_trace(
-            go.Scatter(
-                x=np.concatenate([GRID, GRID[::-1]]), y=np.concatenate([upper, lower[::-1]]),
-                fill="toself", fillcolor=hex_to_rgba(color, 0.2),
-                line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
-            ),
-            row=1, col=col_i,
-        )
-        # Cor = direção anatômica (Vertical/AP/ML), consistente entre Kinem e IMU,
-        # então 1 legenda só (pela direção) já vale pro gráfico inteiro.
-        fig_avg.add_trace(
-            go.Scatter(
-                x=GRID, y=mean_y, mode="lines", line=dict(color=color),
-                name=direction, showlegend=(col_i == 1), legendgroup=direction,
-            ),
-            row=1, col=col_i,
-        )
-    fig_avg.update_yaxes(title_text=f"{label} ({unit})", row=1, col=col_i)
+        label, grp, unit = cell
+        is_kinem = grp.startswith("Cinemática")
+        for axis in AXES:
+            mean_y, std_y = ensemble_mean_std(grp, axis)
+            if mean_y is None:
+                continue
+            color = axis_color(is_kinem, axis)
+            direction = axis_direction(is_kinem, axis)
+            upper = mean_y + std_y
+            lower = mean_y - std_y
+            fig_avg.add_trace(
+                go.Scatter(
+                    x=np.concatenate([GRID, GRID[::-1]]), y=np.concatenate([upper, lower[::-1]]),
+                    fill="toself", fillcolor=hex_to_rgba(color, 0.2),
+                    line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
+                ),
+                row=row_i, col=col_i,
+            )
+            # Cor = direção anatômica (Vertical/AP/ML), consistente entre Kinem e IMU,
+            # então 1 legenda só (pela direção) já vale pro gráfico inteiro.
+            fig_avg.add_trace(
+                go.Scatter(
+                    x=GRID, y=mean_y, mode="lines", line=dict(color=color),
+                    name=direction, showlegend=(row_i == 1 and col_i == 1), legendgroup=direction,
+                ),
+                row=row_i, col=col_i,
+            )
+        fig_avg.update_yaxes(title_text=f"{label} ({unit})", row=row_i, col=col_i)
 
 fig_avg.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_avg.update_yaxes(showgrid=False)
-_aw, _ah = square_fig_size(1, len(AVG_GROUPS))
+_aw, _ah = square_fig_size(AVG_ROWS, AVG_COLS)
 fig_avg.update_layout(width=_aw, height=_ah, margin=MARGIN, plot_bgcolor="white")
 st.plotly_chart(fig_avg, use_container_width=False, key="avg_chart")

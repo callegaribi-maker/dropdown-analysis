@@ -493,8 +493,8 @@ AXES = ["X", "Y", "Z"]
 
 st.subheader(f"📈 {body_sheet} — Trial {trial_idx}/{n_trials}")
 st.caption(
-    "1ª, 2ª e 3ª linhas: Cinemática — Deslocamento, Velocidade e Aceleração (X, Y, Z juntos "
-    "no mesmo gráfico). 4ª e 5ª linhas: Acelerômetro e Giroscópio, um gráfico por eixo. Fundo "
+    "1ª linha: Cinemática — Deslocamento, Velocidade e Aceleração, cada um com X, Y, Z juntos "
+    "no mesmo gráfico. 2ª e 3ª linhas: Acelerômetro e Giroscópio, um gráfico por eixo. Fundo "
     "cinza = platô, laranja = descida, verde = subida. Linha azul = início da descida, laranja "
     "pontilhada = vale, verde = fim da subida. Só o ciclo completo é exibido."
 )
@@ -503,26 +503,19 @@ acc_label, acc_unit = IMU_LABELS["IMU - Acelerômetro"]
 gyr_label, gyr_unit = IMU_LABELS["IMU - Giroscópio"]
 
 fig_matrix = make_subplots(
-    rows=5, cols=3,
-    specs=[
-        [{"colspan": 3}, None, None],
-        [{"colspan": 3}, None, None],
-        [{"colspan": 3}, None, None],
-        [{}, {}, {}],
-        [{}, {}, {}],
-    ],
+    rows=3, cols=3,
     subplot_titles=[
-        f"Kinem — {KINEM_LABEL_MAP['Posição']} (X, Y, Z)",
-        f"Kinem — {KINEM_LABEL_MAP['Velocidade']} (X, Y, Z)",
-        f"Kinem — {KINEM_LABEL_MAP['Aceleração']} (X, Y, Z)",
+        f"{KINEM_LABEL_MAP['Posição']} (X, Y, Z)",
+        f"{KINEM_LABEL_MAP['Velocidade']} (X, Y, Z)",
+        f"{KINEM_LABEL_MAP['Aceleração']} (X, Y, Z)",
         f"{acc_label} — X", f"{acc_label} — Y", f"{acc_label} — Z",
         f"{gyr_label} — X", f"{gyr_label} — Y", f"{gyr_label} — Z",
     ],
     shared_xaxes=True,
 )
 
-# Linhas 1-3: cada tipo de cinemática com os 3 eixos juntos no mesmo gráfico.
-for row_i, choice in enumerate(KINEM_ORDER, start=1):
+# Linha 1: cada tipo de cinemática num quadrado próprio, com os 3 eixos juntos no gráfico.
+for col_i, choice in enumerate(KINEM_ORDER, start=1):
     grp = KINEM_GROUP_MAP[choice]
     label = KINEM_LABEL_MAP[choice]
     unit = KINEM_UNIT_MAP[choice]
@@ -535,20 +528,20 @@ for row_i, choice in enumerate(KINEM_ORDER, start=1):
             go.Scatter(
                 x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
                 mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis,
-                showlegend=(row_i == 1), legendgroup=axis,
+                showlegend=(col_i == 1), legendgroup=axis,
             ),
-            row=row_i, col=1,
+            row=1, col=col_i,
         )
         has_trace = True
     if has_trace:
         # IMPORTANTE: o traço precisa existir ANTES do add_vrect/add_vline com row/col,
         # senão o plotly não sabe em qual eixo ancorar a forma e ela não aparece.
-        add_phase_shading_subplot(fig_matrix, row_i, 1)
-        add_event_lines_subplot(fig_matrix, row_i, 1)
-        fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=row_i, col=1)
+        add_phase_shading_subplot(fig_matrix, 1, col_i)
+        add_event_lines_subplot(fig_matrix, 1, col_i)
+        fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=1, col=col_i)
 
-# Linhas 4-5: ACC e GYR, um gráfico por eixo (como antes).
-for i, grp in enumerate(IMU_ROWS, start=4):
+# Linhas 2-3: ACC e GYR, um gráfico por eixo (como antes).
+for i, grp in enumerate(IMU_ROWS, start=2):
     label, unit = IMU_LABELS[grp]
     for j, axis in enumerate(AXES, start=1):
         colname = catalog.get(grp, {}).get(axis)
@@ -568,5 +561,5 @@ for i, grp in enumerate(IMU_ROWS, start=4):
 
 fig_matrix.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_matrix.update_yaxes(showgrid=False)
-fig_matrix.update_layout(height=1280, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white")
+fig_matrix.update_layout(height=780, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white")
 st.plotly_chart(fig_matrix, use_container_width=True)

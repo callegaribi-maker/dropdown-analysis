@@ -467,6 +467,26 @@ def make_helpers(cycle_start, d_start, v_trial, cycle_end):
     return norm_t, add_phase_shading_subplot, add_event_lines_subplot
 
 
+# Tamanho de figura para células realmente quadradas: o plotly consome uma fração
+# do espaço em "gaps" entre subplots (horizontal_spacing/vertical_spacing), então
+# largura e altura totais precisam compensar isso — não basta usar cell*cols e
+# cell*rows direto, senão o resultado fica mais alto que largo (ou o contrário).
+CELL_PX = 300
+MARGIN = dict(l=10, r=10, t=60, b=10)
+H_SPACING = 0.06
+V_SPACING = 0.12
+
+
+def square_fig_size(rows, cols):
+    col_frac = (1 - H_SPACING * (cols - 1)) / cols
+    row_frac = (1 - V_SPACING * (rows - 1)) / rows if rows > 1 else 1.0
+    plot_w = CELL_PX / col_frac
+    plot_h = CELL_PX / row_frac
+    width = int(round(plot_w)) + MARGIN["l"] + MARGIN["r"]
+    height = int(round(plot_h)) + MARGIN["t"] + MARGIN["b"]
+    return width, height
+
+
 # ---- Seção 1: Cinemática — 1 trial por vez, eixos sempre juntos -------------
 st.subheader(f"📈 {body_sheet} — Cinemática")
 st.caption(
@@ -489,7 +509,7 @@ fig_kinem = make_subplots(
         f"{KINEM_LABEL_MAP['Velocidade']} (X, Y, Z)",
         f"{KINEM_LABEL_MAP['Aceleração']} (X, Y, Z)",
     ],
-    shared_xaxes=True,
+    shared_xaxes=True, horizontal_spacing=H_SPACING,
 )
 for col_i, choice in enumerate(KINEM_ORDER, start=1):
     grp = KINEM_GROUP_MAP[choice]
@@ -517,7 +537,8 @@ for col_i, choice in enumerate(KINEM_ORDER, start=1):
 
 fig_kinem.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_kinem.update_yaxes(showgrid=False)
-fig_kinem.update_layout(width=900, height=370, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white")
+_kw, _kh = square_fig_size(1, 3)
+fig_kinem.update_layout(width=_kw, height=_kh, margin=MARGIN, plot_bgcolor="white")
 st.plotly_chart(fig_kinem, use_container_width=False, key="kinem_chart")
 
 st.divider()
@@ -534,7 +555,10 @@ for grp in IMU_ROWS:
     for i in range(1, n_trials + 1):
         imu_titles.append(f"Trial {i}")
 
-fig_imu = make_subplots(rows=2, cols=n_trials, subplot_titles=imu_titles, shared_xaxes=True)
+fig_imu = make_subplots(
+    rows=2, cols=n_trials, subplot_titles=imu_titles, shared_xaxes=True,
+    horizontal_spacing=H_SPACING, vertical_spacing=V_SPACING,
+)
 
 for row_i, grp in enumerate(IMU_ROWS, start=1):
     label, unit = IMU_LABELS[grp]
@@ -565,9 +589,8 @@ for row_i, grp in enumerate(IMU_ROWS, start=1):
 
 fig_imu.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_imu.update_yaxes(showgrid=False)
-fig_imu.update_layout(
-    width=300 * n_trials, height=670, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white",
-)
+_iw, _ih = square_fig_size(2, n_trials)
+fig_imu.update_layout(width=_iw, height=_ih, margin=MARGIN, plot_bgcolor="white")
 st.plotly_chart(fig_imu, use_container_width=False, key="imu_matrix")
 
 st.divider()
@@ -621,7 +644,7 @@ AVG_GROUPS = [
 fig_avg = make_subplots(
     rows=1, cols=len(AVG_GROUPS),
     subplot_titles=[f"{label} (X, Y, Z)" for label, _, _ in AVG_GROUPS],
-    shared_xaxes=True,
+    shared_xaxes=True, horizontal_spacing=H_SPACING,
 )
 
 for col_i, (label, grp, unit) in enumerate(AVG_GROUPS, start=1):
@@ -651,7 +674,6 @@ for col_i, (label, grp, unit) in enumerate(AVG_GROUPS, start=1):
 
 fig_avg.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_avg.update_yaxes(showgrid=False)
-fig_avg.update_layout(
-    width=300 * len(AVG_GROUPS), height=370, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white",
-)
+_aw, _ah = square_fig_size(1, len(AVG_GROUPS))
+fig_avg.update_layout(width=_aw, height=_ah, margin=MARGIN, plot_bgcolor="white")
 st.plotly_chart(fig_avg, use_container_width=False, key="avg_chart")

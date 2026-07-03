@@ -172,7 +172,8 @@ st.title("📊 Dropdown Analysis — Sinais Sincronizados")
 st.caption(
     "Carregue o arquivo .xlsx. No gráfico de referência, todos os vales aparecem marcados "
     "(▽ laranja) e os pontos no platô do topo (◇/★) podem ser clicados para marcar o início "
-    "e o fim de cada trial. Depois, navegue trial a trial e veja a matriz 3×3 (Kinem / ACC / GYR × X/Y/Z)."
+    "e o fim de cada trial. Depois, navegue trial a trial e veja Deslocamento, Velocidade e "
+    "Aceleração (cinemática) e ACC/GYR (IMU) por eixo."
 )
 
 uploaded = st.file_uploader("Arquivo .xlsx de sinais sincronizados", type=["xlsx"])
@@ -397,27 +398,21 @@ if n_trials:
 
 st.divider()
 
-# ---- Região do corpo + tipo de sinal Kinem (escolha primeiro) ---------------
-st.subheader("⚙️ Região e sinal")
-col_body, col_kinem = st.columns(2)
-with col_body:
-    body_sheet = st.selectbox("Região do corpo / aba", sheet_names, key="body_sheet")
-with col_kinem:
-    KINEM_GROUP_MAP = {
-        "Aceleração": "Cinemática - Aceleração",
-        "Velocidade": "Cinemática - Velocidade",
-        "Posição": "Cinemática - Posição",
-    }
-    kinem_choice = st.selectbox(
-        "Sinal Kinem (1ª linha da matriz)", list(KINEM_GROUP_MAP.keys()), key="kinem_choice"
-    )
-kinem_group = KINEM_GROUP_MAP[kinem_choice]
+# ---- Região do corpo (único dropdown desta seção) ---------------------------
+st.subheader("⚙️ Região")
+body_sheet = st.selectbox("Região do corpo / aba", sheet_names, key="body_sheet")
+
+# Cinemática: sempre as 3 (Posição/Deslocamento, Velocidade, Aceleração), sem dropdown.
+KINEM_GROUP_MAP = {
+    "Posição": "Cinemática - Posição",
+    "Velocidade": "Cinemática - Velocidade",
+    "Aceleração": "Cinemática - Aceleração",
+}
+KINEM_ORDER = ["Posição", "Velocidade", "Aceleração"]
 
 # Nomes e unidades para exibição (cinemática em cm, IMU com nomes físicos)
 KINEM_LABEL_MAP = {"Posição": "Deslocamento", "Velocidade": "Velocidade", "Aceleração": "Aceleração"}
 KINEM_UNIT_MAP = {"Posição": "cm", "Velocidade": "cm/s", "Aceleração": "cm/s²"}
-kinem_label = KINEM_LABEL_MAP[kinem_choice]
-kinem_unit = KINEM_UNIT_MAP[kinem_choice]
 
 IMU_LABELS = {
     "IMU - Acelerômetro": ("Aceleração Linear", "m/s²"),
@@ -492,60 +487,68 @@ def add_event_lines_subplot(fig, row, col):
     fig.add_vline(x=norm_t(v_trial), line_dash="dot", line_color="orange", opacity=0.9, row=row, col=col)
     fig.add_vline(x=norm_t(cycle_end), line_dash="dash", line_color="#2ca02c", opacity=0.9, row=row, col=col)
 
-ROWS = [kinem_group, "IMU - Acelerômetro", "IMU - Giroscópio"]
 IMU_ROWS = ["IMU - Acelerômetro", "IMU - Giroscópio"]
 IMU_ROW_COLORS = {"IMU - Acelerômetro": "#1f77b4", "IMU - Giroscópio": "#d62728"}
 AXES = ["X", "Y", "Z"]
 
 st.subheader(f"📈 {body_sheet} — Trial {trial_idx}/{n_trials}")
 st.caption(
-    "1ª linha: Kinem (X, Y e Z juntos no mesmo gráfico). 2ª e 3ª linhas: Acelerômetro e "
-    "Giroscópio, um gráfico por eixo. Fundo cinza = platô, laranja = descida, verde = subida. "
-    "Linha azul = início da descida, laranja pontilhada = vale, verde = fim da subida. Só o "
-    "ciclo completo é exibido. Troque o trial ou a região acima para atualizar."
+    "1ª, 2ª e 3ª linhas: Cinemática — Deslocamento, Velocidade e Aceleração (X, Y, Z juntos "
+    "no mesmo gráfico). 4ª e 5ª linhas: Acelerômetro e Giroscópio, um gráfico por eixo. Fundo "
+    "cinza = platô, laranja = descida, verde = subida. Linha azul = início da descida, laranja "
+    "pontilhada = vale, verde = fim da subida. Só o ciclo completo é exibido."
 )
 
 acc_label, acc_unit = IMU_LABELS["IMU - Acelerômetro"]
 gyr_label, gyr_unit = IMU_LABELS["IMU - Giroscópio"]
 
 fig_matrix = make_subplots(
-    rows=3, cols=3,
+    rows=5, cols=3,
     specs=[
+        [{"colspan": 3}, None, None],
+        [{"colspan": 3}, None, None],
         [{"colspan": 3}, None, None],
         [{}, {}, {}],
         [{}, {}, {}],
     ],
     subplot_titles=[
-        f"Kinem — {kinem_label} (X, Y, Z)",
+        f"Kinem — {KINEM_LABEL_MAP['Posição']} (X, Y, Z)",
+        f"Kinem — {KINEM_LABEL_MAP['Velocidade']} (X, Y, Z)",
+        f"Kinem — {KINEM_LABEL_MAP['Aceleração']} (X, Y, Z)",
         f"{acc_label} — X", f"{acc_label} — Y", f"{acc_label} — Z",
         f"{gyr_label} — X", f"{gyr_label} — Y", f"{gyr_label} — Z",
     ],
     shared_xaxes=True,
 )
 
-# Linha 1: Kinem com os 3 eixos juntos no mesmo gráfico.
-kinem_has_trace = False
-for axis in AXES:
-    colname = catalog.get(kinem_group, {}).get(axis)
-    if colname is None:
-        continue
-    fig_matrix.add_trace(
-        go.Scatter(
-            x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
-            mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis, showlegend=True,
-        ),
-        row=1, col=1,
-    )
-    kinem_has_trace = True
-if kinem_has_trace:
-    # IMPORTANTE: o traço precisa existir ANTES do add_vrect/add_vline com row/col,
-    # senão o plotly não sabe em qual eixo ancorar a forma e ela não aparece.
-    add_phase_shading_subplot(fig_matrix, 1, 1)
-    add_event_lines_subplot(fig_matrix, 1, 1)
-    fig_matrix.update_yaxes(title_text=f"{kinem_label} ({kinem_unit})", row=1, col=1)
+# Linhas 1-3: cada tipo de cinemática com os 3 eixos juntos no mesmo gráfico.
+for row_i, choice in enumerate(KINEM_ORDER, start=1):
+    grp = KINEM_GROUP_MAP[choice]
+    label = KINEM_LABEL_MAP[choice]
+    unit = KINEM_UNIT_MAP[choice]
+    has_trace = False
+    for axis in AXES:
+        colname = catalog.get(grp, {}).get(axis)
+        if colname is None:
+            continue
+        fig_matrix.add_trace(
+            go.Scatter(
+                x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
+                mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis,
+                showlegend=(row_i == 1), legendgroup=axis,
+            ),
+            row=row_i, col=1,
+        )
+        has_trace = True
+    if has_trace:
+        # IMPORTANTE: o traço precisa existir ANTES do add_vrect/add_vline com row/col,
+        # senão o plotly não sabe em qual eixo ancorar a forma e ela não aparece.
+        add_phase_shading_subplot(fig_matrix, row_i, 1)
+        add_event_lines_subplot(fig_matrix, row_i, 1)
+        fig_matrix.update_yaxes(title_text=f"{label} ({unit})", row=row_i, col=1)
 
-# Linhas 2-3: ACC e GYR, um gráfico por eixo (como antes).
-for i, grp in enumerate(IMU_ROWS, start=2):
+# Linhas 4-5: ACC e GYR, um gráfico por eixo (como antes).
+for i, grp in enumerate(IMU_ROWS, start=4):
     label, unit = IMU_LABELS[grp]
     for j, axis in enumerate(AXES, start=1):
         colname = catalog.get(grp, {}).get(axis)
@@ -565,55 +568,5 @@ for i, grp in enumerate(IMU_ROWS, start=2):
 
 fig_matrix.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_matrix.update_yaxes(showgrid=False)
-fig_matrix.update_layout(height=820, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white")
+fig_matrix.update_layout(height=1280, margin=dict(l=10, r=10, t=60, b=10), plot_bgcolor="white")
 st.plotly_chart(fig_matrix, use_container_width=True)
-
-# ---- Extra: posição e velocidade (opcional, mesmo trial) --------------------
-with st.expander("➕ Ver também: posição e velocidade (cinemática) — mesmo trial"):
-    other_groups = [g for g in catalog.keys() if g not in ROWS]
-    if other_groups:
-        # Nome amigável (Deslocamento/Velocidade/Aceleração) por grupo de cinemática.
-        group_to_choice = {v: k for k, v in KINEM_GROUP_MAP.items()}
-        group_display = {g: KINEM_LABEL_MAP.get(group_to_choice.get(g, ""), g) for g in other_groups}
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            extra_group = st.selectbox(
-                "Dispositivo / tipo de sinal", other_groups,
-                format_func=lambda g: group_display.get(g, g), key="extra_group",
-            )
-        axes_available = sorted(catalog.get(extra_group, {}).keys())
-        with col_b:
-            extra_axis = st.selectbox("Eixo", ["Todos (X, Y, Z juntos)"] + axes_available, key="extra_axis")
-
-        extra_choice = group_to_choice.get(extra_group, "")
-        extra_label = KINEM_LABEL_MAP.get(extra_choice, extra_group)
-        extra_unit = KINEM_UNIT_MAP.get(extra_choice, "")
-        y_title = f"{extra_label} ({extra_unit})" if extra_unit else extra_label
-
-        fig = go.Figure()
-        if extra_axis.startswith("Todos"):
-            for ax in axes_available:
-                colname = catalog[extra_group][ax]
-                fig.add_trace(go.Scatter(
-                    x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
-                    mode="lines", name=ax, line=dict(color=AXIS_COLORS.get(ax)),
-                ))
-            title = f"{body_sheet} — {extra_label} — X, Y, Z — Trial {trial_idx}"
-        else:
-            colname = catalog[extra_group][extra_axis]
-            fig.add_trace(go.Scatter(
-                x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
-                mode="lines", name=extra_axis, line=dict(color=AXIS_COLORS.get(extra_axis)),
-            ))
-            title = f"{body_sheet} — {extra_label} — Eixo {extra_axis} — Trial {trial_idx}"
-        add_phase_shading_subplot(fig, None, None)
-        add_event_lines_subplot(fig, None, None)
-        fig.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
-        fig.update_yaxes(showgrid=False, title_text=y_title)
-        fig.update_layout(
-            title=title, height=380, margin=dict(l=10, r=10, t=40, b=10), plot_bgcolor="white",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.caption("Nenhum outro grupo de sinal disponível nesta aba.")

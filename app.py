@@ -420,6 +420,17 @@ IMU_LABELS = {
 }
 AXIS_COLORS = {"X": "#1f77b4", "Y": "#ff7f0e", "Z": "#2ca02c"}
 
+# Mapeamento anatômico dos eixos — diferente entre Kinem (sistema óptico) e o
+# celular (ACC/GYR): no Kinem, Z=Vertical, Y=Anteroposterior, X=Mediolateral.
+# No celular, Y=Vertical, Z=Mediolateral, X=Anteroposterior.
+KINEM_AXIS_LABEL = {"X": "ML", "Y": "AP", "Z": "Vertical"}
+IMU_AXIS_LABEL = {"X": "AP", "Y": "Vertical", "Z": "ML"}
+
+
+def axis_name(is_kinem, axis):
+    mapping = KINEM_AXIS_LABEL if is_kinem else IMU_AXIS_LABEL
+    return f"{axis} ({mapping[axis]})"
+
 df = sheets[body_sheet]
 catalog = build_catalog(df)
 tcol = time_column(df)
@@ -471,7 +482,13 @@ def make_helpers(cycle_start, d_start, v_trial, cycle_end):
 # do espaço em "gaps" entre subplots (horizontal_spacing/vertical_spacing), então
 # largura e altura totais precisam compensar isso — não basta usar cell*cols e
 # cell*rows direto, senão o resultado fica mais alto que largo (ou o contrário).
+# Além disso, limitamos a largura total (MAX_WIDTH): figuras muito largas (ex:
+# 2000px+ para 5-6 trials) ficam maiores que a área visível do Streamlit, que
+# comprime só a largura ao exibir — isso destrói o quadrado mesmo com a conta
+# certa. Por isso o tamanho da célula encolhe (mantendo-se quadrada) quando há
+# muitas colunas, para a figura inteira caber sem ser redimensionada.
 CELL_PX = 300
+MAX_WIDTH = 1100
 MARGIN = dict(l=10, r=10, t=60, b=10)
 H_SPACING = 0.06
 V_SPACING = 0.12
@@ -480,8 +497,10 @@ V_SPACING = 0.12
 def square_fig_size(rows, cols):
     col_frac = (1 - H_SPACING * (cols - 1)) / cols
     row_frac = (1 - V_SPACING * (rows - 1)) / rows if rows > 1 else 1.0
-    plot_w = CELL_PX / col_frac
-    plot_h = CELL_PX / row_frac
+    max_plot_w = MAX_WIDTH - MARGIN["l"] - MARGIN["r"]
+    cell = min(CELL_PX, max_plot_w * col_frac)
+    plot_w = cell / col_frac
+    plot_h = cell / row_frac
     width = int(round(plot_w)) + MARGIN["l"] + MARGIN["r"]
     height = int(round(plot_h)) + MARGIN["t"] + MARGIN["b"]
     return width, height
@@ -491,7 +510,8 @@ def square_fig_size(rows, cols):
 st.subheader(f"📈 {body_sheet} — Cinemática")
 st.caption(
     "Deslocamento, Velocidade e Aceleração lado a lado, cada um com X, Y, Z juntos no mesmo "
-    "gráfico. Fundo cinza = platô, laranja = descida, verde = subida."
+    "gráfico. Fundo cinza = platô, laranja = descida, verde = subida. No Kinem: "
+    "Z = Vertical, Y = Anteroposterior (AP), X = Mediolateral (ML)."
 )
 
 kinem_trial_idx = st.selectbox(
@@ -523,8 +543,8 @@ for col_i, choice in enumerate(KINEM_ORDER, start=1):
         fig_kinem.add_trace(
             go.Scatter(
                 x=k_norm_t(df_t[k_trial_mask]), y=df[colname].to_numpy()[k_trial_mask],
-                mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis,
-                showlegend=(col_i == 1), legendgroup=axis,
+                mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis_name(True, axis),
+                showlegend=(col_i == 1), legendgroup=axis_name(True, axis),
             ),
             row=1, col=col_i,
         )
@@ -547,7 +567,8 @@ st.divider()
 st.subheader(f"📈 {body_sheet} — ACC / GYR — todos os {n_trials} trials")
 st.caption(
     f"Cada coluna é um trial (1 a {n_trials}); linhas: {acc_label} e {gyr_label}, sempre com "
-    "X, Y, Z juntos no mesmo gráfico."
+    "X, Y, Z juntos no mesmo gráfico. No celular (ACC/GYR): Y = Vertical, "
+    "Z = Mediolateral (ML), X = Anteroposterior (AP)."
 )
 
 imu_titles = []
@@ -575,8 +596,8 @@ for row_i, grp in enumerate(IMU_ROWS, start=1):
             fig_imu.add_trace(
                 go.Scatter(
                     x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
-                    mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis,
-                    showlegend=(row_i == 1 and col_j == 1), legendgroup=axis,
+                    mode="lines", line=dict(color=AXIS_COLORS[axis]), name=axis_name(False, axis),
+                    showlegend=(row_i == 1 and col_j == 1), legendgroup=axis_name(False, axis),
                 ),
                 row=row_i, col=col_j,
             )
@@ -600,7 +621,9 @@ st.subheader(f"📈 {body_sheet} — Média de todos os trials (sombra = ±1 des
 st.caption(
     "Cada gráfico combina os {} trials: linha = média, sombra = ±1 desvio padrão, por eixo "
     "(X, Y, Z juntos). Inclui Cinemática (Deslocamento, Velocidade, Aceleração) e IMU (ACC, GYR). "
-    "Tempo normalizado (0–1) por ciclo antes de calcular a média.".format(n_trials)
+    "Tempo normalizado (0–1) por ciclo antes de calcular a média. Atenção: o mapeamento "
+    "anatômico muda — no Kinem Z=Vertical/Y=AP/X=ML; no ACC/GYR Y=Vertical/Z=ML/X=AP "
+    "(por isso a legenda mostra os dois grupos).".format(n_trials)
 )
 
 GRID = np.linspace(0.0, 1.0, 101)
@@ -648,6 +671,7 @@ fig_avg = make_subplots(
 )
 
 for col_i, (label, grp, unit) in enumerate(AVG_GROUPS, start=1):
+    is_kinem = grp.startswith("Cinemática")
     for axis in AXES:
         mean_y, std_y = ensemble_mean_std(grp, axis)
         if mean_y is None:
@@ -663,10 +687,14 @@ for col_i, (label, grp, unit) in enumerate(AVG_GROUPS, start=1):
             ),
             row=1, col=col_i,
         )
+        # Legenda mostrada 1x para o grupo Kinem (1ª coluna) e 1x para o grupo IMU
+        # (1ª coluna de ACC/GYR), já que o mapeamento anatômico de cada letra muda.
+        show_lgd = (col_i == 1) or (is_kinem is False and col_i == 4)
         fig_avg.add_trace(
             go.Scatter(
-                x=GRID, y=mean_y, mode="lines", line=dict(color=color), name=axis,
-                showlegend=(col_i == 1), legendgroup=axis,
+                x=GRID, y=mean_y, mode="lines", line=dict(color=color),
+                name=axis_name(is_kinem, axis), showlegend=show_lgd,
+                legendgroup=axis_name(is_kinem, axis),
             ),
             row=1, col=col_i,
         )

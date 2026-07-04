@@ -185,6 +185,23 @@ if uploaded is None:
     st.stop()
 
 sheets_raw = load_workbook(uploaded.getvalue())
+
+# ---- Correção de calibração conhecida (Joelho) ------------------------------
+# No sensor do Joelho, os canais ACC_X (mapeado como AP) e ACC_Y (mapeado como Vertical)
+# saem com o sinal invertido em relação à cinemática (sistema óptico): mesma forma de
+# onda, sinal trocado. Confirmado em 2 gravações/sujeitos distintos (mesmo padrão nos
+# dois), então é tratado como um erro sistemático de montagem/calibração do sensor nessa
+# região — não de sincronização — e corrigido aqui na entrada, antes de qualquer filtro,
+# gráfico ou cálculo, pra propagar certo em todo o app. ACC_Z (ML) já vem com o sinal
+# correto e não é alterado. GYR não é alterado (a inversão encontrada foi só no ACC).
+JOELHO_ACC_SIGN_FIX = ("ACC_X", "ACC_Y")
+if "Joelho" in sheets_raw:
+    _jo_df = sheets_raw["Joelho"].copy()
+    for _col in JOELHO_ACC_SIGN_FIX:
+        if _col in _jo_df.columns:
+            _jo_df[_col] = -_jo_df[_col]
+    sheets_raw["Joelho"] = _jo_df
+
 sheet_names = list(sheets_raw.keys())
 
 # ---- Sidebar: orientação do sensor (topo — mostra L5 e Joelho juntos) ------
@@ -417,6 +434,14 @@ st.divider()
 # ---- Região do corpo (único dropdown desta seção) ---------------------------
 st.subheader("⚙️ Região")
 body_sheet = st.selectbox("Região do corpo / aba", sheet_names, key="body_sheet")
+
+if body_sheet == "Joelho":
+    st.caption(
+        "ℹ️ Correção aplicada: ACC_X (AP) e ACC_Y (Vertical) do Joelho tiveram o sinal "
+        "invertido antes de qualquer gráfico/cálculo — validado como erro sistemático de "
+        "montagem/calibração em 2 gravações distintas (mesma forma de onda, sinal trocado "
+        "em relação à cinemática). ACC_Z (ML) e o giroscópio não foram alterados."
+    )
 
 # Cinemática: sempre as 3 (Posição/Deslocamento, Velocidade, Aceleração), sem dropdown.
 KINEM_GROUP_MAP = {
@@ -870,14 +895,32 @@ st.plotly_chart(fig_avg, use_container_width=False, key="avg_chart")
 st.divider()
 
 # ---- Ângulo de inclinação frontal (ML), estimado por filtro complementar ACC+GYR ----
-st.subheader(f"📐 {body_sheet} — Ângulo de inclinação frontal (ML) — filtro complementar ACC + GYR")
+st.subheader(f"📐 {body_sheet} — Inclinação do segmento no plano frontal (proxy de valgo/varo)")
+st.caption(
+    "Não é o ângulo do joelho (isso precisaria de 2 sensores) — é o quanto o próprio ponto "
+    "onde o celular está preso tomba pro lado (medial/lateral) em relação à vertical, "
+    "estimado por filtro complementar ACC + GYR."
+)
 
 ALPHA_COMP = 0.96  # peso do giroscópio no filtro complementar (perto de 1 = confia + no giro)
 _TILT_LIGHT_CUTOFF_HZ = 5.0  # filtro leve (sem detrend) só p/ tirar ruído, preservando a gravidade
 
-with st.expander("Como esse ângulo é calculado? (clique para abrir)", expanded=False):
+with st.expander("O que é esse ângulo, e como ele é calculado? (clique para abrir)", expanded=False):
     st.markdown(
         f"""
+**De qual articulação / movimento é esse ângulo, exatamente:**
+
+Não é um ângulo articular (não é "quanto o joelho dobrou" nem um ângulo entre coxa e perna
+— isso exigiria 2 sensores, um em cada segmento, pra comparar a orientação de um contra o
+outro). É a **inclinação do próprio celular** (e do pedaço de corpo onde ele está preso —
+coxa/perna, na altura do {body_sheet}) **em relação à vertical**, olhando só o plano frontal
+(o plano de "de frente pro corpo", que separa lado direito de esquerdo — por isso "ML":
+Medial/Lateral). Em outras palavras: o quanto aquele ponto do corpo tomba pro lado (pra dentro
+= medial, ou pra fora = lateral) durante o movimento, comparado a como ele estava no começo do
+ciclo. É um proxy de valgo/varo dinâmico **local**, não a medida clínica completa (que usaria
+2 segmentos) — mas segue o mesmo raciocínio: se o ponto perto do joelho está tombando bastante
+pra dentro durante a descida, é sinal de valgo dinâmico ali.
+
 **Por que não dá pra usar só o acelerômetro, nem só o giroscópio:**
 
 - O **acelerômetro** sozinho consegue estimar a inclinação do celular (e do segmento onde ele
@@ -915,6 +958,13 @@ with st.expander("Como esse ângulo é calculado? (clique para abrir)", expanded
   negativo = medial (mesma convenção do ML).
 - Esse cálculo usa o sinal **bruto** de ACC/GYR (não o filtrado/detrend da barra lateral), porque
   detrend removeria justamente o componente de gravidade que a estimativa de ângulo precisa.
+- Se o celular exportar **aceleração linear** (gravidade já removida pelo próprio sensor/app,
+  em vez do acelerômetro bruto), não existe componente de gravidade nenhum pra usar como âncora
+  — isso não dá pra corrigir por cálculo depois. Quando o app detecta essa situação (magnitude
+  do vetor ACC muito abaixo do esperado pra gravidade), ele troca sozinho, automaticamente, para
+  uma estimativa só por integração do giroscópio (reiniciada em 0° a cada ciclo). Fica mais
+  sujeita a desvio (drift), mas como cada ciclo dura só alguns segundos, ainda é uma estimativa
+  utilizável — só não tem a correção extra que a gravidade daria.
 """
     )
 
@@ -944,20 +994,26 @@ if gyr_ap_col and acc_ml_col and acc_vert_col:
     gyr_ap_full = _light_lowpass(raw_df[gyr_ap_col].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_global)
     theta_acc_full = np.degrees(np.arctan2(acc_ml_full, acc_vert_full))
 
-    # Checagem de sanidade: a técnica só funciona se o ACC bruto ainda tiver o componente
-    # de gravidade (magnitude típica ~9.8 m/s², ou ~1 se a unidade já vier em g). Se a
-    # magnitude estiver muito abaixo disso, o celular provavelmente já exportou "aceleração
-    # linear" (gravidade removida no próprio app/SDK), e o ângulo abaixo não é confiável.
+    # Checagem automática: a técnica de filtro complementar só funciona se o ACC bruto
+    # ainda tiver o componente de gravidade (magnitude típica ~9.8 m/s², ou ~1 se a unidade
+    # já vier em g). Quando o celular exporta "aceleração linear" (gravidade já removida
+    # pelo próprio sensor/app), esse componente simplesmente não existe no arquivo — não dá
+    # pra recuperar depois por cálculo. Nesse caso, o app troca sozinho (sem precisar mudar
+    # nada na exportação) pra uma estimativa só por integração do giroscópio, reiniciada em
+    # 0° no início de cada ciclo: o desvio (drift) existe, mas como a janela integrada é
+    # curta (só a duração de 1 ciclo, poucos segundos), o erro acumulado costuma ser pequeno
+    # o suficiente pra dar um resultado utilizável — só perde a âncora extra de precisão que
+    # a gravidade daria.
     _grav_mag = float(np.median(np.sqrt(acc_ml_full**2 + acc_vert_full**2)))
-    if _grav_mag < 3.0:
-        st.warning(
-            f"⚠️ A magnitude típica do vetor ACC (ML + Vertical) aqui é de só {_grav_mag:.2f} — "
-            "muito abaixo do esperado pra gravidade (~9,8 m/s², ou ~1 se a unidade já for g). "
-            "Isso sugere que o celular já exportou **aceleração linear** (gravidade removida "
-            "pelo próprio sensor/app), não o acelerômetro bruto. Se for esse o caso, o ângulo "
-            "abaixo **não é confiável** — a técnica de filtro complementar depende do "
-            "componente de gravidade para ancorar o ângulo. Para essa análise funcionar de "
-            "verdade, é preciso exportar o acelerômetro **bruto** (sem remoção de gravidade)."
+    _use_accel_anchor = _grav_mag >= 3.0
+    if not _use_accel_anchor:
+        st.caption(
+            f"ℹ️ A magnitude típica do vetor ACC (ML + Vertical) aqui é de só {_grav_mag:.2f} — "
+            "abaixo do esperado pra gravidade (~9,8 m/s², ou ~1 se a unidade já for g), sinal de "
+            "que o celular exportou aceleração linear (gravidade já removida). O app trocou "
+            "automaticamente para uma estimativa só por giroscópio (reiniciada a cada ciclo, "
+            "sem a âncora do acelerômetro) — mais sujeita a desvio (drift), mas ainda útil pra "
+            "comparar o formato/padrão entre trials."
         )
 
     for trial_idx in range(1, n_trials + 1):
@@ -971,7 +1027,10 @@ if gyr_ap_col and acc_ml_col and acc_vert_col:
         theta = np.zeros(len(theta_acc))
         for i in range(1, len(theta)):
             theta_gyro = theta[i - 1] + gyr_ap[i] * _dt_global
-            theta[i] = ALPHA_COMP * theta_gyro + (1 - ALPHA_COMP) * theta_acc[i]
+            if _use_accel_anchor:
+                theta[i] = ALPHA_COMP * theta_gyro + (1 - ALPHA_COMP) * theta_acc[i]
+            else:
+                theta[i] = theta_gyro
         x_trial = norm_t(df_t[trial_mask])
         order_idx = np.argsort(x_trial)
         tilt_curves.append(np.interp(GRID, x_trial[order_idx], theta[order_idx]))

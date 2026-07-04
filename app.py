@@ -12,7 +12,9 @@ Como rodar localmente:
 Deploy no Streamlit Community Cloud: aponte para este repositório / app.py.
 """
 
+import base64
 import io
+import os
 import re
 
 import numpy as np
@@ -710,7 +712,8 @@ AVG_ROWS, AVG_COLS = len(AVG_GRID), len(AVG_GRID[0])
 fig_avg = make_subplots(
     rows=AVG_ROWS, cols=AVG_COLS,
     subplot_titles=[
-        f"{cell[0]} (X, Y, Z)" if cell else "" for row in AVG_GRID for cell in row
+        (f"{cell[0]} (X, Y, Z)" if cell else "Orientação do sensor")
+        for row in AVG_GRID for cell in row
     ],
     shared_xaxes=True, horizontal_spacing=H_SPACING, vertical_spacing=V_SPACING,
 )
@@ -718,6 +721,40 @@ fig_avg = make_subplots(
 for row_i, row in enumerate(AVG_GRID, start=1):
     for col_i, cell in enumerate(row, start=1):
         if cell is None:
+            # Espaço livre (sem par de IMU para Deslocamento) — usa pra mostrar a
+            # imagem de orientação do celular na região atual (L5 ou Joelho).
+            _static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+            orient_file = os.path.join(
+                _static_dir, "orientacao_l5.png" if "l5" in body_sheet.lower() else "orientacao_joelho.png"
+            )
+            try:
+                with open(orient_file, "rb") as f:
+                    orient_b64 = base64.b64encode(f.read()).decode()
+                axis_num = (row_i - 1) * AVG_COLS + col_i
+                xref = "x domain" if axis_num == 1 else f"x{axis_num} domain"
+                yref = "y domain" if axis_num == 1 else f"y{axis_num} domain"
+                # IMPORTANTE: sem nenhum traço nessa célula, o plotly não fixa o
+                # domínio do eixo direito e a imagem "vaza" para as células vizinhas.
+                # Um traço fantasma invisível resolve isso (mesmo truque usado para
+                # o platô no gráfico de referência).
+                fig_avg.add_trace(
+                    go.Scatter(
+                        x=[0, 1], y=[0, 1], mode="markers",
+                        marker=dict(opacity=0), showlegend=False, hoverinfo="skip",
+                    ),
+                    row=row_i, col=col_i,
+                )
+                fig_avg.add_layout_image(
+                    dict(
+                        source=f"data:image/png;base64,{orient_b64}",
+                        xref=xref, yref=yref, x=0.5, y=0.98, xanchor="center", yanchor="top",
+                        sizex=1.0, sizey=1.0, sizing="contain", layer="above",
+                    )
+                )
+            except FileNotFoundError:
+                pass
+            fig_avg.update_xaxes(visible=False, showgrid=False, row=row_i, col=col_i)
+            fig_avg.update_yaxes(visible=False, showgrid=False, row=row_i, col=col_i)
             continue
         label, grp, unit = cell
         is_kinem = grp.startswith("Cinemática")

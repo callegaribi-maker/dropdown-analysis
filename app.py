@@ -1127,8 +1127,10 @@ def _build_combo_figure(results, y_title, chart_title, no_anchor_note=" (só gir
     fig.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
     fig.update_yaxes(showgrid=False, title_text=y_title)
     fig.update_layout(
-        title=chart_title, height=420, margin=dict(l=55, r=20, t=70, b=50),
-        plot_bgcolor="white", legend=LEGEND_TOP_LEFT,
+        title=dict(text=chart_title, y=0.98, yanchor="top"),
+        height=420, margin=dict(l=55, r=20, t=48, b=90),
+        plot_bgcolor="white",
+        legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5),
     )
     return fig
 

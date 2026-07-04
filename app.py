@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
 from scipy.signal import butter, detrend, filtfilt, find_peaks
 
@@ -521,6 +522,19 @@ def square_fig_size(rows, cols):
     return width, height
 
 
+def render_scrollable(fig, total_width, total_height, visible_width):
+    """Mostra a figura numa janela mais estreita (visible_width) com barra de
+    rolagem horizontal própria, em vez de deixar as colunas extras cortadas ou
+    depender da rolagem da página inteira."""
+    html = fig.to_html(include_plotlyjs="cdn", full_html=False)
+    wrapped = (
+        f'<div style="width:{visible_width}px; overflow-x:auto; overflow-y:hidden; '
+        f'border:1px solid #eee; border-radius:4px;">'
+        f'<div style="width:{total_width}px;">{html}</div></div>'
+    )
+    components.html(wrapped, height=total_height + 25, scrolling=False)
+
+
 # ---- Seção 1: Cinemática — 1 trial por vez, eixos sempre juntos -------------
 st.subheader(f"📈 {body_sheet} — Cinemática")
 st.caption(
@@ -627,7 +641,8 @@ fig_imu.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo
 fig_imu.update_yaxes(showgrid=False)
 _iw, _ih = square_fig_size(2, n_trials)
 fig_imu.update_layout(width=_iw, height=_ih, margin=MARGIN, plot_bgcolor="white")
-st.plotly_chart(fig_imu, use_container_width=False, key="imu_matrix")
+st.caption(f"Mostrando 3 trials por vez ({_kw}px) — arraste a barra de rolagem abaixo do gráfico para ver os demais.")
+render_scrollable(fig_imu, _iw, _ih, visible_width=_kw)
 
 st.divider()
 

@@ -1001,6 +1001,26 @@ pra dentro durante a descida, é sinal de valgo dinâmico ali.
   uma estimativa só por integração do giroscópio (reiniciada em 0° a cada ciclo). Fica mais
   sujeita a desvio (drift), mas como cada ciclo dura só alguns segundos, ainda é uma estimativa
   utilizável — só não tem a correção extra que a gravidade daria.
+
+**Por que esse ângulo tende a ser MENOR que o ângulo articular real:**
+
+- É a inclinação de **1 segmento só** em relação à vertical, não a diferença relativa entre
+  2 segmentos (o que seria o ângulo articular de verdade — ex.: coxa vs perna, ou o
+  quadril-joelho-tornozelo usado na avaliação clínica em vídeo). Quando os dois segmentos se
+  movem em direções diferentes (comum no valgo dinâmico — quadril aduzindo enquanto o pé fica
+  fixo no chão), o ângulo articular total soma as duas contribuições e costuma ficar maior do
+  que a inclinação de qualquer um dos segmentos isolados.
+- O ângulo é zerado no início de cada ciclo — qualquer inclinação que já existisse **antes**
+  da descida (ex.: um pequeno desvio postural de base) não entra na conta. Um goniômetro ou
+  marcador óptico mediria o ângulo total desde uma posição neutra; aqui só medimos a
+  **variação** durante o movimento.
+- Quando falta o componente de gravidade e o app cai no modo só-giroscópio, a integração
+  tende a ficar mais conservadora, e o filtro leve (5 Hz) também atenua picos rápidos —
+  isso pode empurrar a estimativa ainda mais pra baixo.
+- Na prática: trate os valores como um indicador **relativo** (bom pra comparar repetição
+  com repetição, sessão com sessão, ou lado com lado), não como substituto de uma medição
+  goniométrica ou de vídeo 2D calibrada — se o gráfico mostra 5°, o ângulo articular real
+  provavelmente é maior que isso.
 """
     )
 
@@ -1019,7 +1039,10 @@ A lógica é idêntica à da inclinação frontal (ML) — só troca qual eixo e
   bruto certo (X, Y ou Z) pra cada região, do mesmo jeito que faz pra inclinação frontal.
 - O resto é igual: filtro complementar (α = {ALPHA_COMP:.2f}), ângulo relativo ao início de
   cada ciclo, e troca automática pra giroscópio puro quando falta o componente de gravidade
-  no ACC (mesma checagem de magnitude).
+  no ACC (mesma checagem de magnitude). A mesma ressalva da inclinação frontal vale aqui: é
+  a inclinação de 1 segmento só, tende a ser **menor** que o ângulo articular real (ex.: o
+  ângulo verdadeiro de flexão/extensão do joelho), e serve melhor como indicador relativo
+  entre repetições/sessões do que como valor anatômico absoluto.
 """
     )
 

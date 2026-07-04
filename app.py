@@ -925,20 +925,19 @@ def _light_lowpass(sig, cutoff_hz, fs, order=2):
     return filtfilt(b, a, sig) if len(sig) > min_len else sig
 
 
-# ---- L5 + Joelho juntos — comparação frontal, sagital e transversal --------
+# ---- L5 + Joelho juntos — comparação frontal e sagital ---------------------
 # As duas montagens do celular são perpendiculares entre si (Y = Vertical nas duas, mas
 # X/Z trocam de papel entre AP e ML) — por isso cada região usa o eixo bruto de giroscópio
 # correto pra ela (ver IMU_AXIS_LABEL_L5 / IMU_AXIS_LABEL_JOELHO). Calculamos as duas juntas
-# (independente da região selecionada acima) e sobrepomos nos 3 gráficos, lado a lado.
-st.subheader("🔗 L5 + Joelho — 3 planos de movimento, comparados")
+# (independente da região selecionada acima) e sobrepomos nos 2 gráficos, lado a lado e quadrados.
+st.subheader("🔗 L5 + Joelho — inclinação frontal e sagital, comparadas")
 st.caption(
-    "As duas curvas (L5 e Joelho) no mesmo eixo de tempo normalizado, em 3 gráficos lado a "
-    "lado — frontal (tomba pro lado), sagital (tomba pra frente/trás) e transversal (gira em "
-    "torno da vertical) — pra ver a relação entre o tronco/pelve (L5) e o joelho durante a "
-    "descida. Não é o ângulo do joelho (isso precisaria de 2 sensores no mesmo segmento) — é "
-    "o quanto cada ponto onde o celular está preso se move em relação à sua posição no início "
-    "do ciclo, estimado por filtro complementar ACC + GYR (frontal/sagital) ou só giroscópio "
-    "(transversal, ver explicação abaixo)."
+    "As duas curvas (L5 e Joelho) no mesmo eixo de tempo normalizado, em 2 gráficos lado a "
+    "lado — frontal (tomba pro lado) e sagital (tomba pra frente/trás) — pra ver a relação "
+    "entre o tronco/pelve (L5) e o joelho durante a descida. Não é o ângulo do joelho (isso "
+    "precisaria de 2 sensores no mesmo segmento) — é o quanto cada ponto onde o celular está "
+    "preso tomba em relação à sua posição no início do ciclo, estimado por filtro "
+    "complementar ACC + GYR."
 )
 
 
@@ -1044,33 +1043,6 @@ A lógica é idêntica à da inclinação frontal (ML) — só troca qual eixo e
   a inclinação de 1 segmento só, tende a ser **menor** que o ângulo articular real (ex.: o
   ângulo verdadeiro de flexão/extensão do joelho), e serve melhor como indicador relativo
   entre repetições/sessões do que como valor anatômico absoluto.
-"""
-    )
-
-
-def _explicacao_transversal():
-    st.markdown(
-        f"""
-Esse terceiro ângulo é a **rotação em torno do próprio eixo vertical** do segmento (giro/torção,
-tipo rotação interna/externa) — diferente dos outros dois, que são inclinação (tombar pro lado
-ou pra frente/trás) **em relação** à vertical.
-
-**Por que aqui NÃO dá pra usar o filtro complementar (só giroscópio, sempre):**
-
-- Nos ângulos de inclinação frontal e sagital, o acelerômetro serve de âncora porque a gravidade
-  aponta pra baixo — quando o segmento tomba, uma parte da gravidade "vaza" pros eixos
-  horizontais, e isso dá uma referência estável pro filtro corrigir o giroscópio.
-- Só que a gravidade **não muda** quando o segmento gira em torno do próprio eixo vertical
-  (rotação pura em torno da vertical não altera em nada a leitura do acelerômetro) — então não
-  existe nenhuma âncora possível vinda da gravidade pra essa rotação específica. Isso é uma
-  limitação física conhecida de IMU (só se resolveria com um magnetômetro, que não temos aqui).
-- Por isso esse ângulo é **sempre** calculado só por integração do giroscópio (reiniciado em 0°
-  a cada ciclo), sem correção nenhuma — mais sujeito a desvio (drift) que os outros dois, mas
-  como cada ciclo dura só alguns segundos, ainda dá uma estimativa utilizável da forma/padrão da
-  rotação, mesmo sem precisão absoluta.
-- Vale a mesma ressalva dos outros dois: é a rotação de **1 segmento só**, não o ângulo articular
-  relativo entre coxa e perna — trate como indicador relativo (formato, consistência entre
-  repetições), não como valor anatômico absoluto de rotação interna/externa do joelho.
 """
     )
 
@@ -1214,56 +1186,12 @@ def compute_tilt_curve_for_region_ap(region_name):
     }
 
 
-def compute_tilt_curve_for_region_yaw(region_name):
-    """Rotação em torno do eixo vertical (transversal) — sempre só por giroscópio, porque
-    a gravidade não dá nenhuma referência pra corrigir essa rotação (só um magnetômetro
-    resolveria isso, e não temos um aqui)."""
-    if region_name not in sheets or region_name not in sheets_raw:
-        return None
-    _df_r = sheets[region_name]
-    _catalog_r = build_catalog(_df_r)
-    _imu_axis_r = get_imu_axis_label(region_name)
-    _vert_r = next((ax for ax in AXES if _imu_axis_r[ax] == "Vertical"), None)
-    gyr_vert_c = _catalog_r.get("IMU - Giroscópio", {}).get(_vert_r) if _vert_r else None
-    if not gyr_vert_c:
-        return None
-
-    _raw_r = sheets_raw[region_name]
-    _t_r = _df_r[time_column(_df_r)].to_numpy()
-    _dt_r = float(np.median(np.diff(_t_r)))
-    _fs_r = 1.0 / _dt_r if _dt_r > 0 else 100.0
-
-    gyr_vert_f = _light_lowpass(_raw_r[gyr_vert_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
-
-    curves_r = []
-    for trial_idx in range(1, n_trials + 1):
-        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
-        norm_t, _, _ = make_helpers(cycle_start, d_start, v_trial, cycle_end)
-        trial_mask_r = (_t_r >= cycle_start) & (_t_r <= cycle_end)
-        if trial_mask_r.sum() < 3:
-            continue
-        gyr_vert = gyr_vert_f[trial_mask_r]
-        theta = np.zeros(len(gyr_vert))
-        for i in range(1, len(theta)):
-            theta[i] = theta[i - 1] + gyr_vert[i] * _dt_r
-        x_trial = norm_t(_t_r[trial_mask_r])
-        oi = np.argsort(x_trial)
-        curves_r.append(np.interp(GRID, x_trial[oi], theta[oi]))
-
-    if not curves_r:
-        return None
-    arr_r = np.vstack(curves_r)
-    return {
-        "mean": arr_r.mean(axis=0), "std": arr_r.std(axis=0), "n": len(curves_r),
-        "grav_mag": None, "use_anchor": False,
-    }
-
-
 _combo_results = {region: compute_tilt_curve_for_region(region) for region in ("L5", "Joelho") if region in sheet_names}
 _combo_ap_results = {region: compute_tilt_curve_for_region_ap(region) for region in ("L5", "Joelho") if region in sheet_names}
-_combo_yaw_results = {region: compute_tilt_curve_for_region_yaw(region) for region in ("L5", "Joelho") if region in sheet_names}
 
-col_frontal, col_sagital, col_transversal = st.columns(3)
+_TILT_SQUARE_PX = 380  # células quadradas iguais às demais figuras do app
+
+col_frontal, col_sagital = st.columns(2)
 
 with col_frontal:
     if all(_combo_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
@@ -1272,7 +1200,8 @@ with col_frontal:
             "Δ ângulo (°) — positivo = lateral, negativo = medial",
             "Inclinação frontal (ML)",
         )
-        st.plotly_chart(fig_combo, use_container_width=True, key="tilt_combo_chart")
+        fig_combo.update_layout(width=_TILT_SQUARE_PX, height=_TILT_SQUARE_PX)
+        st.plotly_chart(fig_combo, use_container_width=False, key="tilt_combo_chart")
     else:
         st.caption("Não foi possível calcular a comparação frontal — faltam colunas de ACC/GYR em uma das duas abas.")
 
@@ -1283,27 +1212,13 @@ with col_sagital:
             "Δ ângulo (°) — positivo = anterior, negativo = posterior",
             "Inclinação sagital (AP)",
         )
-        st.plotly_chart(fig_combo_ap, use_container_width=True, key="tilt_combo_ap_chart")
+        fig_combo_ap.update_layout(width=_TILT_SQUARE_PX, height=_TILT_SQUARE_PX)
+        st.plotly_chart(fig_combo_ap, use_container_width=False, key="tilt_combo_ap_chart")
     else:
         st.caption("Não foi possível calcular a comparação sagital — faltam colunas de ACC/GYR em uma das duas abas.")
-
-with col_transversal:
-    if all(_combo_yaw_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
-        fig_combo_yaw = _build_combo_figure(
-            _combo_yaw_results,
-            "Δ ângulo (°) — rotação em torno da vertical",
-            "Rotação transversal (giro em torno da vertical)",
-            no_anchor_note=" (só giro — sem âncora possível aqui)",
-        )
-        st.plotly_chart(fig_combo_yaw, use_container_width=True, key="tilt_combo_yaw_chart")
-    else:
-        st.caption("Não foi possível calcular a rotação transversal — falta a coluna de GYR necessária em uma das duas abas.")
 
 with st.expander("O que é o ângulo frontal (ML), e como ele é calculado? (clique para abrir)", expanded=False):
     _explicacao_frontal()
 
 with st.expander("E o ângulo sagital (AP) — em que muda? (clique para abrir)", expanded=False):
     _explicacao_sagital()
-
-with st.expander("E a rotação transversal (em torno da vertical) — em que muda? (clique para abrir)", expanded=False):
-    _explicacao_transversal()

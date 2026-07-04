@@ -894,16 +894,29 @@ st.plotly_chart(fig_avg, use_container_width=False, key="avg_chart")
 
 st.divider()
 
-# ---- Ângulo de inclinação frontal (ML), estimado por filtro complementar ACC+GYR ----
-st.subheader(f"📐 {body_sheet} — Inclinação do segmento no plano frontal (proxy de valgo/varo)")
-st.caption(
-    "Não é o ângulo do joelho (isso precisaria de 2 sensores) — é o quanto o próprio ponto "
-    "onde o celular está preso tomba pro lado (medial/lateral) em relação à vertical, "
-    "estimado por filtro complementar ACC + GYR."
-)
-
 ALPHA_COMP = 0.96  # peso do giroscópio no filtro complementar (perto de 1 = confia + no giro)
 _TILT_LIGHT_CUTOFF_HZ = 5.0  # filtro leve (sem detrend) só p/ tirar ruído, preservando a gravidade
+
+
+def _light_lowpass(sig, cutoff_hz, fs, order=2):
+    b, a = _butter_lowpass(cutoff_hz, fs, order)
+    min_len = 3 * max(len(a), len(b))
+    return filtfilt(b, a, sig) if len(sig) > min_len else sig
+
+
+# ---- L5 + Joelho juntos — comparação da inclinação frontal ------------------
+# As duas montagens do celular são perpendiculares entre si (Y = Vertical nas duas, mas
+# X/Z trocam de papel entre AP e ML) — por isso cada região usa o eixo bruto de giroscópio
+# correto pra ela (ver IMU_AXIS_LABEL_L5 / IMU_AXIS_LABEL_JOELHO). Calculamos as duas juntas
+# (independente da região selecionada acima) e sobrepomos no mesmo gráfico.
+st.subheader("🔗 L5 + Joelho — inclinação frontal, comparadas")
+st.caption(
+    "As duas curvas no mesmo eixo de tempo normalizado, pra ver a relação entre o tronco/pelve "
+    "(L5) e o joelho durante a descida — por exemplo, se a queda pélvica de um lado acompanha "
+    "(ou não) o valgo dinâmico do joelho. Não é o ângulo do joelho (isso precisaria de 2 "
+    "sensores no mesmo segmento) — é o quanto cada ponto onde o celular está preso tomba pro "
+    "lado (medial/lateral) em relação à vertical, estimado por filtro complementar ACC + GYR."
+)
 
 with st.expander("O que é esse ângulo, e como ele é calculado? (clique para abrir)", expanded=False):
     st.markdown(
@@ -912,8 +925,8 @@ with st.expander("O que é esse ângulo, e como ele é calculado? (clique para a
 
 Não é um ângulo articular (não é "quanto o joelho dobrou" nem um ângulo entre coxa e perna
 — isso exigiria 2 sensores, um em cada segmento, pra comparar a orientação de um contra o
-outro). É a **inclinação do próprio celular** (e do pedaço de corpo onde ele está preso —
-coxa/perna, na altura do {body_sheet}) **em relação à vertical**, olhando só o plano frontal
+outro). É a **inclinação do próprio celular** (e do pedaço de corpo onde ele está preso — L5
+ou coxa/perna, na altura do joelho) **em relação à vertical**, olhando só o plano frontal
 (o plano de "de frente pro corpo", que separa lado direito de esquerdo — por isso "ML":
 Medial/Lateral). Em outras palavras: o quanto aquele ponto do corpo tomba pro lado (pra dentro
 = medial, ou pra fora = lateral) durante o movimento, comparado a como ele estava no começo do
@@ -950,8 +963,8 @@ pra dentro durante a descida, é sinal de valgo dinâmico ali.
 - O eixo do giroscópio usado é sempre o que corresponde à rotação em torno do eixo
   Anteroposterior (AP) do celular naquela região — é essa rotação que mistura Vertical e ML, ou
   seja, é ela que "sente" o segmento inclinando pro lado. Como a orientação física do celular no
-  corpo muda entre L5 e Joelho, esse eixo bruto de giroscópio (X, Y ou Z) também muda — o app
-  escolhe automaticamente o eixo correto pra cada região.
+  corpo muda entre L5 e Joelho (são perpendiculares entre si), esse eixo bruto de giroscópio
+  (X, Y ou Z) também muda — o app escolhe automaticamente o eixo correto pra cada região.
 - O ângulo é sempre calculado **em relação ao início de cada ciclo** (começa em 0°), pra remover
   qualquer desvio fixo de como o celular foi colocado — o que importa aqui é a **variação** de
   inclinação durante o movimento, não um ângulo anatômico absoluto calibrado. Positivo = lateral,
@@ -967,122 +980,6 @@ pra dentro durante a descida, é sinal de valgo dinâmico ali.
   utilizável — só não tem a correção extra que a gravidade daria.
 """
     )
-
-
-def _light_lowpass(sig, cutoff_hz, fs, order=2):
-    b, a = _butter_lowpass(cutoff_hz, fs, order)
-    min_len = 3 * max(len(a), len(b))
-    return filtfilt(b, a, sig) if len(sig) > min_len else sig
-
-
-_ap_axis = next((ax for ax in AXES if IMU_AXIS_LABEL[ax] == "AP"), None)
-_ml_axis = next((ax for ax in AXES if IMU_AXIS_LABEL[ax] == "ML"), None)
-_vert_axis = next((ax for ax in AXES if IMU_AXIS_LABEL[ax] == "Vertical"), None)
-
-gyr_ap_col = catalog.get("IMU - Giroscópio", {}).get(_ap_axis) if _ap_axis else None
-acc_ml_col = catalog.get("IMU - Acelerômetro", {}).get(_ml_axis) if _ml_axis else None
-acc_vert_col = catalog.get("IMU - Acelerômetro", {}).get(_vert_axis) if _vert_axis else None
-
-tilt_curves = []
-if gyr_ap_col and acc_ml_col and acc_vert_col:
-    raw_df = sheets_raw[body_sheet]
-    _dt_global = float(np.median(np.diff(df_t)))
-    _fs_global = 1.0 / _dt_global if _dt_global > 0 else 100.0
-
-    acc_ml_full = _light_lowpass(raw_df[acc_ml_col].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_global)
-    acc_vert_full = _light_lowpass(raw_df[acc_vert_col].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_global)
-    gyr_ap_full = _light_lowpass(raw_df[gyr_ap_col].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_global)
-    theta_acc_full = np.degrees(np.arctan2(acc_ml_full, acc_vert_full))
-
-    # Checagem automática: a técnica de filtro complementar só funciona se o ACC bruto
-    # ainda tiver o componente de gravidade (magnitude típica ~9.8 m/s², ou ~1 se a unidade
-    # já vier em g). Quando o celular exporta "aceleração linear" (gravidade já removida
-    # pelo próprio sensor/app), esse componente simplesmente não existe no arquivo — não dá
-    # pra recuperar depois por cálculo. Nesse caso, o app troca sozinho (sem precisar mudar
-    # nada na exportação) pra uma estimativa só por integração do giroscópio, reiniciada em
-    # 0° no início de cada ciclo: o desvio (drift) existe, mas como a janela integrada é
-    # curta (só a duração de 1 ciclo, poucos segundos), o erro acumulado costuma ser pequeno
-    # o suficiente pra dar um resultado utilizável — só perde a âncora extra de precisão que
-    # a gravidade daria.
-    _grav_mag = float(np.median(np.sqrt(acc_ml_full**2 + acc_vert_full**2)))
-    _use_accel_anchor = _grav_mag >= 3.0
-    if not _use_accel_anchor:
-        st.caption(
-            f"ℹ️ A magnitude típica do vetor ACC (ML + Vertical) aqui é de só {_grav_mag:.2f} — "
-            "abaixo do esperado pra gravidade (~9,8 m/s², ou ~1 se a unidade já for g), sinal de "
-            "que o celular exportou aceleração linear (gravidade já removida). O app trocou "
-            "automaticamente para uma estimativa só por giroscópio (reiniciada a cada ciclo, "
-            "sem a âncora do acelerômetro) — mais sujeita a desvio (drift), mas ainda útil pra "
-            "comparar o formato/padrão entre trials."
-        )
-
-    for trial_idx in range(1, n_trials + 1):
-        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
-        norm_t, _, _ = make_helpers(cycle_start, d_start, v_trial, cycle_end)
-        trial_mask = (df_t >= cycle_start) & (df_t <= cycle_end)
-        if trial_mask.sum() < 3:
-            continue
-        theta_acc = theta_acc_full[trial_mask] - theta_acc_full[trial_mask][0]
-        gyr_ap = gyr_ap_full[trial_mask]
-        theta = np.zeros(len(theta_acc))
-        for i in range(1, len(theta)):
-            theta_gyro = theta[i - 1] + gyr_ap[i] * _dt_global
-            if _use_accel_anchor:
-                theta[i] = ALPHA_COMP * theta_gyro + (1 - ALPHA_COMP) * theta_acc[i]
-            else:
-                theta[i] = theta_gyro
-        x_trial = norm_t(df_t[trial_mask])
-        order_idx = np.argsort(x_trial)
-        tilt_curves.append(np.interp(GRID, x_trial[order_idx], theta[order_idx]))
-
-if tilt_curves:
-    arr = np.vstack(tilt_curves)
-    tilt_mean, tilt_std = arr.mean(axis=0), arr.std(axis=0)
-    fig_tilt = go.Figure()
-    fig_tilt.add_trace(go.Scatter(
-        x=np.concatenate([GRID, GRID[::-1]]), y=np.concatenate([tilt_mean + tilt_std, (tilt_mean - tilt_std)[::-1]]),
-        fill="toself", fillcolor=hex_to_rgba(DIR_COLORS["ML"], 0.2),
-        line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
-    ))
-    fig_tilt.add_trace(go.Scatter(
-        x=GRID, y=tilt_mean, mode="lines", line=dict(color=DIR_COLORS["ML"], width=2.5),
-        name="Inclinação frontal (ML) estimada", showlegend=True,
-    ))
-    if AVG_D_FRAC > 0:
-        fig_tilt.add_vrect(x0=0, x1=AVG_D_FRAC, fillcolor=PLATEAU_COLOR, line_width=0, layer="below")
-    fig_tilt.add_vrect(x0=AVG_D_FRAC, x1=AVG_V_FRAC, fillcolor=DESCIDA_COLOR, line_width=0, layer="below")
-    fig_tilt.add_vrect(x0=AVG_V_FRAC, x1=1.0, fillcolor=SUBIDA_COLOR, line_width=0, layer="below")
-    fig_tilt.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
-    fig_tilt.update_yaxes(showgrid=False, title_text="Δ ângulo (°) — positivo = lateral, negativo = medial")
-    fig_tilt.update_layout(
-        title=f"Média ± DP entre os {len(tilt_curves)} trials (referência = início do ciclo)",
-        width=650, height=380, margin=dict(l=55, r=20, t=60, b=50),
-        plot_bgcolor="white", legend=LEGEND_TOP_LEFT,
-    )
-    st.plotly_chart(fig_tilt, use_container_width=False, key="tilt_chart")
-    st.caption(
-        f"Pico médio de inclinação medial na descida: {tilt_mean.min():.1f}°  ·  "
-        f"pico médio de inclinação lateral: {tilt_mean.max():.1f}°. Ângulo relativo ao início de "
-        "cada ciclo — não é um ângulo anatômico absoluto calibrado, é uma estimativa de variação."
-    )
-else:
-    st.caption(
-        "Não foi possível calcular o ângulo — faltam as colunas de ACC/GYR necessárias nessa aba."
-    )
-
-st.divider()
-
-# ---- L5 + Joelho juntos — comparação da inclinação frontal ------------------
-# As duas montagens do celular são perpendiculares entre si (Y = Vertical nas duas, mas
-# X/Z trocam de papel entre AP e ML) — por isso cada região usa o eixo bruto de giroscópio
-# correto pra ela (ver IMU_AXIS_LABEL_L5 / IMU_AXIS_LABEL_JOELHO). Aqui calculamos as duas
-# de novo (independente da região selecionada acima) só pra sobrepor no mesmo gráfico.
-st.subheader("🔗 L5 + Joelho — inclinação frontal, comparadas")
-st.caption(
-    "As duas curvas no mesmo eixo de tempo normalizado, pra ver a relação entre o tronco/pelve "
-    "(L5) e o joelho durante a descida — por exemplo, se a queda pélvica de um lado acompanha "
-    "(ou não) o valgo dinâmico do joelho."
-)
 
 
 def compute_tilt_curve_for_region(region_name):
@@ -1172,3 +1069,120 @@ if all(_combo_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
     st.plotly_chart(fig_combo, use_container_width=False, key="tilt_combo_chart")
 else:
     st.caption("Não foi possível calcular a comparação — faltam colunas de ACC/GYR em uma das duas abas.")
+
+st.divider()
+
+# ---- L5 + Joelho juntos — comparação da inclinação sagital ------------------
+st.subheader("🔗 L5 + Joelho — inclinação sagital, comparadas")
+st.caption(
+    "Mesma ideia da comparação de inclinação frontal, agora no plano sagital (frente/trás) — "
+    "por exemplo, pra ver se o tronco (L5) inclina pra frente junto com o joelho avançando "
+    "sobre o pé durante a descida. Positivo = inclina pra frente (anterior), negativo = inclina "
+    "pra trás (posterior)."
+)
+
+with st.expander("Em que muda em relação à inclinação frontal? (clique para abrir)", expanded=False):
+    st.markdown(
+        f"""
+A lógica é idêntica à da inclinação frontal (ML) — só troca qual eixo entra em cada papel:
+
+- **Acelerômetro:** em vez de `arctan(ACC_ML / ACC_Vertical)`, aqui é
+  `arctan(ACC_AP / ACC_Vertical)` — o quanto a gravidade "vaza" pro eixo Anteroposterior (AP)
+  em vez do Mediolateral (ML).
+- **Giroscópio:** a rotação que inclina o segmento pra frente/trás é em torno do eixo
+  Mediolateral (ML) — é essa rotação que mistura Vertical e AP (o oposto da inclinação
+  frontal, onde a rotação relevante é em torno do AP). O app escolhe automaticamente o eixo
+  bruto certo (X, Y ou Z) pra cada região, do mesmo jeito que faz pra inclinação frontal.
+- O resto é igual: filtro complementar (α = {ALPHA_COMP:.2f}), ângulo relativo ao início de
+  cada ciclo, e troca automática pra giroscópio puro quando falta o componente de gravidade
+  no ACC (mesma checagem de magnitude).
+"""
+    )
+
+
+def compute_tilt_curve_for_region_ap(region_name):
+    if region_name not in sheets or region_name not in sheets_raw:
+        return None
+    _df_r = sheets[region_name]
+    _catalog_r = build_catalog(_df_r)
+    _imu_axis_r = get_imu_axis_label(region_name)
+    _ap_r = next((ax for ax in AXES if _imu_axis_r[ax] == "AP"), None)
+    _ml_r = next((ax for ax in AXES if _imu_axis_r[ax] == "ML"), None)
+    _vert_r = next((ax for ax in AXES if _imu_axis_r[ax] == "Vertical"), None)
+    gyr_ml_c = _catalog_r.get("IMU - Giroscópio", {}).get(_ml_r) if _ml_r else None
+    acc_ap_c = _catalog_r.get("IMU - Acelerômetro", {}).get(_ap_r) if _ap_r else None
+    acc_vert_c = _catalog_r.get("IMU - Acelerômetro", {}).get(_vert_r) if _vert_r else None
+    if not (gyr_ml_c and acc_ap_c and acc_vert_c):
+        return None
+
+    _raw_r = sheets_raw[region_name]
+    _t_r = _df_r[time_column(_df_r)].to_numpy()
+    _dt_r = float(np.median(np.diff(_t_r)))
+    _fs_r = 1.0 / _dt_r if _dt_r > 0 else 100.0
+
+    acc_ap_f = _light_lowpass(_raw_r[acc_ap_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
+    acc_vert_f = _light_lowpass(_raw_r[acc_vert_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
+    gyr_ml_f = _light_lowpass(_raw_r[gyr_ml_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
+    theta_acc_f = np.degrees(np.arctan2(acc_ap_f, acc_vert_f))
+    grav_mag_r = float(np.median(np.sqrt(acc_ap_f**2 + acc_vert_f**2)))
+    use_anchor_r = grav_mag_r >= 3.0
+
+    curves_r = []
+    for trial_idx in range(1, n_trials + 1):
+        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
+        norm_t, _, _ = make_helpers(cycle_start, d_start, v_trial, cycle_end)
+        trial_mask_r = (_t_r >= cycle_start) & (_t_r <= cycle_end)
+        if trial_mask_r.sum() < 3:
+            continue
+        theta_acc = theta_acc_f[trial_mask_r] - theta_acc_f[trial_mask_r][0]
+        gyr_ml = gyr_ml_f[trial_mask_r]
+        theta = np.zeros(len(theta_acc))
+        for i in range(1, len(theta)):
+            theta_gyro = theta[i - 1] + gyr_ml[i] * _dt_r
+            theta[i] = ALPHA_COMP * theta_gyro + (1 - ALPHA_COMP) * theta_acc[i] if use_anchor_r else theta_gyro
+        x_trial = norm_t(_t_r[trial_mask_r])
+        oi = np.argsort(x_trial)
+        curves_r.append(np.interp(GRID, x_trial[oi], theta[oi]))
+
+    if not curves_r:
+        return None
+    arr_r = np.vstack(curves_r)
+    return {
+        "mean": arr_r.mean(axis=0), "std": arr_r.std(axis=0), "n": len(curves_r),
+        "grav_mag": grav_mag_r, "use_anchor": use_anchor_r,
+    }
+
+
+_combo_ap_results = {region: compute_tilt_curve_for_region_ap(region) for region in ("L5", "Joelho") if region in sheet_names}
+
+if all(_combo_ap_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
+    fig_combo_ap = go.Figure()
+    for region, res in _combo_ap_results.items():
+        if res is None:
+            continue
+        color = REGION_COMPARE_COLORS.get(region, "#7f7f7f")
+        m, s = res["mean"], res["std"]
+        fig_combo_ap.add_trace(go.Scatter(
+            x=np.concatenate([GRID, GRID[::-1]]), y=np.concatenate([m + s, (m - s)[::-1]]),
+            fill="toself", fillcolor=hex_to_rgba(color, 0.15),
+            line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
+        ))
+        anchor_note = "" if res["use_anchor"] else " (só giroscópio, sem âncora do ACC)"
+        fig_combo_ap.add_trace(go.Scatter(
+            x=GRID, y=m, mode="lines", line=dict(color=color, width=2.5),
+            name=f"{region}{anchor_note}",
+        ))
+    if AVG_D_FRAC > 0:
+        fig_combo_ap.add_vrect(x0=0, x1=AVG_D_FRAC, fillcolor=PLATEAU_COLOR, line_width=0, layer="below")
+    fig_combo_ap.add_vrect(x0=AVG_D_FRAC, x1=AVG_V_FRAC, fillcolor=DESCIDA_COLOR, line_width=0, layer="below")
+    fig_combo_ap.add_vrect(x0=AVG_V_FRAC, x1=1.0, fillcolor=SUBIDA_COLOR, line_width=0, layer="below")
+    fig_combo_ap.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
+    fig_combo_ap.update_yaxes(showgrid=False, title_text="Δ ângulo (°) — positivo = anterior, negativo = posterior")
+    fig_combo_ap.update_layout(
+        title="L5 vs Joelho — inclinação sagital, média entre trials (referência = início do ciclo)",
+        width=650, height=420, margin=dict(l=55, r=20, t=60, b=50),
+        plot_bgcolor="white", legend=LEGEND_TOP_LEFT,
+    )
+    st.plotly_chart(fig_combo_ap, use_container_width=False, key="tilt_combo_ap_chart")
+else:
+    st.caption("Não foi possível calcular a comparação sagital — faltam colunas de ACC/GYR em uma das duas abas.")

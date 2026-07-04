@@ -904,21 +904,23 @@ def _light_lowpass(sig, cutoff_hz, fs, order=2):
     return filtfilt(b, a, sig) if len(sig) > min_len else sig
 
 
-# ---- L5 + Joelho juntos — comparação da inclinação frontal ------------------
+# ---- L5 + Joelho juntos — comparação da inclinação frontal e sagital -------
 # As duas montagens do celular são perpendiculares entre si (Y = Vertical nas duas, mas
 # X/Z trocam de papel entre AP e ML) — por isso cada região usa o eixo bruto de giroscópio
 # correto pra ela (ver IMU_AXIS_LABEL_L5 / IMU_AXIS_LABEL_JOELHO). Calculamos as duas juntas
-# (independente da região selecionada acima) e sobrepomos no mesmo gráfico.
-st.subheader("🔗 L5 + Joelho — inclinação frontal, comparadas")
+# (independente da região selecionada acima) e sobrepomos no mesmo gráfico, lado a lado.
+st.subheader("🔗 L5 + Joelho — inclinação frontal e sagital, comparadas")
 st.caption(
     "As duas curvas no mesmo eixo de tempo normalizado, pra ver a relação entre o tronco/pelve "
     "(L5) e o joelho durante a descida — por exemplo, se a queda pélvica de um lado acompanha "
-    "(ou não) o valgo dinâmico do joelho. Não é o ângulo do joelho (isso precisaria de 2 "
-    "sensores no mesmo segmento) — é o quanto cada ponto onde o celular está preso tomba pro "
-    "lado (medial/lateral) em relação à vertical, estimado por filtro complementar ACC + GYR."
+    "(ou não) o valgo dinâmico do joelho, ou se o tronco inclina pra frente junto com o joelho "
+    "avançando sobre o pé. Não é o ângulo do joelho (isso precisaria de 2 sensores no mesmo "
+    "segmento) — é o quanto cada ponto onde o celular está preso tomba (medial/lateral, ou "
+    "anterior/posterior) em relação à vertical, estimado por filtro complementar ACC + GYR."
 )
 
-with st.expander("O que é esse ângulo, e como ele é calculado? (clique para abrir)", expanded=False):
+
+def _explicacao_frontal():
     st.markdown(
         f"""
 **De qual articulação / movimento é esse ângulo, exatamente:**
@@ -982,6 +984,25 @@ pra dentro durante a descida, é sinal de valgo dinâmico ali.
     )
 
 
+def _explicacao_sagital():
+    st.markdown(
+        f"""
+A lógica é idêntica à da inclinação frontal (ML) — só troca qual eixo entra em cada papel:
+
+- **Acelerômetro:** em vez de `arctan(ACC_ML / ACC_Vertical)`, aqui é
+  `arctan(ACC_AP / ACC_Vertical)` — o quanto a gravidade "vaza" pro eixo Anteroposterior (AP)
+  em vez do Mediolateral (ML).
+- **Giroscópio:** a rotação que inclina o segmento pra frente/trás é em torno do eixo
+  Mediolateral (ML) — é essa rotação que mistura Vertical e AP (o oposto da inclinação
+  frontal, onde a rotação relevante é em torno do AP). O app escolhe automaticamente o eixo
+  bruto certo (X, Y ou Z) pra cada região, do mesmo jeito que faz pra inclinação frontal.
+- O resto é igual: filtro complementar (α = {ALPHA_COMP:.2f}), ângulo relativo ao início de
+  cada ciclo, e troca automática pra giroscópio puro quando falta o componente de gravidade
+  no ACC (mesma checagem de magnitude).
+"""
+    )
+
+
 def compute_tilt_curve_for_region(region_name):
     if region_name not in sheets or region_name not in sheets_raw:
         return None
@@ -1036,68 +1057,36 @@ def compute_tilt_curve_for_region(region_name):
 
 
 REGION_COMPARE_COLORS = {"L5": "#1f77b4", "Joelho": "#d62728"}
-_combo_results = {region: compute_tilt_curve_for_region(region) for region in ("L5", "Joelho") if region in sheet_names}
 
-if all(_combo_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
-    fig_combo = go.Figure()
-    for region, res in _combo_results.items():
+
+def _build_combo_figure(results, y_title, chart_title):
+    fig = go.Figure()
+    for region, res in results.items():
         if res is None:
             continue
         color = REGION_COMPARE_COLORS.get(region, "#7f7f7f")
         m, s = res["mean"], res["std"]
-        fig_combo.add_trace(go.Scatter(
+        fig.add_trace(go.Scatter(
             x=np.concatenate([GRID, GRID[::-1]]), y=np.concatenate([m + s, (m - s)[::-1]]),
             fill="toself", fillcolor=hex_to_rgba(color, 0.15),
             line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
         ))
-        anchor_note = "" if res["use_anchor"] else " (só giroscópio, sem âncora do ACC)"
-        fig_combo.add_trace(go.Scatter(
+        anchor_note = "" if res["use_anchor"] else " (só giro, sem âncora)"
+        fig.add_trace(go.Scatter(
             x=GRID, y=m, mode="lines", line=dict(color=color, width=2.5),
             name=f"{region}{anchor_note}",
         ))
     if AVG_D_FRAC > 0:
-        fig_combo.add_vrect(x0=0, x1=AVG_D_FRAC, fillcolor=PLATEAU_COLOR, line_width=0, layer="below")
-    fig_combo.add_vrect(x0=AVG_D_FRAC, x1=AVG_V_FRAC, fillcolor=DESCIDA_COLOR, line_width=0, layer="below")
-    fig_combo.add_vrect(x0=AVG_V_FRAC, x1=1.0, fillcolor=SUBIDA_COLOR, line_width=0, layer="below")
-    fig_combo.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
-    fig_combo.update_yaxes(showgrid=False, title_text="Δ ângulo (°) — positivo = lateral, negativo = medial")
-    fig_combo.update_layout(
-        title="L5 vs Joelho — inclinação frontal, média entre trials (referência = início do ciclo)",
-        width=650, height=420, margin=dict(l=55, r=20, t=60, b=50),
+        fig.add_vrect(x0=0, x1=AVG_D_FRAC, fillcolor=PLATEAU_COLOR, line_width=0, layer="below")
+    fig.add_vrect(x0=AVG_D_FRAC, x1=AVG_V_FRAC, fillcolor=DESCIDA_COLOR, line_width=0, layer="below")
+    fig.add_vrect(x0=AVG_V_FRAC, x1=1.0, fillcolor=SUBIDA_COLOR, line_width=0, layer="below")
+    fig.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
+    fig.update_yaxes(showgrid=False, title_text=y_title)
+    fig.update_layout(
+        title=chart_title, height=420, margin=dict(l=55, r=20, t=70, b=50),
         plot_bgcolor="white", legend=LEGEND_TOP_LEFT,
     )
-    st.plotly_chart(fig_combo, use_container_width=False, key="tilt_combo_chart")
-else:
-    st.caption("Não foi possível calcular a comparação — faltam colunas de ACC/GYR em uma das duas abas.")
-
-st.divider()
-
-# ---- L5 + Joelho juntos — comparação da inclinação sagital ------------------
-st.subheader("🔗 L5 + Joelho — inclinação sagital, comparadas")
-st.caption(
-    "Mesma ideia da comparação de inclinação frontal, agora no plano sagital (frente/trás) — "
-    "por exemplo, pra ver se o tronco (L5) inclina pra frente junto com o joelho avançando "
-    "sobre o pé durante a descida. Positivo = inclina pra frente (anterior), negativo = inclina "
-    "pra trás (posterior)."
-)
-
-with st.expander("Em que muda em relação à inclinação frontal? (clique para abrir)", expanded=False):
-    st.markdown(
-        f"""
-A lógica é idêntica à da inclinação frontal (ML) — só troca qual eixo entra em cada papel:
-
-- **Acelerômetro:** em vez de `arctan(ACC_ML / ACC_Vertical)`, aqui é
-  `arctan(ACC_AP / ACC_Vertical)` — o quanto a gravidade "vaza" pro eixo Anteroposterior (AP)
-  em vez do Mediolateral (ML).
-- **Giroscópio:** a rotação que inclina o segmento pra frente/trás é em torno do eixo
-  Mediolateral (ML) — é essa rotação que mistura Vertical e AP (o oposto da inclinação
-  frontal, onde a rotação relevante é em torno do AP). O app escolhe automaticamente o eixo
-  bruto certo (X, Y ou Z) pra cada região, do mesmo jeito que faz pra inclinação frontal.
-- O resto é igual: filtro complementar (α = {ALPHA_COMP:.2f}), ângulo relativo ao início de
-  cada ciclo, e troca automática pra giroscópio puro quando falta o componente de gravidade
-  no ACC (mesma checagem de magnitude).
-"""
-    )
+    return fig
 
 
 def compute_tilt_curve_for_region_ap(region_name):
@@ -1153,36 +1142,35 @@ def compute_tilt_curve_for_region_ap(region_name):
     }
 
 
+_combo_results = {region: compute_tilt_curve_for_region(region) for region in ("L5", "Joelho") if region in sheet_names}
 _combo_ap_results = {region: compute_tilt_curve_for_region_ap(region) for region in ("L5", "Joelho") if region in sheet_names}
 
-if all(_combo_ap_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
-    fig_combo_ap = go.Figure()
-    for region, res in _combo_ap_results.items():
-        if res is None:
-            continue
-        color = REGION_COMPARE_COLORS.get(region, "#7f7f7f")
-        m, s = res["mean"], res["std"]
-        fig_combo_ap.add_trace(go.Scatter(
-            x=np.concatenate([GRID, GRID[::-1]]), y=np.concatenate([m + s, (m - s)[::-1]]),
-            fill="toself", fillcolor=hex_to_rgba(color, 0.15),
-            line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
-        ))
-        anchor_note = "" if res["use_anchor"] else " (só giroscópio, sem âncora do ACC)"
-        fig_combo_ap.add_trace(go.Scatter(
-            x=GRID, y=m, mode="lines", line=dict(color=color, width=2.5),
-            name=f"{region}{anchor_note}",
-        ))
-    if AVG_D_FRAC > 0:
-        fig_combo_ap.add_vrect(x0=0, x1=AVG_D_FRAC, fillcolor=PLATEAU_COLOR, line_width=0, layer="below")
-    fig_combo_ap.add_vrect(x0=AVG_D_FRAC, x1=AVG_V_FRAC, fillcolor=DESCIDA_COLOR, line_width=0, layer="below")
-    fig_combo_ap.add_vrect(x0=AVG_V_FRAC, x1=1.0, fillcolor=SUBIDA_COLOR, line_width=0, layer="below")
-    fig_combo_ap.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
-    fig_combo_ap.update_yaxes(showgrid=False, title_text="Δ ângulo (°) — positivo = anterior, negativo = posterior")
-    fig_combo_ap.update_layout(
-        title="L5 vs Joelho — inclinação sagital, média entre trials (referência = início do ciclo)",
-        width=650, height=420, margin=dict(l=55, r=20, t=60, b=50),
-        plot_bgcolor="white", legend=LEGEND_TOP_LEFT,
-    )
-    st.plotly_chart(fig_combo_ap, use_container_width=False, key="tilt_combo_ap_chart")
-else:
-    st.caption("Não foi possível calcular a comparação sagital — faltam colunas de ACC/GYR em uma das duas abas.")
+col_frontal, col_sagital = st.columns(2)
+
+with col_frontal:
+    if all(_combo_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
+        fig_combo = _build_combo_figure(
+            _combo_results,
+            "Δ ângulo (°) — positivo = lateral, negativo = medial",
+            "Inclinação frontal (ML)",
+        )
+        st.plotly_chart(fig_combo, use_container_width=True, key="tilt_combo_chart")
+    else:
+        st.caption("Não foi possível calcular a comparação frontal — faltam colunas de ACC/GYR em uma das duas abas.")
+
+with col_sagital:
+    if all(_combo_ap_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
+        fig_combo_ap = _build_combo_figure(
+            _combo_ap_results,
+            "Δ ângulo (°) — positivo = anterior, negativo = posterior",
+            "Inclinação sagital (AP)",
+        )
+        st.plotly_chart(fig_combo_ap, use_container_width=True, key="tilt_combo_ap_chart")
+    else:
+        st.caption("Não foi possível calcular a comparação sagital — faltam colunas de ACC/GYR em uma das duas abas.")
+
+with st.expander("O que é o ângulo frontal (ML), e como ele é calculado? (clique para abrir)", expanded=False):
+    _explicacao_frontal()
+
+with st.expander("E o ângulo sagital (AP) — em que muda? (clique para abrir)", expanded=False):
+    _explicacao_sagital()

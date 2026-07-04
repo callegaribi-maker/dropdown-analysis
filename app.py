@@ -202,6 +202,20 @@ if "Joelho" in sheets_raw:
             _jo_df[_col] = -_jo_df[_col]
     sheets_raw["Joelho"] = _jo_df
 
+# ---- Correção de unidade do giroscópio (rad/s -> °/s) -----------------------
+# O sensor do celular (GYR_X/Y/Z) sai em radianos/segundo (padrão do sensor de giroscópio
+# do Android/iOS), não em graus/segundo — os valores brutos são muito pequenos (ex.: pico
+# de ~2.5 em vez de ~145) pra serem °/s durante um movimento como esse. Convertido aqui na
+# entrada, uma vez, pra todas as abas — assim todo o app (gráficos de ACC/GYR, resultante,
+# e o cálculo do ângulo de inclinação) já trabalha em °/s de verdade.
+GYR_COLS = ("GYR_X", "GYR_Y", "GYR_Z")
+for _name, _df in sheets_raw.items():
+    _df2 = _df.copy()
+    for _col in GYR_COLS:
+        if _col in _df2.columns:
+            _df2[_col] = np.degrees(_df2[_col])
+    sheets_raw[_name] = _df2
+
 sheet_names = list(sheets_raw.keys())
 
 # ---- Sidebar: orientação do sensor (topo — mostra L5 e Joelho juntos) ------
@@ -435,12 +449,19 @@ st.divider()
 st.subheader("⚙️ Região")
 body_sheet = st.selectbox("Região do corpo / aba", sheet_names, key="body_sheet")
 
+st.caption(
+    "ℹ️ Correção aplicada em todas as abas: o giroscópio (GYR_X/Y/Z) do celular sai em "
+    "radianos/segundo (padrão do sensor do Android/iOS) e foi convertido pra graus/segundo "
+    "(°/s) — os valores brutos eram pequenos demais (pico de ~2,5 em vez de ~145) pra serem "
+    "°/s durante um movimento como esse. Todos os gráficos e cálculos abaixo já usam °/s."
+)
+
 if body_sheet == "Joelho":
     st.caption(
         "ℹ️ Correção aplicada: ACC_X (AP) e ACC_Y (Vertical) do Joelho tiveram o sinal "
         "invertido antes de qualquer gráfico/cálculo — validado como erro sistemático de "
         "montagem/calibração em 2 gravações distintas (mesma forma de onda, sinal trocado "
-        "em relação à cinemática). ACC_Z (ML) e o giroscópio não foram alterados."
+        "em relação à cinemática). ACC_Z (ML) não foi alterado."
     )
 
 # Cinemática: sempre as 3 (Posição/Deslocamento, Velocidade, Aceleração), sem dropdown.

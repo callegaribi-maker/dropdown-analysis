@@ -507,9 +507,13 @@ def make_helpers(cycle_start, d_start, v_trial, cycle_end):
 # Sem limite de largura: célula sempre no mesmo tamanho (300px), e se não couber
 # na tela o Streamlit mostra barra de rolagem horizontal em vez de encolher.
 CELL_PX = 300
-MARGIN = dict(l=10, r=10, t=60, b=10)
+MARGIN = dict(l=10, r=10, t=95, b=10)
 H_SPACING = 0.06
 V_SPACING = 0.12
+# Legenda sempre no topo-ESQUERDA da figura inteira (não no topo-direita, que é o
+# padrão do plotly) — assim ela cai dentro da janela inicialmente visível mesmo em
+# figuras muito largas com rolagem horizontal (senão fica "escondida" lá na direita).
+LEGEND_TOP_LEFT = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
 
 
 def square_fig_size(rows, cols):
@@ -587,7 +591,7 @@ for col_i, choice in enumerate(KINEM_ORDER, start=1):
 fig_kinem.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_kinem.update_yaxes(showgrid=False)
 _kw, _kh = square_fig_size(1, 3)
-fig_kinem.update_layout(width=_kw, height=_kh, margin=MARGIN, plot_bgcolor="white")
+fig_kinem.update_layout(width=_kw, height=_kh, margin=MARGIN, plot_bgcolor="white", legend=LEGEND_TOP_LEFT)
 st.plotly_chart(fig_kinem, use_container_width=False, key="kinem_chart")
 
 st.divider()
@@ -640,7 +644,7 @@ for row_i, grp in enumerate(IMU_ROWS, start=1):
 fig_imu.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_imu.update_yaxes(showgrid=False)
 _iw, _ih = square_fig_size(2, n_trials)
-fig_imu.update_layout(width=_iw, height=_ih, margin=MARGIN, plot_bgcolor="white")
+fig_imu.update_layout(width=_iw, height=_ih, margin=MARGIN, plot_bgcolor="white", legend=LEGEND_TOP_LEFT)
 st.caption(f"Mostrando 3 trials por vez ({_kw}px) — arraste a barra de rolagem abaixo do gráfico para ver os demais.")
 render_scrollable(fig_imu, _iw, _ih, visible_width=_kw)
 
@@ -747,5 +751,5 @@ for row_i, row in enumerate(AVG_GRID, start=1):
 fig_avg.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
 fig_avg.update_yaxes(showgrid=False)
 _aw, _ah = square_fig_size(AVG_ROWS, AVG_COLS)
-fig_avg.update_layout(width=_aw, height=_ah, margin=MARGIN, plot_bgcolor="white")
+fig_avg.update_layout(width=_aw, height=_ah, margin=MARGIN, plot_bgcolor="white", legend=LEGEND_TOP_LEFT)
 st.plotly_chart(fig_avg, use_container_width=False, key="avg_chart")

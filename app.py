@@ -1069,3 +1069,106 @@ else:
     st.caption(
         "Não foi possível calcular o ângulo — faltam as colunas de ACC/GYR necessárias nessa aba."
     )
+
+st.divider()
+
+# ---- L5 + Joelho juntos — comparação da inclinação frontal ------------------
+# As duas montagens do celular são perpendiculares entre si (Y = Vertical nas duas, mas
+# X/Z trocam de papel entre AP e ML) — por isso cada região usa o eixo bruto de giroscópio
+# correto pra ela (ver IMU_AXIS_LABEL_L5 / IMU_AXIS_LABEL_JOELHO). Aqui calculamos as duas
+# de novo (independente da região selecionada acima) só pra sobrepor no mesmo gráfico.
+st.subheader("🔗 L5 + Joelho — inclinação frontal, comparadas")
+st.caption(
+    "As duas curvas no mesmo eixo de tempo normalizado, pra ver a relação entre o tronco/pelve "
+    "(L5) e o joelho durante a descida — por exemplo, se a queda pélvica de um lado acompanha "
+    "(ou não) o valgo dinâmico do joelho."
+)
+
+
+def compute_tilt_curve_for_region(region_name):
+    if region_name not in sheets or region_name not in sheets_raw:
+        return None
+    _df_r = sheets[region_name]
+    _catalog_r = build_catalog(_df_r)
+    _imu_axis_r = get_imu_axis_label(region_name)
+    _ap_r = next((ax for ax in AXES if _imu_axis_r[ax] == "AP"), None)
+    _ml_r = next((ax for ax in AXES if _imu_axis_r[ax] == "ML"), None)
+    _vert_r = next((ax for ax in AXES if _imu_axis_r[ax] == "Vertical"), None)
+    gyr_ap_c = _catalog_r.get("IMU - Giroscópio", {}).get(_ap_r) if _ap_r else None
+    acc_ml_c = _catalog_r.get("IMU - Acelerômetro", {}).get(_ml_r) if _ml_r else None
+    acc_vert_c = _catalog_r.get("IMU - Acelerômetro", {}).get(_vert_r) if _vert_r else None
+    if not (gyr_ap_c and acc_ml_c and acc_vert_c):
+        return None
+
+    _raw_r = sheets_raw[region_name]
+    _t_r = _df_r[time_column(_df_r)].to_numpy()
+    _dt_r = float(np.median(np.diff(_t_r)))
+    _fs_r = 1.0 / _dt_r if _dt_r > 0 else 100.0
+
+    acc_ml_f = _light_lowpass(_raw_r[acc_ml_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
+    acc_vert_f = _light_lowpass(_raw_r[acc_vert_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
+    gyr_ap_f = _light_lowpass(_raw_r[gyr_ap_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
+    theta_acc_f = np.degrees(np.arctan2(acc_ml_f, acc_vert_f))
+    grav_mag_r = float(np.median(np.sqrt(acc_ml_f**2 + acc_vert_f**2)))
+    use_anchor_r = grav_mag_r >= 3.0
+
+    curves_r = []
+    for trial_idx in range(1, n_trials + 1):
+        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
+        norm_t, _, _ = make_helpers(cycle_start, d_start, v_trial, cycle_end)
+        trial_mask_r = (_t_r >= cycle_start) & (_t_r <= cycle_end)
+        if trial_mask_r.sum() < 3:
+            continue
+        theta_acc = theta_acc_f[trial_mask_r] - theta_acc_f[trial_mask_r][0]
+        gyr_ap = gyr_ap_f[trial_mask_r]
+        theta = np.zeros(len(theta_acc))
+        for i in range(1, len(theta)):
+            theta_gyro = theta[i - 1] + gyr_ap[i] * _dt_r
+            theta[i] = ALPHA_COMP * theta_gyro + (1 - ALPHA_COMP) * theta_acc[i] if use_anchor_r else theta_gyro
+        x_trial = norm_t(_t_r[trial_mask_r])
+        oi = np.argsort(x_trial)
+        curves_r.append(np.interp(GRID, x_trial[oi], theta[oi]))
+
+    if not curves_r:
+        return None
+    arr_r = np.vstack(curves_r)
+    return {
+        "mean": arr_r.mean(axis=0), "std": arr_r.std(axis=0), "n": len(curves_r),
+        "grav_mag": grav_mag_r, "use_anchor": use_anchor_r,
+    }
+
+
+REGION_COMPARE_COLORS = {"L5": "#1f77b4", "Joelho": "#d62728"}
+_combo_results = {region: compute_tilt_curve_for_region(region) for region in ("L5", "Joelho") if region in sheet_names}
+
+if all(_combo_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
+    fig_combo = go.Figure()
+    for region, res in _combo_results.items():
+        if res is None:
+            continue
+        color = REGION_COMPARE_COLORS.get(region, "#7f7f7f")
+        m, s = res["mean"], res["std"]
+        fig_combo.add_trace(go.Scatter(
+            x=np.concatenate([GRID, GRID[::-1]]), y=np.concatenate([m + s, (m - s)[::-1]]),
+            fill="toself", fillcolor=hex_to_rgba(color, 0.15),
+            line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
+        ))
+        anchor_note = "" if res["use_anchor"] else " (só giroscópio, sem âncora do ACC)"
+        fig_combo.add_trace(go.Scatter(
+            x=GRID, y=m, mode="lines", line=dict(color=color, width=2.5),
+            name=f"{region}{anchor_note}",
+        ))
+    if AVG_D_FRAC > 0:
+        fig_combo.add_vrect(x0=0, x1=AVG_D_FRAC, fillcolor=PLATEAU_COLOR, line_width=0, layer="below")
+    fig_combo.add_vrect(x0=AVG_D_FRAC, x1=AVG_V_FRAC, fillcolor=DESCIDA_COLOR, line_width=0, layer="below")
+    fig_combo.add_vrect(x0=AVG_V_FRAC, x1=1.0, fillcolor=SUBIDA_COLOR, line_width=0, layer="below")
+    fig_combo.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
+    fig_combo.update_yaxes(showgrid=False, title_text="Δ ângulo (°) — positivo = lateral, negativo = medial")
+    fig_combo.update_layout(
+        title="L5 vs Joelho — inclinação frontal, média entre trials (referência = início do ciclo)",
+        width=650, height=420, margin=dict(l=55, r=20, t=60, b=50),
+        plot_bgcolor="white", legend=LEGEND_TOP_LEFT,
+    )
+    st.plotly_chart(fig_combo, use_container_width=False, key="tilt_combo_chart")
+else:
+    st.caption("Não foi possível calcular a comparação — faltam colunas de ACC/GYR em uma das duas abas.")

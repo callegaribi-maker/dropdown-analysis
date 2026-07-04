@@ -706,6 +706,40 @@ def ensemble_mean_std(grp, axis):
     return arr.mean(axis=0), arr.std(axis=0)
 
 
+# Divisão de fases (platô/descida/subida) para os gráficos de média — como cada
+# trial normaliza o próprio ciclo (0–1) mas a duração de cada fase varia um pouco
+# de trial a trial, usamos a média das frações de cada fase entre os trials para
+# desenhar uma única divisão representativa em todos os gráficos de resultante.
+def average_phase_fracs():
+    d_fracs, v_fracs = [], []
+    for trial_idx in range(1, n_trials + 1):
+        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
+        span = cycle_end - cycle_start
+        if span <= 0:
+            continue
+        d_fracs.append((d_start - cycle_start) / span)
+        v_fracs.append((v_trial - cycle_start) / span)
+    if not d_fracs:
+        return 0.0, 0.5
+    return float(np.mean(d_fracs)), float(np.mean(v_fracs))
+
+
+AVG_D_FRAC, AVG_V_FRAC = average_phase_fracs()
+
+
+def add_avg_phase_shading(fig, row, col):
+    if AVG_D_FRAC > 0:
+        fig.add_vrect(x0=0, x1=AVG_D_FRAC, fillcolor=PLATEAU_COLOR, line_width=0, layer="below", row=row, col=col)
+    fig.add_vrect(x0=AVG_D_FRAC, x1=AVG_V_FRAC, fillcolor=DESCIDA_COLOR, line_width=0, layer="below", row=row, col=col)
+    fig.add_vrect(x0=AVG_V_FRAC, x1=1.0, fillcolor=SUBIDA_COLOR, line_width=0, layer="below", row=row, col=col)
+
+
+def add_avg_event_lines(fig, row, col):
+    fig.add_vline(x=AVG_D_FRAC, line_dash="dash", line_color="#1f77b4", opacity=0.9, row=row, col=col)
+    fig.add_vline(x=AVG_V_FRAC, line_dash="dot", line_color="orange", opacity=0.9, row=row, col=col)
+    fig.add_vline(x=1.0, line_dash="dash", line_color="#2ca02c", opacity=0.9, row=row, col=col)
+
+
 # Layout 2 linhas x 3 colunas: Velocidade Angular (GYR) embaixo de Velocidade,
 # Aceleração Linear (ACC) embaixo de Aceleração. Deslocamento não tem par no IMU.
 AVG_GRID = [
@@ -741,6 +775,7 @@ for row_i, row in enumerate(AVG_GRID, start=1):
             continue
         label, grp, unit = cell
         is_kinem = grp.startswith("Cinemática")
+        has_trace = False
         for axis in AXES:
             mean_y, std_y = ensemble_mean_std(grp, axis)
             if mean_y is None:
@@ -766,6 +801,11 @@ for row_i, row in enumerate(AVG_GRID, start=1):
                 ),
                 row=row_i, col=col_i,
             )
+            has_trace = True
+        if has_trace:
+            # IMPORTANTE: o traço precisa existir ANTES do add_vrect/add_vline com row/col.
+            add_avg_phase_shading(fig_avg, row_i, col_i)
+            add_avg_event_lines(fig_avg, row_i, col_i)
         fig_avg.update_yaxes(title_text=f"{label} ({unit})", row=row_i, col=col_i)
 
 fig_avg.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")

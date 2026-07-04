@@ -187,37 +187,47 @@ if uploaded is None:
 sheets_raw = load_workbook(uploaded.getvalue())
 sheet_names = list(sheets_raw.keys())
 
-# ---- Sidebar: segmentação de trials (topo — os parâmetros mais usados) -----
-st.sidebar.header("🔁 Segmentação de trials")
+# ---- Sidebar: orientação do sensor (topo — mostra L5 e Joelho juntos) ------
+_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+st.sidebar.header("📱 Orientação do sensor")
+for _region_label, _fname in (("L5 (lombar)", "orientacao_l5.png"), ("Joelho", "orientacao_joelho.png")):
+    _orient_file = os.path.join(_static_dir, _fname)
+    if os.path.exists(_orient_file):
+        st.sidebar.image(_orient_file, caption=f"Celular em {_region_label}", use_container_width=True)
+    else:
+        st.sidebar.caption(f"Imagem de orientação ({_region_label}) não encontrada.")
+st.sidebar.divider()
 
-# Referência escondida por padrão (raramente muda) — abas/coluna já vêm com um
-# default sensato (L5, coluna D), então fica num expander recolhido.
-with st.sidebar.expander("Referência (avançado)", expanded=False):
-    ref_sheet = st.selectbox(
-        "Aba de referência", sheet_names,
-        index=sheet_names.index("L5") if "L5" in sheet_names else 0,
+# ---- Sidebar: segmentação de trials (menus recolhidos para ocupar menos) ---
+with st.sidebar.expander("🔁 Segmentação de trials", expanded=False):
+    # Referência escondida por padrão (raramente muda) — abas/coluna já vêm com um
+    # default sensato (L5, coluna D), então fica num sub-expander recolhido.
+    with st.expander("Referência (avançado)", expanded=False):
+        ref_sheet = st.selectbox(
+            "Aba de referência", sheet_names,
+            index=sheet_names.index("L5") if "L5" in sheet_names else 0,
+        )
+        _ref_cols_raw = list(sheets_raw[ref_sheet].columns[1:])
+        # coluna D = 4ª coluna da planilha original (índice 3) -> índice 2 após remover Tempo
+        _default_ref_idx = 2 if len(_ref_cols_raw) > 2 else 0
+        ref_col = st.selectbox(
+            "Coluna de referência (padrão: coluna D)", _ref_cols_raw, index=_default_ref_idx
+        )
+
+    min_distance = st.slider("Distância mínima entre marcos (amostras)", 5, 300, 50)
+    prominence = st.slider("Proeminência mínima (vales/picos)", 0.0, 2.0, 0.05, step=0.01)
+    plateau_frac = st.slider(
+        "Sensibilidade do platô (menor = platô mais estreito)", 0.01, 0.30, 0.05, step=0.01
     )
-    _ref_cols_raw = list(sheets_raw[ref_sheet].columns[1:])
-    # coluna D = 4ª coluna da planilha original (índice 3) -> índice 2 após remover Tempo
-    _default_ref_idx = 2 if len(_ref_cols_raw) > 2 else 0
-    ref_col = st.selectbox(
-        "Coluna de referência (padrão: coluna D)", _ref_cols_raw, index=_default_ref_idx
+
+# ---- Sidebar: filtro do sinal (menu recolhido) ------------------------------
+with st.sidebar.expander("🧹 Filtro do sinal", expanded=False):
+    use_filter = st.checkbox(
+        "Aplicar filtro passa-baixa (detrend + Butterworth + filtfilt)", value=True
     )
-
-min_distance = st.sidebar.slider("Distância mínima entre marcos (amostras)", 5, 300, 50)
-prominence = st.sidebar.slider("Proeminência mínima (vales/picos)", 0.0, 2.0, 0.05, step=0.01)
-plateau_frac = st.sidebar.slider(
-    "Sensibilidade do platô (menor = platô mais estreito)", 0.01, 0.30, 0.05, step=0.01
-)
-
-# ---- Sidebar: filtro do sinal (mais pra baixo — mexe menos) -----------------
-st.sidebar.header("🧹 Filtro do sinal")
-use_filter = st.sidebar.checkbox(
-    "Aplicar filtro passa-baixa (detrend + Butterworth + filtfilt)", value=True
-)
-kinem_cutoff = st.sidebar.slider("Corte Kinem (Hz)", 0.2, 10.0, 1.0, step=0.1)
-imu_cutoff = st.sidebar.slider("Corte ACC/GYR (Hz)", 0.5, 10.0, 2.0, step=0.5)
-filter_order = st.sidebar.slider("Ordem do filtro", 2, 8, 4)
+    kinem_cutoff = st.slider("Corte Kinem (Hz)", 0.2, 10.0, 1.0, step=0.1)
+    imu_cutoff = st.slider("Corte ACC/GYR (Hz)", 0.5, 10.0, 1.0, step=0.5)
+    filter_order = st.slider("Ordem do filtro", 2, 8, 4)
 
 if use_filter:
     sheets = {name: filter_dataframe(df, kinem_cutoff, imu_cutoff, filter_order) for name, df in sheets_raw.items()}
@@ -407,17 +417,6 @@ st.divider()
 # ---- Região do corpo (único dropdown desta seção) ---------------------------
 st.subheader("⚙️ Região")
 body_sheet = st.selectbox("Região do corpo / aba", sheet_names, key="body_sheet")
-
-# ---- Sidebar: imagem de orientação do celular (grande, região atual) -------
-_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-_orient_file = os.path.join(
-    _static_dir, "orientacao_l5.png" if "l5" in body_sheet.lower() else "orientacao_joelho.png"
-)
-st.sidebar.header("📱 Orientação do sensor")
-if os.path.exists(_orient_file):
-    st.sidebar.image(_orient_file, caption=f"Celular em {body_sheet}", use_container_width=True)
-else:
-    st.sidebar.caption("Imagem de orientação não encontrada.")
 
 # Cinemática: sempre as 3 (Posição/Deslocamento, Velocidade, Aceleração), sem dropdown.
 KINEM_GROUP_MAP = {

@@ -12,7 +12,6 @@ Como rodar localmente:
 Deploy no Streamlit Community Cloud: aponte para este repositório / app.py.
 """
 
-import base64
 import io
 import os
 import re
@@ -188,7 +187,30 @@ if uploaded is None:
 sheets_raw = load_workbook(uploaded.getvalue())
 sheet_names = list(sheets_raw.keys())
 
-# ---- Sidebar: filtro do sinal -----------------------------------------------
+# ---- Sidebar: segmentação de trials (topo — os parâmetros mais usados) -----
+st.sidebar.header("🔁 Segmentação de trials")
+
+# Referência escondida por padrão (raramente muda) — abas/coluna já vêm com um
+# default sensato (L5, coluna D), então fica num expander recolhido.
+with st.sidebar.expander("Referência (avançado)", expanded=False):
+    ref_sheet = st.selectbox(
+        "Aba de referência", sheet_names,
+        index=sheet_names.index("L5") if "L5" in sheet_names else 0,
+    )
+    _ref_cols_raw = list(sheets_raw[ref_sheet].columns[1:])
+    # coluna D = 4ª coluna da planilha original (índice 3) -> índice 2 após remover Tempo
+    _default_ref_idx = 2 if len(_ref_cols_raw) > 2 else 0
+    ref_col = st.selectbox(
+        "Coluna de referência (padrão: coluna D)", _ref_cols_raw, index=_default_ref_idx
+    )
+
+min_distance = st.sidebar.slider("Distância mínima entre marcos (amostras)", 5, 300, 50)
+prominence = st.sidebar.slider("Proeminência mínima (vales/picos)", 0.0, 2.0, 0.05, step=0.01)
+plateau_frac = st.sidebar.slider(
+    "Sensibilidade do platô (menor = platô mais estreito)", 0.01, 0.30, 0.05, step=0.01
+)
+
+# ---- Sidebar: filtro do sinal (mais pra baixo — mexe menos) -----------------
 st.sidebar.header("🧹 Filtro do sinal")
 use_filter = st.sidebar.checkbox(
     "Aplicar filtro passa-baixa (detrend + Butterworth + filtfilt)", value=True
@@ -207,27 +229,8 @@ else:
     sheets = sheets_raw
     st.sidebar.caption("Filtro desativado — usando sinal bruto.")
 
-# ---- Sidebar: detecção de candidatos (vales e picos/platôs) -----------------
-st.sidebar.header("🔁 Segmentação de trials")
-
-ref_sheet = st.sidebar.selectbox(
-    "Aba de referência", sheet_names,
-    index=sheet_names.index("L5") if "L5" in sheet_names else 0,
-)
 ref_df = sheets[ref_sheet]
 ref_cols = list(ref_df.columns[1:])
-
-# coluna D = 4ª coluna da planilha original (índice 3) -> índice 2 após remover Tempo
-default_ref_idx = 2 if len(ref_cols) > 2 else 0
-ref_col = st.sidebar.selectbox(
-    "Coluna de referência (padrão: coluna D)", ref_cols, index=default_ref_idx
-)
-
-min_distance = st.sidebar.slider("Distância mínima entre marcos (amostras)", 5, 300, 50)
-prominence = st.sidebar.slider("Proeminência mínima (vales/picos)", 0.0, 2.0, 0.05, step=0.01)
-plateau_frac = st.sidebar.slider(
-    "Sensibilidade do platô (menor = platô mais estreito)", 0.01, 0.30, 0.05, step=0.01
-)
 
 t = ref_df[time_column(ref_df)].to_numpy()
 ref_signal = ref_df[ref_col].to_numpy(dtype=float)
@@ -404,6 +407,17 @@ st.divider()
 # ---- Região do corpo (único dropdown desta seção) ---------------------------
 st.subheader("⚙️ Região")
 body_sheet = st.selectbox("Região do corpo / aba", sheet_names, key="body_sheet")
+
+# ---- Sidebar: imagem de orientação do celular (grande, região atual) -------
+_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+_orient_file = os.path.join(
+    _static_dir, "orientacao_l5.png" if "l5" in body_sheet.lower() else "orientacao_joelho.png"
+)
+st.sidebar.header("📱 Orientação do sensor")
+if os.path.exists(_orient_file):
+    st.sidebar.image(_orient_file, caption=f"Celular em {body_sheet}", use_container_width=True)
+else:
+    st.sidebar.caption("Imagem de orientação não encontrada.")
 
 # Cinemática: sempre as 3 (Posição/Deslocamento, Velocidade, Aceleração), sem dropdown.
 KINEM_GROUP_MAP = {
@@ -721,38 +735,8 @@ fig_avg = make_subplots(
 for row_i, row in enumerate(AVG_GRID, start=1):
     for col_i, cell in enumerate(row, start=1):
         if cell is None:
-            # Espaço livre (sem par de IMU para Deslocamento) — usa pra mostrar a
-            # imagem de orientação do celular na região atual (L5 ou Joelho).
-            _static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-            orient_file = os.path.join(
-                _static_dir, "orientacao_l5.png" if "l5" in body_sheet.lower() else "orientacao_joelho.png"
-            )
-            try:
-                with open(orient_file, "rb") as f:
-                    orient_b64 = base64.b64encode(f.read()).decode()
-                axis_num = (row_i - 1) * AVG_COLS + col_i
-                xref = "x domain" if axis_num == 1 else f"x{axis_num} domain"
-                yref = "y domain" if axis_num == 1 else f"y{axis_num} domain"
-                # IMPORTANTE: sem nenhum traço nessa célula, o plotly não fixa o
-                # domínio do eixo direito e a imagem "vaza" para as células vizinhas.
-                # Um traço fantasma invisível resolve isso (mesmo truque usado para
-                # o platô no gráfico de referência).
-                fig_avg.add_trace(
-                    go.Scatter(
-                        x=[0, 1], y=[0, 1], mode="markers",
-                        marker=dict(opacity=0), showlegend=False, hoverinfo="skip",
-                    ),
-                    row=row_i, col=col_i,
-                )
-                fig_avg.add_layout_image(
-                    dict(
-                        source=f"data:image/png;base64,{orient_b64}",
-                        xref=xref, yref=yref, x=0.5, y=0.98, xanchor="center", yanchor="top",
-                        sizex=1.0, sizey=1.0, sizing="contain", layer="above",
-                    )
-                )
-            except FileNotFoundError:
-                pass
+            # Espaço livre (Deslocamento não tem par de IMU) — fica em branco; a
+            # imagem de orientação do celular agora está na barra lateral, maior.
             fig_avg.update_xaxes(visible=False, showgrid=False, row=row_i, col=col_i)
             fig_avg.update_yaxes(visible=False, showgrid=False, row=row_i, col=col_i)
             continue

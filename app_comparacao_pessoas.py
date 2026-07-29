@@ -514,6 +514,61 @@ st.sidebar.caption(
     f"{ctx_b['label']}: {ctx_b['n_trials']} ciclo(s) detectado(s)."
 )
 
+# ----------------------------------------------------------------------------
+# Lista global de "achados" (diferenças relevantes entre as pessoas), acumulada
+# pelas seções abaixo e resumida no quadro final, já com leitura fisiológica.
+# ----------------------------------------------------------------------------
+FINDINGS = []
+
+VAR_DIRECTION_INTERP = {
+    ("Deslocamento", "Vertical"): "pode indicar mais amplitude de movimento articular nessa fase.",
+    ("Deslocamento", "AP"): "pode indicar mais inclinação do segmento pra frente/trás (compensação no plano sagital).",
+    ("Deslocamento", "ML"): "pode indicar mais oscilação lateral — possível sinal de menor controle no plano frontal (valgo/varo dinâmico).",
+    ("Velocidade", "Vertical"): "sugere um movimento vertical mais rápido/menos controlado nessa fase.",
+    ("Velocidade", "AP"): "pode indicar mais oscilação (ida e volta) no plano sagital.",
+    ("Velocidade", "ML"): "pode indicar correções laterais mais bruscas — possível menor controle frontal.",
+    ("Aceleração", "Vertical"): "pode indicar menor amortecimento/absorção de impacto nessa fase.",
+    ("Aceleração", "AP"): "pode indicar mudanças de direção mais bruscas no plano sagital.",
+    ("Aceleração", "ML"): "pode indicar mais instabilidade lateral.",
+    ("Aceleração Linear", "Vertical"): "(medido pelo IMU) pode indicar menor amortecimento do impacto nessa região.",
+    ("Aceleração Linear", "AP"): "(medido pelo IMU) pode indicar mais oscilação sagital.",
+    ("Aceleração Linear", "ML"): "(medido pelo IMU) pode indicar mais oscilação lateral/instabilidade frontal.",
+    ("Velocidade Angular", "Vertical"): "pode indicar mais rotação em torno do eixo vertical durante o movimento.",
+    ("Velocidade Angular", "AP"): "(rotação em torno do eixo AP) está ligada a mais oscilação frontal — possível sinal de valgo/varo dinâmico.",
+    ("Velocidade Angular", "ML"): "(rotação em torno do eixo ML) está ligada a flexão/extensão mais rápida no plano sagital.",
+}
+
+
+def _interp_amplitude(var_label, direction, region, phase, quem):
+    base = VAR_DIRECTION_INTERP.get((var_label, direction), "indica uma diferença de amplitude relevante entre as pessoas.")
+    return f"{quem} tem maior amplitude de {var_label} ({direction}) em {region} na fase de {phase} — {base}"
+
+
+def _interp_duration(phase_name, quem):
+    texts = {
+        "platô": f"{quem} passa mais tempo parado(a) no topo antes de iniciar — pode indicar mais tempo de preparação/hesitação, ou uma estratégia mais controlada de início do movimento.",
+        "descida": f"{quem} tem a fase excêntrica (descida) mais longa — pode indicar um controle excêntrico mais lento/controlado, ou menos confiança pra descer rápido.",
+        "subida": f"{quem} tem a fase concêntrica (subida) mais longa — pode indicar menor força concêntrica disponível, ou uma estratégia de subida mais controlada.",
+        "ciclo total": f"{quem} tem o ciclo completo mais longo — reflexo da combinação de platô/descida/subida.",
+    }
+    return texts.get(phase_name, "")
+
+
+def _interp_depth(region, quem):
+    return f"{quem} desce mais no(a) {region} — pode indicar mais amplitude de movimento articular disponível, ou mais confiança/controle pra ir mais fundo."
+
+
+def _interp_cv(region, direction, quem):
+    return f"{quem} repete o movimento de forma menos consistente em {region} ({direction}) — pode indicar fadiga, aprendizagem motora incompleta do padrão, ou variação real entre tentativas."
+
+
+def _interp_valgo(quem):
+    return (
+        f"{quem} tem maior inclinação medial do joelho (valgo dinâmico) durante a descida — "
+        "indicador de possível maior risco de estresse no joelho (ex.: relacionado a lesões de "
+        "LCA), mas é um proxy por 1 sensor, não o ângulo articular real."
+    )
+
 # ---- Checagem visual da segmentação de cada pessoa --------------------------
 st.subheader("🔁 Checagem da segmentação — sinal de referência por pessoa")
 st.caption(
@@ -591,10 +646,40 @@ for region in REGIONS:
     else:
         quem_desce_mais = ctx_a["label"] if abs(dep_a["mean"]) > abs(dep_b["mean"]) else ctx_b["label"]
         conclusao = f"{quem_desce_mais} desce mais nessa região"
+        FINDINGS.append({
+            "Categoria": "Profundidade", "Região": region, "Detalhe": "Vertical (descida)",
+            "Quem é maior": quem_desce_mais,
+            "Interpretação fisiológica": _interp_depth(region, quem_desce_mais),
+        })
     _depth_lines.append(
         f"- **{region}**: {ctx_a['label']} = {dep_a['mean']:.3f} (±{dep_a['std']:.3f}), "
         f"{ctx_b['label']} = {dep_b['mean']:.3f} (±{dep_b['std']:.3f}) — {conclusao}."
     )
+
+_DURATION_FINDING_PCT = 20  # só entra no resumo se a diferença for >= 20%
+
+
+def _add_duration_finding(phase_name, stat_a, stat_b):
+    a, b = stat_a[0], stat_b[0]
+    if a == 0 and b == 0:
+        return
+    maior, menor = (a, b) if a >= b else (b, a)
+    quem_maior = ctx_a["label"] if a >= b else ctx_b["label"]
+    pct = 100 * (maior - menor) / menor if menor != 0 else float("inf")
+    if pct >= _DURATION_FINDING_PCT:
+        FINDINGS.append({
+            "Categoria": "Duração de fase", "Região": "—", "Detalhe": phase_name,
+            "Quem é maior": quem_maior,
+            "Interpretação fisiológica": _interp_duration(phase_name, quem_maior),
+        })
+
+
+for _phase_name, _stat_a, _stat_b in (
+    ("platô", _dur_a["platô"], _dur_b["platô"]),
+    ("descida", _dur_a["descida"], _dur_b["descida"]),
+    ("subida", _dur_a["subida"], _dur_b["subida"]),
+):
+    _add_duration_finding(_phase_name, _stat_a, _stat_b)
 
 _pct_plato_a = _pct_of_cycle(_dur_a['platô'], _dur_a['ciclo total'])
 _pct_plato_b = _pct_of_cycle(_dur_b['platô'], _dur_b['ciclo total'])
@@ -774,7 +859,16 @@ with col_amp:
                     # célula) — assim a cor sempre bate com o que a pessoa está lendo.
                     _ma_disp = round(ma, 3) if not np.isnan(ma) else ma
                     _mb_disp = round(mb, 3) if not np.isnan(mb) else mb
-                    _highlight_targets.append(_cell_highlight(_ma_disp, _mb_disp, col_a_name, col_b_name))
+                    _target = _cell_highlight(_ma_disp, _mb_disp, col_a_name, col_b_name)
+                    _highlight_targets.append(_target)
+                    if _target is not None:
+                        _quem_maior = ctx_a["label"] if _target == col_a_name else ctx_b["label"]
+                        FINDINGS.append({
+                            "Categoria": "Amplitude por fase", "Região": region,
+                            "Detalhe": f"{direction} · {phase_name} · {label}",
+                            "Quem é maior": _quem_maior,
+                            "Interpretação fisiológica": _interp_amplitude(label, direction, region, phase_name, _quem_maior),
+                        })
 
         st.markdown(f"**{region}**")
         if not _amp_rows:
@@ -822,6 +916,13 @@ for region in REGIONS:
                 f"- **{region} — {direction}**: {ctx_a['label']} CV={stat_a['cv']:.1f}% · "
                 f"{ctx_b['label']} CV={stat_b['cv']:.1f}% — {quem_mais_variavel} repete de forma menos consistente."
             )
+            _cv_maior, _cv_menor = max(stat_a["cv"], stat_b["cv"]), min(stat_a["cv"], stat_b["cv"])
+            if _cv_menor > 0 and (_cv_maior - _cv_menor) / _cv_menor >= 0.30:
+                FINDINGS.append({
+                    "Categoria": "Consistência (CV)", "Região": region, "Detalhe": direction,
+                    "Quem é maior": quem_mais_variavel,
+                    "Interpretação fisiológica": _interp_cv(region, direction, quem_mais_variavel),
+                })
         else:
             _cv_lines.append(
                 f"- **{region} — {direction}**: deslocamento líquido perto de zero pra pelo menos uma "
@@ -987,6 +1088,11 @@ with col_frontal:
         if ("A", "Joelho") in _peaks_f and ("B", "Joelho") in _peaks_f:
             pa, pb = _peaks_f[("A", "Joelho")], _peaks_f[("B", "Joelho")]
             quem_mais_valgo = ctx_a["label"] if abs(pa["peak"]) > abs(pb["peak"]) else ctx_b["label"]
+            FINDINGS.append({
+                "Categoria": "Valgo dinâmico", "Região": "Joelho", "Detalhe": "Inclinação frontal (ML)",
+                "Quem é maior": quem_mais_valgo,
+                "Interpretação fisiológica": _interp_valgo(quem_mais_valgo),
+            })
             st.info(
                 "**Valgo dinâmico (pico de inclinação medial do Joelho):**\n\n"
                 f"- {ctx_a['label']}: {pa['peak']:.1f}° (±{pa['std']:.1f}) em ~{pa['frac']*100:.0f}% do ciclo\n"
@@ -1028,6 +1134,55 @@ with col_sagital:
             )
     else:
         st.caption("Não foi possível calcular a inclinação sagital — faltam colunas de ACC/GYR necessárias.")
+
+st.divider()
+
+# ----------------------------------------------------------------------------
+# Quadro-resumo: variáveis maiores em cada pessoa, com leitura fisiológica
+# ----------------------------------------------------------------------------
+st.subheader("🧭 Resumo — variáveis maiores em cada pessoa e possível leitura fisiológica")
+st.caption(
+    "Junta, num só quadro, todas as diferenças relevantes encontradas nas seções acima "
+    "(duração de fase ≥20%, amplitude com destaque ≥30% nas tabelas, consistência/CV "
+    "com diferença ≥30%, profundidade fora da variação normal, e valgo dinâmico). Cada "
+    "linha aponta quem tem o valor maior e uma leitura fisiológica **possível** — não é "
+    "diagnóstico, é uma hipótese pra você investigar/confirmar clinicamente."
+)
+
+if FINDINGS:
+    _findings_df = pd.DataFrame(FINDINGS)[
+        ["Categoria", "Região", "Detalhe", "Quem é maior", "Interpretação fisiológica"]
+    ]
+
+    def _highlight_person(row):
+        styles = pd.Series("", index=row.index)
+        color = ctx_a["color"] if row["Quem é maior"] == ctx_a["label"] else (
+            ctx_b["color"] if row["Quem é maior"] == ctx_b["label"] else None
+        )
+        if color:
+            styles["Quem é maior"] = f"background-color: {hex_to_rgba(color, 0.25)}; font-weight: 600"
+        return styles
+
+    try:
+        _findings_styled = _findings_df.style.apply(_highlight_person, axis=1).hide(axis="index")
+        st.dataframe(_findings_styled, use_container_width=True, height=min(60 + 40 * len(_findings_df), 600))
+    except Exception:
+        st.dataframe(_findings_df, use_container_width=True, hide_index=True, height=min(60 + 40 * len(_findings_df), 600))
+
+    _count_a = sum(1 for f in FINDINGS if f["Quem é maior"] == ctx_a["label"])
+    _count_b = sum(1 for f in FINDINGS if f["Quem é maior"] == ctx_b["label"])
+    st.caption(
+        f"{ctx_a['label']} aparece como \"maior\" em {_count_a} achado(s); "
+        f"{ctx_b['label']} aparece em {_count_b} achado(s). Isso NÃO é uma pontuação de "
+        "\"quem é melhor/pior\" — cada achado tem um significado fisiológico próprio "
+        "(ex.: descida mais longa pode ser controle motor melhor OU falta de força; "
+        "leia a interpretação de cada linha, não só a contagem)."
+    )
+else:
+    st.info(
+        "Nenhuma diferença relevante foi encontrada acima dos limites definidos em cada "
+        "seção — as duas pessoas ficaram parecidas na maioria das variáveis analisadas."
+    )
 
 st.divider()
 st.caption(

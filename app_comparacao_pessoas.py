@@ -711,10 +711,35 @@ col_chart, col_amp = st.columns([3, 2])
 with col_chart:
     st.plotly_chart(fig, use_container_width=False, key="compare_main")
 
+_AMP_HIGHLIGHT_PCT = 0.20  # só pinta se a maior for pelo menos 20% maior que a menor
+
+
+def _highlight_bigger_20pct(row, col_a_name, col_b_name):
+    styles = pd.Series("", index=row.index)
+    ma, mb = row["_ma"], row["_mb"]
+    if pd.isna(ma) or pd.isna(mb):
+        return styles
+    a, b = abs(ma), abs(mb)
+    maior, menor = (a, b) if a >= b else (b, a)
+    if menor == 0:
+        return styles
+    if (maior - menor) / menor >= _AMP_HIGHLIGHT_PCT:
+        styles[col_a_name if a >= b else col_b_name] = "background-color: #ffe066"
+    return styles
+
+
 with col_amp:
-    _amp_rows = []
     col_a_name = f"{ctx_a['label']}"
     col_b_name = f"{ctx_b['label']}"
+
+    st.info(
+        "**Amplitude por fase (pico-a-pico do sinal), média ± DP entre os ciclos** — "
+        "para cada variável (Deslocamento, Velocidade, Aceleração, ACC, GYR), em cada "
+        "direção anatômica (Vertical/AP/ML), separada por platô/descida/subida, uma "
+        f"tabela por região. Em amarelo: diferenças de pelo menos {_AMP_HIGHLIGHT_PCT*100:.0f}% "
+        "entre as duas pessoas (a menor delas fica sem destaque)."
+    )
+
     for region in REGIONS:
         imu_axis_r = get_imu_axis_label(region)
         df_a_r = ctx_a["sheets"][region]
@@ -723,6 +748,8 @@ with col_amp:
         cat_b_r = build_catalog(df_b_r)
         t_a_r = df_a_r[time_column(df_a_r)].to_numpy()
         t_b_r = df_b_r[time_column(df_b_r)].to_numpy()
+
+        _amp_rows = []
         for grp, (label, unit), is_kinem in SIGNAL_ROWS:
             for direction in DIRECTIONS:
                 axis = next((ax for ax in AXES if axis_direction(is_kinem, ax, imu_axis_r) == direction), None)
@@ -738,46 +765,29 @@ with col_amp:
                     ma, sa = amp_a[phase_name]
                     mb, sb = amp_b[phase_name]
                     _amp_rows.append({
-                        "Região": region, "Direção": direction, "Fase": phase_name,
-                        "Variável": f"{label} ({unit})",
+                        "Direção": direction, "Fase": phase_name, "Variável": f"{label} ({unit})",
                         "_ma": ma, "_mb": mb,
                         col_a_name: "—" if np.isnan(ma) else f"{ma:.3f} ± {sa:.3f}",
                         col_b_name: "—" if np.isnan(mb) else f"{mb:.3f} ± {sb:.3f}",
                     })
 
-    st.info(
-        "**Amplitude por fase (pico-a-pico do sinal), média ± DP entre os ciclos** — "
-        "para cada variável (Deslocamento, Velocidade, Aceleração, ACC, GYR), em cada "
-        "direção anatômica (Vertical/AP/ML), em L5 e Joelho, separada por "
-        "platô/descida/subida. Em amarelo: quem tem a maior amplitude naquela "
-        "fase/variável/direção."
-    )
-    if _amp_rows:
+        st.markdown(f"**{region}**")
+        if not _amp_rows:
+            st.caption("Sem dados suficientes para calcular a amplitude por fase.")
+            continue
+
         _amp_df = pd.DataFrame(_amp_rows)
-
-        def _highlight_bigger(row):
-            styles = pd.Series("", index=row.index)
-            ma, mb = row["_ma"], row["_mb"]
-            if pd.isna(ma) or pd.isna(mb):
-                return styles
-            if abs(ma) >= abs(mb):
-                styles[col_a_name] = "background-color: #ffe066"
-            else:
-                styles[col_b_name] = "background-color: #ffe066"
-            return styles
-
         try:
             _styled = (
-                _amp_df.style.apply(_highlight_bigger, axis=1)
+                _amp_df.style
+                .apply(lambda row: _highlight_bigger_20pct(row, col_a_name, col_b_name), axis=1)
                 .hide(subset=["_ma", "_mb"], axis="columns")
                 .hide(axis="index")
             )
-            st.dataframe(_styled, use_container_width=True, height=520)
+            st.dataframe(_styled, use_container_width=True, height=380)
         except Exception:
             # fallback sem cor, caso o ambiente não tenha jinja2 (necessário pro Styler)
-            st.dataframe(_amp_df.drop(columns=["_ma", "_mb"]), use_container_width=True, hide_index=True, height=520)
-    else:
-        st.caption("Sem dados suficientes para calcular a amplitude por fase.")
+            st.dataframe(_amp_df.drop(columns=["_ma", "_mb"]), use_container_width=True, hide_index=True, height=380)
 
 # ---- Bloco de interpretação: consistência entre repetições (CV) -------------
 # CV = DP/média do deslocamento líquido. Quando a média está perto de zero (comum no

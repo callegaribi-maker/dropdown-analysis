@@ -289,6 +289,37 @@ def net_displacement_stats(df, df_t, catalog, trial_bounds_fn, n_trials, directi
     return {"mean": mean_v, "std": std_v, "cv": cv, "n": len(arr)}
 
 
+def phase_amplitude_stats(df, df_t, catalog, trial_bounds_fn, n_trials, grp):
+    """Amplitude (pico-a-pico da resultante/norma vetorial dos eixos X/Y/Z
+    disponíveis) de uma variável (grp), calculada separadamente em cada fase do
+    ciclo (platô/descida/subida) — média ± DP entre os ciclos."""
+    cols = catalog.get(grp, {})
+    axes_present = [ax for ax in ("X", "Y", "Z") if ax in cols]
+    if not axes_present:
+        return None
+    phases = {"platô": [], "descida": [], "subida": []}
+    for trial_idx in range(1, n_trials + 1):
+        cycle_start, d_start, v_trial, cycle_end = trial_bounds_fn(trial_idx)
+        bounds = {"platô": (cycle_start, d_start), "descida": (d_start, v_trial), "subida": (v_trial, cycle_end)}
+        for phase_name, (t0, t1) in bounds.items():
+            if t1 <= t0:
+                continue
+            mask = (df_t >= t0) & (df_t <= t1)
+            if mask.sum() < 2:
+                continue
+            vecs = np.vstack([df[cols[ax]].to_numpy()[mask] for ax in axes_present])
+            resultant = np.sqrt((vecs ** 2).sum(axis=0))
+            phases[phase_name].append(float(resultant.max() - resultant.min()))
+    out = {}
+    for phase_name, vals in phases.items():
+        if vals:
+            arr = np.array(vals)
+            out[phase_name] = (float(arr.mean()), float(arr.std()))
+        else:
+            out[phase_name] = (float("nan"), float("nan"))
+    return out
+
+
 DESCIDA_COLOR = "rgba(255,127,14,0.18)"
 SUBIDA_COLOR = "rgba(44,160,44,0.18)"
 PLATEAU_COLOR = "rgba(150,150,150,0.25)"
@@ -499,6 +530,16 @@ def _fmt_dur(stat):
     return f"{mean_v:.2f}s (±{std_v:.2f})"
 
 
+def _fmt_pct_diff(stat_a, stat_b, label_a, label_b):
+    a, b = stat_a[0], stat_b[0]
+    if a == 0 and b == 0:
+        return "sem diferença"
+    maior, menor = (a, b) if a >= b else (b, a)
+    quem_maior = label_a if a >= b else label_b
+    pct = 100 * (maior - menor) / menor if menor != 0 else float("inf")
+    return f"{quem_maior} é {pct:.0f}% maior"
+
+
 _depth_lines = []
 for region in REGIONS:
     dep_a = net_displacement_stats(
@@ -518,11 +559,15 @@ for region in REGIONS:
     )
 
 st.info(
-    f"**Duração das fases (média ± DP entre os ciclos):**\n\n"
-    f"- Platô: {ctx_a['label']} {_fmt_dur(_dur_a['platô'])} · {ctx_b['label']} {_fmt_dur(_dur_b['platô'])}\n"
-    f"- Descida: {ctx_a['label']} {_fmt_dur(_dur_a['descida'])} · {ctx_b['label']} {_fmt_dur(_dur_b['descida'])}\n"
-    f"- Subida: {ctx_a['label']} {_fmt_dur(_dur_a['subida'])} · {ctx_b['label']} {_fmt_dur(_dur_b['subida'])}\n"
-    f"- Ciclo total: {ctx_a['label']} {_fmt_dur(_dur_a['ciclo total'])} · {ctx_b['label']} {_fmt_dur(_dur_b['ciclo total'])}\n\n"
+    f"**Duração das fases (média ± DP entre os ciclos, e diferença % entre as pessoas):**\n\n"
+    f"- Platô: {ctx_a['label']} {_fmt_dur(_dur_a['platô'])} · {ctx_b['label']} {_fmt_dur(_dur_b['platô'])} "
+    f"— {_fmt_pct_diff(_dur_a['platô'], _dur_b['platô'], ctx_a['label'], ctx_b['label'])}\n"
+    f"- Descida: {ctx_a['label']} {_fmt_dur(_dur_a['descida'])} · {ctx_b['label']} {_fmt_dur(_dur_b['descida'])} "
+    f"— {_fmt_pct_diff(_dur_a['descida'], _dur_b['descida'], ctx_a['label'], ctx_b['label'])}\n"
+    f"- Subida: {ctx_a['label']} {_fmt_dur(_dur_a['subida'])} · {ctx_b['label']} {_fmt_dur(_dur_b['subida'])} "
+    f"— {_fmt_pct_diff(_dur_a['subida'], _dur_b['subida'], ctx_a['label'], ctx_b['label'])}\n"
+    f"- Ciclo total: {ctx_a['label']} {_fmt_dur(_dur_a['ciclo total'])} · {ctx_b['label']} {_fmt_dur(_dur_b['ciclo total'])} "
+    f"— {_fmt_pct_diff(_dur_a['ciclo total'], _dur_b['ciclo total'], ctx_a['label'], ctx_b['label'])}\n\n"
     f"**Quanto desce (deslocamento líquido Vertical na descida, unidade da coluna de "
     f"Kinemática — confira se é cm ou m no seu sistema de captura):**\n\n"
     + "\n".join(_depth_lines) +
@@ -609,7 +654,47 @@ fig.update_layout(
     width=w, height=h, margin=MARGIN, plot_bgcolor="white",
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
 )
-st.plotly_chart(fig, use_container_width=False, key="compare_main")
+
+col_chart, col_amp = st.columns([3, 2])
+with col_chart:
+    st.plotly_chart(fig, use_container_width=False, key="compare_main")
+
+with col_amp:
+    _amp_rows = []
+    for region in REGIONS:
+        for grp, (label, unit), is_kinem in SIGNAL_ROWS:
+            df_a_r = ctx_a["sheets"][region]
+            df_b_r = ctx_b["sheets"][region]
+            amp_a = phase_amplitude_stats(
+                df_a_r, df_a_r[time_column(df_a_r)].to_numpy(), build_catalog(df_a_r),
+                ctx_a["trial_bounds_fn"], ctx_a["n_trials"], grp,
+            )
+            amp_b = phase_amplitude_stats(
+                df_b_r, df_b_r[time_column(df_b_r)].to_numpy(), build_catalog(df_b_r),
+                ctx_b["trial_bounds_fn"], ctx_b["n_trials"], grp,
+            )
+            if amp_a is None or amp_b is None:
+                continue
+            for phase_name in ("platô", "descida", "subida"):
+                ma, sa = amp_a[phase_name]
+                mb, sb = amp_b[phase_name]
+                _amp_rows.append({
+                    "Região": region, "Fase": phase_name, "Variável": f"{label} ({unit})",
+                    f"{ctx_a['label']} — média": round(ma, 3) if not np.isnan(ma) else None,
+                    f"{ctx_a['label']} — DP": round(sa, 3) if not np.isnan(sa) else None,
+                    f"{ctx_b['label']} — média": round(mb, 3) if not np.isnan(mb) else None,
+                    f"{ctx_b['label']} — DP": round(sb, 3) if not np.isnan(sb) else None,
+                })
+
+    st.info(
+        "**Amplitude por fase (pico-a-pico da resultante dos 3 eixos), média ± DP "
+        "entre os ciclos** — para cada variável (Deslocamento, Velocidade, Aceleração, "
+        "ACC, GYR), em L5 e Joelho, separada por platô/descida/subida:"
+    )
+    if _amp_rows:
+        st.dataframe(pd.DataFrame(_amp_rows), use_container_width=True, hide_index=True, height=520)
+    else:
+        st.caption("Sem dados suficientes para calcular a amplitude por fase.")
 
 # ---- Bloco de interpretação: consistência entre repetições (CV) -------------
 _cv_lines = []

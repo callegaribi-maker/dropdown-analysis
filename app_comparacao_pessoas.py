@@ -770,7 +770,11 @@ with col_amp:
                         col_a_name: "—" if np.isnan(ma) else f"{ma:.3f} ± {sa:.3f}",
                         col_b_name: "—" if np.isnan(mb) else f"{mb:.3f} ± {sb:.3f}",
                     })
-                    _highlight_targets.append(_cell_highlight(ma, mb, col_a_name, col_b_name))
+                    # destaque baseado no valor JÁ ARREDONDADO (o mesmo que aparece na
+                    # célula) — assim a cor sempre bate com o que a pessoa está lendo.
+                    _ma_disp = round(ma, 3) if not np.isnan(ma) else ma
+                    _mb_disp = round(mb, 3) if not np.isnan(mb) else mb
+                    _highlight_targets.append(_cell_highlight(_ma_disp, _mb_disp, col_a_name, col_b_name))
 
         st.markdown(f"**{region}**")
         if not _amp_rows:
@@ -938,10 +942,14 @@ def build_tilt_combo_figure(plane, y_title, chart_title):
     fig_t.update_yaxes(showgrid=False, title_text=y_title)
     fig_t.update_layout(
         title=dict(text=chart_title, y=0.98, yanchor="top"),
-        height=440, margin=dict(l=55, r=20, t=48, b=90), plot_bgcolor="white",
+        width=TILT_SQUARE_PX, height=TILT_SQUARE_PX,
+        margin=dict(l=55, r=20, t=48, b=90), plot_bgcolor="white",
         legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5),
     )
     return fig_t
+
+
+TILT_SQUARE_PX = 420
 
 
 st.subheader("📐 Inclinação (frontal / sagital) — Pessoa A × Pessoa B, L5 × Joelho")
@@ -974,7 +982,7 @@ with col_frontal:
         "frontal", "Δ ângulo (°) — positivo = lateral, negativo = medial", "Inclinação frontal (ML)"
     )
     if fig_frontal is not None:
-        st.plotly_chart(fig_frontal, use_container_width=True, key="tilt_frontal")
+        st.plotly_chart(fig_frontal, use_container_width=False, key="tilt_frontal")
         _peaks_f = _tilt_peak_summary("frontal")
         if ("A", "Joelho") in _peaks_f and ("B", "Joelho") in _peaks_f:
             pa, pb = _peaks_f[("A", "Joelho")], _peaks_f[("B", "Joelho")]
@@ -996,7 +1004,7 @@ with col_sagital:
         "sagital", "Δ ângulo (°) — positivo = anterior, negativo = posterior", "Inclinação sagital (AP)"
     )
     if fig_sagital is not None:
-        st.plotly_chart(fig_sagital, use_container_width=True, key="tilt_sagital")
+        st.plotly_chart(fig_sagital, use_container_width=False, key="tilt_sagital")
         _div_lines = []
         for ctx in PERSON_CTXS:
             res_l5 = compute_tilt_curve(ctx["sheets_raw"], ctx["sheets"], "L5", ctx["trial_bounds_fn"], ctx["n_trials"], "sagital")

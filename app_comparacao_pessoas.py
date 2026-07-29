@@ -320,6 +320,31 @@ def phase_amplitude_stats(df, df_t, catalog, trial_bounds_fn, n_trials, grp):
     return out
 
 
+def phase_amplitude_stats_axis(df, df_t, colname, trial_bounds_fn, n_trials):
+    """Igual a phase_amplitude_stats, mas pra UM eixo/coluna só (não a resultante
+    dos 3) — pico-a-pico do próprio sinal em cada fase, média ± DP entre os ciclos."""
+    phases = {"platô": [], "descida": [], "subida": []}
+    for trial_idx in range(1, n_trials + 1):
+        cycle_start, d_start, v_trial, cycle_end = trial_bounds_fn(trial_idx)
+        bounds = {"platô": (cycle_start, d_start), "descida": (d_start, v_trial), "subida": (v_trial, cycle_end)}
+        for phase_name, (t0, t1) in bounds.items():
+            if t1 <= t0:
+                continue
+            mask = (df_t >= t0) & (df_t <= t1)
+            if mask.sum() < 2:
+                continue
+            sig = df[colname].to_numpy()[mask]
+            phases[phase_name].append(float(sig.max() - sig.min()))
+    out = {}
+    for phase_name, vals in phases.items():
+        if vals:
+            arr = np.array(vals)
+            out[phase_name] = (float(arr.mean()), float(arr.std()))
+        else:
+            out[phase_name] = (float("nan"), float("nan"))
+    return out
+
+
 DESCIDA_COLOR = "rgba(255,127,14,0.18)"
 SUBIDA_COLOR = "rgba(44,160,44,0.18)"
 PLATEAU_COLOR = "rgba(150,150,150,0.25)"
@@ -557,10 +582,18 @@ for region in REGIONS:
     )
     if dep_a is None or dep_b is None:
         continue
-    quem_desce_mais = ctx_a["label"] if abs(dep_a["mean"]) > abs(dep_b["mean"]) else ctx_b["label"]
+    # só aponta "quem desce mais" se a diferença for maior que a própria variação
+    # entre ciclos das duas pessoas (senão a diferença não é confiável/relevante).
+    _diff = abs(dep_a["mean"] - dep_b["mean"])
+    _combined_std = dep_a["std"] + dep_b["std"]
+    if _diff <= _combined_std:
+        conclusao = "valores equivalentes (a diferença é menor que a variação normal entre ciclos)"
+    else:
+        quem_desce_mais = ctx_a["label"] if abs(dep_a["mean"]) > abs(dep_b["mean"]) else ctx_b["label"]
+        conclusao = f"{quem_desce_mais} desce mais nessa região"
     _depth_lines.append(
         f"- **{region}**: {ctx_a['label']} = {dep_a['mean']:.3f} (±{dep_a['std']:.3f}), "
-        f"{ctx_b['label']} = {dep_b['mean']:.3f} (±{dep_b['std']:.3f}) — {quem_desce_mais} desce mais nessa região."
+        f"{ctx_b['label']} = {dep_b['mean']:.3f} (±{dep_b['std']:.3f}) — {conclusao}."
     )
 
 _pct_plato_a = _pct_of_cycle(_dur_a['platô'], _dur_a['ciclo total'])
@@ -680,47 +713,83 @@ with col_chart:
 
 with col_amp:
     _amp_rows = []
+    col_a_name = f"{ctx_a['label']}"
+    col_b_name = f"{ctx_b['label']}"
     for region in REGIONS:
+        imu_axis_r = get_imu_axis_label(region)
+        df_a_r = ctx_a["sheets"][region]
+        df_b_r = ctx_b["sheets"][region]
+        cat_a_r = build_catalog(df_a_r)
+        cat_b_r = build_catalog(df_b_r)
+        t_a_r = df_a_r[time_column(df_a_r)].to_numpy()
+        t_b_r = df_b_r[time_column(df_b_r)].to_numpy()
         for grp, (label, unit), is_kinem in SIGNAL_ROWS:
-            df_a_r = ctx_a["sheets"][region]
-            df_b_r = ctx_b["sheets"][region]
-            amp_a = phase_amplitude_stats(
-                df_a_r, df_a_r[time_column(df_a_r)].to_numpy(), build_catalog(df_a_r),
-                ctx_a["trial_bounds_fn"], ctx_a["n_trials"], grp,
-            )
-            amp_b = phase_amplitude_stats(
-                df_b_r, df_b_r[time_column(df_b_r)].to_numpy(), build_catalog(df_b_r),
-                ctx_b["trial_bounds_fn"], ctx_b["n_trials"], grp,
-            )
-            if amp_a is None or amp_b is None:
-                continue
-            for phase_name in ("platô", "descida", "subida"):
-                ma, sa = amp_a[phase_name]
-                mb, sb = amp_b[phase_name]
-                _amp_rows.append({
-                    "Região": region, "Fase": phase_name, "Variável": f"{label} ({unit})",
-                    f"{ctx_a['label']} — média": round(ma, 3) if not np.isnan(ma) else None,
-                    f"{ctx_a['label']} — DP": round(sa, 3) if not np.isnan(sa) else None,
-                    f"{ctx_b['label']} — média": round(mb, 3) if not np.isnan(mb) else None,
-                    f"{ctx_b['label']} — DP": round(sb, 3) if not np.isnan(sb) else None,
-                })
+            for direction in DIRECTIONS:
+                axis = next((ax for ax in AXES if axis_direction(is_kinem, ax, imu_axis_r) == direction), None)
+                if axis is None:
+                    continue
+                colname_a = cat_a_r.get(grp, {}).get(axis)
+                colname_b = cat_b_r.get(grp, {}).get(axis)
+                if colname_a is None or colname_b is None:
+                    continue
+                amp_a = phase_amplitude_stats_axis(df_a_r, t_a_r, colname_a, ctx_a["trial_bounds_fn"], ctx_a["n_trials"])
+                amp_b = phase_amplitude_stats_axis(df_b_r, t_b_r, colname_b, ctx_b["trial_bounds_fn"], ctx_b["n_trials"])
+                for phase_name in ("platô", "descida", "subida"):
+                    ma, sa = amp_a[phase_name]
+                    mb, sb = amp_b[phase_name]
+                    _amp_rows.append({
+                        "Região": region, "Direção": direction, "Fase": phase_name,
+                        "Variável": f"{label} ({unit})",
+                        "_ma": ma, "_mb": mb,
+                        col_a_name: "—" if np.isnan(ma) else f"{ma:.3f} ± {sa:.3f}",
+                        col_b_name: "—" if np.isnan(mb) else f"{mb:.3f} ± {sb:.3f}",
+                    })
 
     st.info(
-        "**Amplitude por fase (pico-a-pico da resultante dos 3 eixos), média ± DP "
-        "entre os ciclos** — para cada variável (Deslocamento, Velocidade, Aceleração, "
-        "ACC, GYR), em L5 e Joelho, separada por platô/descida/subida:"
+        "**Amplitude por fase (pico-a-pico do sinal), média ± DP entre os ciclos** — "
+        "para cada variável (Deslocamento, Velocidade, Aceleração, ACC, GYR), em cada "
+        "direção anatômica (Vertical/AP/ML), em L5 e Joelho, separada por "
+        "platô/descida/subida. Em amarelo: quem tem a maior amplitude naquela "
+        "fase/variável/direção."
     )
     if _amp_rows:
-        st.dataframe(pd.DataFrame(_amp_rows), use_container_width=True, hide_index=True, height=520)
+        _amp_df = pd.DataFrame(_amp_rows)
+
+        def _highlight_bigger(row):
+            styles = pd.Series("", index=row.index)
+            ma, mb = row["_ma"], row["_mb"]
+            if pd.isna(ma) or pd.isna(mb):
+                return styles
+            if abs(ma) >= abs(mb):
+                styles[col_a_name] = "background-color: #ffe066"
+            else:
+                styles[col_b_name] = "background-color: #ffe066"
+            return styles
+
+        try:
+            _styled = (
+                _amp_df.style.apply(_highlight_bigger, axis=1)
+                .hide(subset=["_ma", "_mb"], axis="columns")
+                .hide(axis="index")
+            )
+            st.dataframe(_styled, use_container_width=True, height=520)
+        except Exception:
+            # fallback sem cor, caso o ambiente não tenha jinja2 (necessário pro Styler)
+            st.dataframe(_amp_df.drop(columns=["_ma", "_mb"]), use_container_width=True, hide_index=True, height=520)
     else:
         st.caption("Sem dados suficientes para calcular a amplitude por fase.")
 
 # ---- Bloco de interpretação: consistência entre repetições (CV) -------------
+# CV = DP/média do deslocamento líquido. Quando a média está perto de zero (comum no
+# L5 em AP/ML, que quase não se move de lado numa descida vertical), o CV vira um
+# número gigante/instável — não é "ruído do app", é o próprio cálculo (DP/média)
+# degenerando quando o denominador é ~0. Nesses casos mostramos o DP absoluto em vez
+# do CV%, com uma nota, em vez de simplesmente omitir a linha.
+_RELIABLE_CV_FACTOR = 1.0  # exige |média| >= 1x o DP pra considerar o CV% confiável
+
 _cv_lines = []
 for region in REGIONS:
     for direction in ("Vertical", "AP", "ML"):
-        if region == "L5" and direction in ("AP", "ML"):
-            continue  # descartado: deslocamento do L5 nesses eixos é perto de zero, CV vira ruído
         stat_a = net_displacement_stats(
             ctx_a["sheets"][region], ctx_a["sheets"][region][time_column(ctx_a["sheets"][region])].to_numpy(),
             build_catalog(ctx_a["sheets"][region]), ctx_a["trial_bounds_fn"], ctx_a["n_trials"], direction,
@@ -731,18 +800,31 @@ for region in REGIONS:
         )
         if stat_a is None or stat_b is None:
             continue
-        quem_mais_variavel = ctx_a["label"] if stat_a["cv"] > stat_b["cv"] else ctx_b["label"]
-        _cv_lines.append(
-            f"- **{region} — {direction}**: {ctx_a['label']} CV={stat_a['cv']:.1f}% · "
-            f"{ctx_b['label']} CV={stat_b['cv']:.1f}% — {quem_mais_variavel} repete de forma menos consistente."
-        )
+        cv_a_ok = abs(stat_a["mean"]) >= _RELIABLE_CV_FACTOR * stat_a["std"]
+        cv_b_ok = abs(stat_b["mean"]) >= _RELIABLE_CV_FACTOR * stat_b["std"]
+        if cv_a_ok and cv_b_ok:
+            quem_mais_variavel = ctx_a["label"] if stat_a["cv"] > stat_b["cv"] else ctx_b["label"]
+            _cv_lines.append(
+                f"- **{region} — {direction}**: {ctx_a['label']} CV={stat_a['cv']:.1f}% · "
+                f"{ctx_b['label']} CV={stat_b['cv']:.1f}% — {quem_mais_variavel} repete de forma menos consistente."
+            )
+        else:
+            _cv_lines.append(
+                f"- **{region} — {direction}**: deslocamento líquido perto de zero pra pelo menos uma "
+                f"pessoa ({ctx_a['label']} {stat_a['mean']:.3f}±{stat_a['std']:.3f}, "
+                f"{ctx_b['label']} {stat_b['mean']:.3f}±{stat_b['std']:.3f}) — CV% não é confiável aqui "
+                f"(divide por um número perto de 0); use o DP absoluto acima pra comparar."
+            )
 
 st.info(
     "**Consistência entre repetições (CV do deslocamento líquido na descida — "
     "quanto maior, menos consistente/controlado o movimento):**\n\n"
     + "\n".join(_cv_lines) +
     "\n\n_CV alto pode indicar fadiga, falta de controle motor ou variação real entre "
-    "tentativas — vale olhar as curvas acima pra confirmar antes de concluir algo clínico._"
+    "tentativas — vale olhar as curvas acima pra confirmar antes de concluir algo clínico. "
+    "No L5, AP/ML costumam ter deslocamento líquido perto de zero (o tronco não se "
+    "move muito de lado/frente numa descida vertical), então o CV% degenera; por isso "
+    "essas linhas aparecem com o DP absoluto em vez do CV%._"
 )
 
 st.divider()

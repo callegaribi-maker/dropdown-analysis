@@ -245,6 +245,50 @@ def average_phase_fracs(trial_bounds_fn, n_trials):
     return float(np.mean(d_fracs)), float(np.mean(v_fracs))
 
 
+def phase_duration_stats(trial_bounds_fn, n_trials):
+    """Duração (em segundos) de cada fase do ciclo, média ± DP entre os ciclos."""
+    plato, desc, sub, total = [], [], [], []
+    for trial_idx in range(1, n_trials + 1):
+        cycle_start, d_start, v_trial, cycle_end = trial_bounds_fn(trial_idx)
+        plato.append(d_start - cycle_start)
+        desc.append(v_trial - d_start)
+        sub.append(cycle_end - v_trial)
+        total.append(cycle_end - cycle_start)
+
+    def _stat(vals):
+        arr = np.array(vals, dtype=float)
+        return (float(arr.mean()), float(arr.std())) if len(arr) else (float("nan"), float("nan"))
+
+    return {
+        "platô": _stat(plato), "descida": _stat(desc),
+        "subida": _stat(sub), "ciclo total": _stat(total),
+    }
+
+
+def net_displacement_stats(df, df_t, catalog, trial_bounds_fn, n_trials, direction):
+    """Deslocamento líquido (posição final - inicial da descida) numa direção
+    anatômica (Vertical/AP/ML) — média ± DP e CV(%) entre os ciclos. Usado tanto pra
+    'profundidade' (Vertical) quanto pra consistência/assimetria entre repetições."""
+    axis = next((ax for ax, d in KINEM_AXIS_LABEL.items() if d == direction), None)
+    colname = catalog.get("Cinemática - Posição", {}).get(axis) if axis else None
+    if colname is None:
+        return None
+    deltas = []
+    for trial_idx in range(1, n_trials + 1):
+        cycle_start, d_start, v_trial, cycle_end = trial_bounds_fn(trial_idx)
+        mask = (df_t >= d_start) & (df_t <= v_trial)
+        sig = df[colname].to_numpy()[mask]
+        if len(sig) < 2:
+            continue
+        deltas.append(float(sig[-1] - sig[0]))
+    if not deltas:
+        return None
+    arr = np.array(deltas)
+    mean_v, std_v = float(arr.mean()), float(arr.std())
+    cv = (100 * std_v / abs(mean_v)) if mean_v != 0 else float("nan")
+    return {"mean": mean_v, "std": std_v, "cv": cv, "n": len(arr)}
+
+
 DESCIDA_COLOR = "rgba(255,127,14,0.18)"
 SUBIDA_COLOR = "rgba(44,160,44,0.18)"
 PLATEAU_COLOR = "rgba(150,150,150,0.25)"
@@ -445,6 +489,47 @@ if ctx_a["n_trials"] == 0 or ctx_b["n_trials"] == 0:
     st.warning("Não foi possível detectar nenhum ciclo em uma das duas pessoas — ajuste os parâmetros de segmentação.")
     st.stop()
 
+# ---- Bloco de interpretação: duração das fases + profundidade da descida ----
+_dur_a = phase_duration_stats(ctx_a["trial_bounds_fn"], ctx_a["n_trials"])
+_dur_b = phase_duration_stats(ctx_b["trial_bounds_fn"], ctx_b["n_trials"])
+
+
+def _fmt_dur(stat):
+    mean_v, std_v = stat
+    return f"{mean_v:.2f}s (±{std_v:.2f})"
+
+
+_depth_lines = []
+for region in REGIONS:
+    dep_a = net_displacement_stats(
+        ctx_a["sheets"][region], ctx_a["sheets"][region][time_column(ctx_a["sheets"][region])].to_numpy(),
+        build_catalog(ctx_a["sheets"][region]), ctx_a["trial_bounds_fn"], ctx_a["n_trials"], "Vertical",
+    )
+    dep_b = net_displacement_stats(
+        ctx_b["sheets"][region], ctx_b["sheets"][region][time_column(ctx_b["sheets"][region])].to_numpy(),
+        build_catalog(ctx_b["sheets"][region]), ctx_b["trial_bounds_fn"], ctx_b["n_trials"], "Vertical",
+    )
+    if dep_a is None or dep_b is None:
+        continue
+    quem_desce_mais = ctx_a["label"] if abs(dep_a["mean"]) > abs(dep_b["mean"]) else ctx_b["label"]
+    _depth_lines.append(
+        f"- **{region}**: {ctx_a['label']} = {dep_a['mean']:.3f} (±{dep_a['std']:.3f}), "
+        f"{ctx_b['label']} = {dep_b['mean']:.3f} (±{dep_b['std']:.3f}) — {quem_desce_mais} desce mais nessa região."
+    )
+
+st.info(
+    f"**Duração das fases (média ± DP entre os ciclos):**\n\n"
+    f"- Platô: {ctx_a['label']} {_fmt_dur(_dur_a['platô'])} · {ctx_b['label']} {_fmt_dur(_dur_b['platô'])}\n"
+    f"- Descida: {ctx_a['label']} {_fmt_dur(_dur_a['descida'])} · {ctx_b['label']} {_fmt_dur(_dur_b['descida'])}\n"
+    f"- Subida: {ctx_a['label']} {_fmt_dur(_dur_a['subida'])} · {ctx_b['label']} {_fmt_dur(_dur_b['subida'])}\n"
+    f"- Ciclo total: {ctx_a['label']} {_fmt_dur(_dur_a['ciclo total'])} · {ctx_b['label']} {_fmt_dur(_dur_b['ciclo total'])}\n\n"
+    f"**Quanto desce (deslocamento líquido Vertical na descida, unidade da coluna de "
+    f"Kinemática — confira se é cm ou m no seu sistema de captura):**\n\n"
+    + "\n".join(_depth_lines) +
+    "\n\n_Interpretação automática, calculada a partir dos ciclos detectados — não substitui "
+    "avaliação clínica._"
+)
+
 st.divider()
 
 # ----------------------------------------------------------------------------
@@ -525,6 +610,36 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
 )
 st.plotly_chart(fig, use_container_width=False, key="compare_main")
+
+# ---- Bloco de interpretação: consistência entre repetições (CV) -------------
+_cv_lines = []
+for region in REGIONS:
+    for direction in ("Vertical", "AP", "ML"):
+        if region == "L5" and direction in ("AP", "ML"):
+            continue  # descartado: deslocamento do L5 nesses eixos é perto de zero, CV vira ruído
+        stat_a = net_displacement_stats(
+            ctx_a["sheets"][region], ctx_a["sheets"][region][time_column(ctx_a["sheets"][region])].to_numpy(),
+            build_catalog(ctx_a["sheets"][region]), ctx_a["trial_bounds_fn"], ctx_a["n_trials"], direction,
+        )
+        stat_b = net_displacement_stats(
+            ctx_b["sheets"][region], ctx_b["sheets"][region][time_column(ctx_b["sheets"][region])].to_numpy(),
+            build_catalog(ctx_b["sheets"][region]), ctx_b["trial_bounds_fn"], ctx_b["n_trials"], direction,
+        )
+        if stat_a is None or stat_b is None:
+            continue
+        quem_mais_variavel = ctx_a["label"] if stat_a["cv"] > stat_b["cv"] else ctx_b["label"]
+        _cv_lines.append(
+            f"- **{region} — {direction}**: {ctx_a['label']} CV={stat_a['cv']:.1f}% · "
+            f"{ctx_b['label']} CV={stat_b['cv']:.1f}% — {quem_mais_variavel} repete de forma menos consistente."
+        )
+
+st.info(
+    "**Consistência entre repetições (CV do deslocamento líquido na descida — "
+    "quanto maior, menos consistente/controlado o movimento):**\n\n"
+    + "\n".join(_cv_lines) +
+    "\n\n_CV alto pode indicar fadiga, falta de controle motor ou variação real entre "
+    "tentativas — vale olhar as curvas acima pra confirmar antes de concluir algo clínico._"
+)
 
 st.divider()
 
@@ -642,6 +757,21 @@ st.caption(
     "completa do cálculo no app.py original."
 )
 
+def _tilt_peak_summary(plane):
+    """Pra cada pessoa/região, pico da curva média (maior magnitude, positiva ou
+    negativa) e em que fração do ciclo ele acontece."""
+    out = {}
+    for ctx in PERSON_CTXS:
+        for region in REGIONS:
+            res = compute_tilt_curve(ctx["sheets_raw"], ctx["sheets"], region, ctx["trial_bounds_fn"], ctx["n_trials"], plane)
+            if res is None:
+                continue
+            m = res["mean"]
+            peak_idx = int(np.argmax(np.abs(m)))
+            out[(ctx["key"], region)] = {"peak": float(m[peak_idx]), "frac": peak_idx / 100.0, "std": float(res["std"][peak_idx])}
+    return out
+
+
 col_frontal, col_sagital = st.columns(2)
 with col_frontal:
     fig_frontal = build_tilt_combo_figure(
@@ -649,6 +779,19 @@ with col_frontal:
     )
     if fig_frontal is not None:
         st.plotly_chart(fig_frontal, use_container_width=True, key="tilt_frontal")
+        _peaks_f = _tilt_peak_summary("frontal")
+        if ("A", "Joelho") in _peaks_f and ("B", "Joelho") in _peaks_f:
+            pa, pb = _peaks_f[("A", "Joelho")], _peaks_f[("B", "Joelho")]
+            quem_mais_valgo = ctx_a["label"] if abs(pa["peak"]) > abs(pb["peak"]) else ctx_b["label"]
+            st.info(
+                "**Valgo dinâmico (pico de inclinação medial do Joelho):**\n\n"
+                f"- {ctx_a['label']}: {pa['peak']:.1f}° (±{pa['std']:.1f}) em ~{pa['frac']*100:.0f}% do ciclo\n"
+                f"- {ctx_b['label']}: {pb['peak']:.1f}° (±{pb['std']:.1f}) em ~{pb['frac']*100:.0f}% do ciclo\n\n"
+                f"**{quem_mais_valgo}** tem o pico de inclinação medial maior — indicador de mais "
+                "valgo dinâmico do joelho nesse teste.\n\n"
+                "_Proxy por 1 sensor (não é o ângulo articular real do joelho) — não substitui "
+                "avaliação clínica._"
+            )
     else:
         st.caption("Não foi possível calcular a inclinação frontal — faltam colunas de ACC/GYR necessárias.")
 
@@ -658,6 +801,27 @@ with col_sagital:
     )
     if fig_sagital is not None:
         st.plotly_chart(fig_sagital, use_container_width=True, key="tilt_sagital")
+        _div_lines = []
+        for ctx in PERSON_CTXS:
+            res_l5 = compute_tilt_curve(ctx["sheets_raw"], ctx["sheets"], "L5", ctx["trial_bounds_fn"], ctx["n_trials"], "sagital")
+            res_jo = compute_tilt_curve(ctx["sheets_raw"], ctx["sheets"], "Joelho", ctx["trial_bounds_fn"], ctx["n_trials"], "sagital")
+            if res_l5 is None or res_jo is None:
+                continue
+            diff = res_jo["mean"] - res_l5["mean"]
+            idx_max = int(np.argmax(np.abs(diff)))
+            _div_lines.append(
+                f"- **{ctx['label']}**: divergência máxima de {diff[idx_max]:.1f}° em ~{idx_max}% do ciclo "
+                f"(L5={res_l5['mean'][idx_max]:.1f}°, Joelho={res_jo['mean'][idx_max]:.1f}°)"
+            )
+        if _div_lines:
+            st.info(
+                "**Divergência L5 × Joelho no plano sagital** (o quanto o joelho se inclina de "
+                "forma diferente do tronco/pelve — esperado ser grande, já que o joelho flexiona "
+                "bem mais que o tronco numa descida):\n\n"
+                + "\n".join(_div_lines) +
+                "\n\n_Divergência parecida entre pessoas é normal aqui; a comparação mais "
+                "informativa costuma ser no plano frontal (compensação lateral), não no sagital._"
+            )
     else:
         st.caption("Não foi possível calcular a inclinação sagital — faltam colunas de ACC/GYR necessárias.")
 

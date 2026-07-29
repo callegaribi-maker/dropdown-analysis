@@ -540,6 +540,11 @@ def _fmt_pct_diff(stat_a, stat_b, label_a, label_b):
     return f"{quem_maior} é {pct:.0f}% maior"
 
 
+def _pct_of_cycle(phase_stat, total_stat):
+    total = total_stat[0]
+    return 100 * phase_stat[0] / total if total else float("nan")
+
+
 _depth_lines = []
 for region in REGIONS:
     dep_a = net_displacement_stats(
@@ -558,15 +563,29 @@ for region in REGIONS:
         f"{ctx_b['label']} = {dep_b['mean']:.3f} (±{dep_b['std']:.3f}) — {quem_desce_mais} desce mais nessa região."
     )
 
+_pct_plato_a = _pct_of_cycle(_dur_a['platô'], _dur_a['ciclo total'])
+_pct_plato_b = _pct_of_cycle(_dur_b['platô'], _dur_b['ciclo total'])
+_pct_desc_a = _pct_of_cycle(_dur_a['descida'], _dur_a['ciclo total'])
+_pct_desc_b = _pct_of_cycle(_dur_b['descida'], _dur_b['ciclo total'])
+_pct_sub_a = _pct_of_cycle(_dur_a['subida'], _dur_a['ciclo total'])
+_pct_sub_b = _pct_of_cycle(_dur_b['subida'], _dur_b['ciclo total'])
+
 st.info(
-    f"**Duração das fases (média ± DP entre os ciclos, e diferença % entre as pessoas):**\n\n"
-    f"- Platô: {ctx_a['label']} {_fmt_dur(_dur_a['platô'])} · {ctx_b['label']} {_fmt_dur(_dur_b['platô'])} "
+    f"**Duração das fases (média ± DP entre os ciclos; % = proporção do ciclo total "
+    f"daquela pessoa; e diferença % entre as pessoas):**\n\n"
+    f"- Platô: {ctx_a['label']} {_fmt_dur(_dur_a['platô'])} [{_pct_plato_a:.0f}% do ciclo] · "
+    f"{ctx_b['label']} {_fmt_dur(_dur_b['platô'])} [{_pct_plato_b:.0f}% do ciclo] "
     f"— {_fmt_pct_diff(_dur_a['platô'], _dur_b['platô'], ctx_a['label'], ctx_b['label'])}\n"
-    f"- Descida: {ctx_a['label']} {_fmt_dur(_dur_a['descida'])} · {ctx_b['label']} {_fmt_dur(_dur_b['descida'])} "
+    f"- Descida: {ctx_a['label']} {_fmt_dur(_dur_a['descida'])} [{_pct_desc_a:.0f}% do ciclo] · "
+    f"{ctx_b['label']} {_fmt_dur(_dur_b['descida'])} [{_pct_desc_b:.0f}% do ciclo] "
     f"— {_fmt_pct_diff(_dur_a['descida'], _dur_b['descida'], ctx_a['label'], ctx_b['label'])}\n"
-    f"- Subida: {ctx_a['label']} {_fmt_dur(_dur_a['subida'])} · {ctx_b['label']} {_fmt_dur(_dur_b['subida'])} "
+    f"- Subida: {ctx_a['label']} {_fmt_dur(_dur_a['subida'])} [{_pct_sub_a:.0f}% do ciclo] · "
+    f"{ctx_b['label']} {_fmt_dur(_dur_b['subida'])} [{_pct_sub_b:.0f}% do ciclo] "
     f"— {_fmt_pct_diff(_dur_a['subida'], _dur_b['subida'], ctx_a['label'], ctx_b['label'])}\n"
-    f"- Ciclo total: {ctx_a['label']} {_fmt_dur(_dur_a['ciclo total'])} · {ctx_b['label']} {_fmt_dur(_dur_b['ciclo total'])} "
+    f"- Ciclo total: {ctx_a['label']} {_fmt_dur(_dur_a['ciclo total'])} "
+    f"(platô {_pct_plato_a:.0f}% / descida {_pct_desc_a:.0f}% / subida {_pct_sub_a:.0f}%) · "
+    f"{ctx_b['label']} {_fmt_dur(_dur_b['ciclo total'])} "
+    f"(platô {_pct_plato_b:.0f}% / descida {_pct_desc_b:.0f}% / subida {_pct_sub_b:.0f}%) "
     f"— {_fmt_pct_diff(_dur_a['ciclo total'], _dur_b['ciclo total'], ctx_a['label'], ctx_b['label'])}\n\n"
     f"**Quanto desce (deslocamento líquido Vertical na descida, unidade da coluna de "
     f"Kinemática — confira se é cm ou m no seu sistema de captura):**\n\n"

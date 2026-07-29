@@ -714,18 +714,18 @@ with col_chart:
 _AMP_HIGHLIGHT_PCT = 0.20  # só pinta se a maior for pelo menos 20% maior que a menor
 
 
-def _highlight_bigger_20pct(row, col_a_name, col_b_name):
-    styles = pd.Series("", index=row.index)
-    ma, mb = row["_ma"], row["_mb"]
-    if pd.isna(ma) or pd.isna(mb):
-        return styles
+def _cell_highlight(ma, mb, col_a_name, col_b_name):
+    """Devolve (coluna_a_destacar_ou_None) pra uma única linha, comparando as médias
+    cruas (não as strings 'média ± DP' que aparecem na tabela)."""
+    if ma is None or mb is None or (isinstance(ma, float) and np.isnan(ma)) or (isinstance(mb, float) and np.isnan(mb)):
+        return None
     a, b = abs(ma), abs(mb)
     maior, menor = (a, b) if a >= b else (b, a)
     if menor == 0:
-        return styles
+        return None
     if (maior - menor) / menor >= _AMP_HIGHLIGHT_PCT:
-        styles[col_a_name if a >= b else col_b_name] = "background-color: #ffe066"
-    return styles
+        return col_a_name if a >= b else col_b_name
+    return None
 
 
 with col_amp:
@@ -750,6 +750,7 @@ with col_amp:
         t_b_r = df_b_r[time_column(df_b_r)].to_numpy()
 
         _amp_rows = []
+        _highlight_targets = []  # 1 entrada por linha: None ou nome da coluna a pintar
         for grp, (label, unit), is_kinem in SIGNAL_ROWS:
             for direction in DIRECTIONS:
                 axis = next((ax for ax in AXES if axis_direction(is_kinem, ax, imu_axis_r) == direction), None)
@@ -766,10 +767,10 @@ with col_amp:
                     mb, sb = amp_b[phase_name]
                     _amp_rows.append({
                         "Direção": direction, "Fase": phase_name, "Variável": f"{label} ({unit})",
-                        "_ma": ma, "_mb": mb,
                         col_a_name: "—" if np.isnan(ma) else f"{ma:.3f} ± {sa:.3f}",
                         col_b_name: "—" if np.isnan(mb) else f"{mb:.3f} ± {sb:.3f}",
                     })
+                    _highlight_targets.append(_cell_highlight(ma, mb, col_a_name, col_b_name))
 
         st.markdown(f"**{region}**")
         if not _amp_rows:
@@ -778,16 +779,15 @@ with col_amp:
 
         _amp_df = pd.DataFrame(_amp_rows)
         try:
-            _styled = (
-                _amp_df.style
-                .apply(lambda row: _highlight_bigger_20pct(row, col_a_name, col_b_name), axis=1)
-                .hide(subset=["_ma", "_mb"], axis="columns")
-                .hide(axis="index")
-            )
+            _style_df = pd.DataFrame("", index=_amp_df.index, columns=_amp_df.columns)
+            for _i, _target_col in enumerate(_highlight_targets):
+                if _target_col is not None:
+                    _style_df.at[_i, _target_col] = "background-color: #ffe066"
+            _styled = _amp_df.style.apply(lambda _: _style_df, axis=None).hide(axis="index")
             st.dataframe(_styled, use_container_width=True, height=380)
         except Exception:
             # fallback sem cor, caso o ambiente não tenha jinja2 (necessário pro Styler)
-            st.dataframe(_amp_df.drop(columns=["_ma", "_mb"]), use_container_width=True, hide_index=True, height=380)
+            st.dataframe(_amp_df, use_container_width=True, hide_index=True, height=380)
 
 # ---- Bloco de interpretação: consistência entre repetições (CV) -------------
 # CV = DP/média do deslocamento líquido. Quando a média está perto de zero (comum no

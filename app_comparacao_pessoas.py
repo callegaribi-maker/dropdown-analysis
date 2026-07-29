@@ -711,7 +711,7 @@ col_chart, col_amp = st.columns([3, 2])
 with col_chart:
     st.plotly_chart(fig, use_container_width=False, key="compare_main")
 
-_AMP_HIGHLIGHT_PCT = 0.20  # só pinta se a maior for pelo menos 20% maior que a menor
+_AMP_HIGHLIGHT_PCT = 0.30  # só pinta se a maior for pelo menos 30% maior que a menor
 
 
 def _cell_highlight(ma, mb, col_a_name, col_b_name):

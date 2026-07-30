@@ -1087,6 +1087,25 @@ def _tilt_peak_summary(plane):
     return out
 
 
+# CSS pra dar um "quadro azul" (mesmo visual do st.info) aos containers com key
+# começando em "quadro_" — reaproveitado por todos os blocos desta seção.
+st.markdown(
+    """
+    <style>
+    div[class*="st-key-quadro_"] {
+        background-color: rgba(28, 131, 225, 0.1);
+        border: 1px solid rgba(28, 131, 225, 0.25);
+        border-radius: 0.5rem;
+        padding: 1rem 1.2rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+_valgo_summary = None
+_sagital_has_data = False
+
 col_frontal, col_sagital = st.columns(2)
 with col_frontal:
     fig_frontal = build_tilt_combo_figure(
@@ -1098,28 +1117,32 @@ with col_frontal:
         if ("A", "Joelho") in _peaks_f and ("B", "Joelho") in _peaks_f:
             pa, pb = _peaks_f[("A", "Joelho")], _peaks_f[("B", "Joelho")]
             quem_mais_valgo = ctx_a["label"] if abs(pa["peak"]) > abs(pb["peak"]) else ctx_b["label"]
+            _quem_menos_valgo = ctx_b["label"] if quem_mais_valgo == ctx_a["label"] else ctx_a["label"]
             FINDINGS.append({
                 "Categoria": "Valgo dinâmico", "Região": "Joelho", "Detalhe": "Inclinação frontal (ML)",
                 "Quem é maior": quem_mais_valgo,
                 "Interpretação fisiológica": _interp_valgo(quem_mais_valgo),
             })
-            st.markdown("**🦵 Valgo dinâmico** (pico de inclinação medial do Joelho)")
-            _mcol_a, _mcol_b = st.columns(2)
-            _mcol_a.metric(
-                ctx_a["label"], f"{pa['peak']:.1f}° ± {pa['std']:.1f}",
-                delta="maior" if quem_mais_valgo == ctx_a["label"] else None,
-                delta_color="inverse",
-            )
-            _mcol_b.metric(
-                ctx_b["label"], f"{pb['peak']:.1f}° ± {pb['std']:.1f}",
-                delta="maior" if quem_mais_valgo == ctx_b["label"] else None,
-                delta_color="inverse",
-            )
-            st.caption(
-                f"Pico em ~{pa['frac']*100:.0f}% ({ctx_a['label']}) e ~{pb['frac']*100:.0f}% "
-                f"({ctx_b['label']}) do ciclo. **{quem_mais_valgo}** tem o pico maior — indicador de "
-                "mais valgo dinâmico do joelho. Proxy por 1 sensor — não substitui avaliação clínica."
-            )
+            _valgo_summary = {"maior": quem_mais_valgo, "menor": _quem_menos_valgo}
+            with st.container(key="quadro_valgo"):
+                st.markdown("**🦵 Valgo dinâmico** (pico de inclinação medial do Joelho)")
+                _valgo_rows = [
+                    {
+                        "Pessoa": ctx_a["label"], "Pico medial": f"{pa['peak']:.1f}° ± {pa['std']:.1f}",
+                        "% do ciclo": f"~{pa['frac']*100:.0f}%",
+                        "Maior valgo": "⚠️ sim" if quem_mais_valgo == ctx_a["label"] else "",
+                    },
+                    {
+                        "Pessoa": ctx_b["label"], "Pico medial": f"{pb['peak']:.1f}° ± {pb['std']:.1f}",
+                        "% do ciclo": f"~{pb['frac']*100:.0f}%",
+                        "Maior valgo": "⚠️ sim" if quem_mais_valgo == ctx_b["label"] else "",
+                    },
+                ]
+                st.dataframe(pd.DataFrame(_valgo_rows), use_container_width=True, hide_index=True)
+                st.caption(
+                    f"**{quem_mais_valgo}** tem o pico de inclinação medial maior — indicador de mais "
+                    "valgo dinâmico do joelho. Proxy por 1 sensor — não substitui avaliação clínica."
+                )
     else:
         st.caption("Não foi possível calcular a inclinação frontal — faltam colunas de ACC/GYR necessárias.")
 
@@ -1143,15 +1166,36 @@ with col_sagital:
                 "L5": f"{res_l5['mean'][idx_max]:.1f}°", "Joelho": f"{res_jo['mean'][idx_max]:.1f}°",
             })
         if _div_rows:
-            st.markdown("**↕️ Divergência L5 × Joelho** (plano sagital)")
-            st.dataframe(pd.DataFrame(_div_rows), use_container_width=True, hide_index=True)
-            st.caption(
-                "O quanto o joelho se inclina diferente do tronco/pelve — esperado ser grande, já "
-                "que o joelho flexiona bem mais que o tronco numa descida. Divergência parecida "
-                "entre pessoas é normal; a comparação mais informativa costuma ser no plano frontal."
-            )
+            _sagital_has_data = True
+            with st.container(key="quadro_sagital"):
+                st.markdown("**↕️ Divergência L5 × Joelho** (plano sagital)")
+                st.dataframe(pd.DataFrame(_div_rows), use_container_width=True, hide_index=True)
+                st.caption(
+                    "O quanto o joelho se inclina diferente do tronco/pelve — esperado ser grande, já "
+                    "que o joelho flexiona bem mais que o tronco numa descida. Divergência parecida "
+                    "entre pessoas é normal; a comparação mais informativa costuma ser no plano frontal."
+                )
     else:
         st.caption("Não foi possível calcular a inclinação sagital — faltam colunas de ACC/GYR necessárias.")
+
+if _valgo_summary or _sagital_has_data:
+    with st.container(key="quadro_inclinacao_resumo"):
+        st.markdown("**📌 Resumo — inclinação frontal e sagital**")
+        _resumo_bits = []
+        if _valgo_summary:
+            _resumo_bits.append(
+                f"no plano frontal, **{_valgo_summary['maior']}** mostrou maior valgo dinâmico do "
+                f"joelho que {_valgo_summary['menor']} — o achado mais relevante desta seção pra "
+                "controle motor"
+            )
+        if _sagital_has_data:
+            _resumo_bits.append(
+                "no plano sagital, a divergência L5×Joelho ficou parecida entre as duas pessoas, "
+                "como esperado (o joelho sempre flexiona bem mais que o tronco numa descida)"
+            )
+        _resumo_txt = "; ".join(_resumo_bits) + "."
+        _resumo_txt = _resumo_txt[0].upper() + _resumo_txt[1:]
+        st.caption(_resumo_txt)
 
 st.divider()
 

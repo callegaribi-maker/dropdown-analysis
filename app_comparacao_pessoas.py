@@ -450,18 +450,24 @@ def phase_amplitude_stats_axis(df, df_t, colname, trial_bounds_fn, n_trials):
     return out
 
 
-def kinem_vs_imu_concordance(df, catalog, imu_axis_label, direction):
+def kinem_vs_imu_concordance(df_raw, catalog, imu_axis_label, direction, fs, shared_cutoff_hz, max_lag_s=0.5):
     """Compara a aceleração da cinemática com a do IMU (celular), na mesma direção
-    anatômica, usando os sinais JÁ FILTRADOS (filter_dataframe aplica detrend em
-    ambos — isso remove o offset de gravidade do acelerômetro bruto, tornando os
-    dois sinais comparáveis em forma/dinâmica, não em valor absoluto).
+    anatômica, usando dados BRUTOS (já com as correções conhecidas de sinal/unidade
+    aplicadas) — não os já filtrados com cortes diferentes por grupo, pra não
+    penalizar a concordância por causa de ruído de alta frequência que sobra só num
+    dos dois sinais. Aqui os dois passam por: (1) detrend, (2) o MESMO corte de
+    filtro passa-baixa (shared_cutoff_hz) pros dois.
 
-    OBS: como os dois sinais já chegam sem tendência/média (detrend), o "viés"
-    (diferença média) sempre daria ~0 por construção — não é um resultado real,
-    então não é calculado aqui. Só r (Pearson) e RMSE seguem válidos nesse cenário,
-    pois medem forma/dinâmica do sinal, não deslocamento de nível.
+    Depois disso, procura o melhor alinhamento temporal (cross-correlação, até
+    ±max_lag_s segundos) — pequenas defasagens de sincronismo entre os dois
+    sistemas derrubam a correlação sem isso ser um problema real do sinal. Também
+    detecta se a correlação é bem melhor com um dos sinais invertido (comum quando
+    a convenção de eixo/sinal difere entre os dois sistemas) e reporta isso
+    explicitamente (não esconde a inversão).
 
     Unidade: cinemática vem em cm/s², IMU em m/s² — convertida aqui pra m/s².
+    "Viés" não é calculado: como os dois sinais são detrend, a diferença média
+    sempre daria ~0 por construção, não é um resultado real.
     Retorna None se faltar alguma das duas colunas ou dados insuficientes."""
     kin_axis = next((ax for ax in AXES if KINEM_AXIS_LABEL[ax] == direction), None)
     imu_axis = next((ax for ax in AXES if imu_axis_label[ax] == direction), None)
@@ -471,16 +477,55 @@ def kinem_vs_imu_concordance(df, catalog, imu_axis_label, direction):
     imu_col = catalog.get("IMU - Acelerômetro", {}).get(imu_axis)
     if kin_col is None or imu_col is None:
         return None
-    kin = df[kin_col].to_numpy(dtype=float) / 100.0  # cm/s² -> m/s²
-    imu = df[imu_col].to_numpy(dtype=float)
+    kin = df_raw[kin_col].to_numpy(dtype=float) / 100.0  # cm/s² -> m/s²
+    imu = df_raw[imu_col].to_numpy(dtype=float)
     mask = ~(np.isnan(kin) | np.isnan(imu))
     kin, imu = kin[mask], imu[mask]
-    if len(kin) < 10 or np.std(kin) == 0 or np.std(imu) == 0:
+    if len(kin) < 20:
         return None
-    r = float(np.corrcoef(kin, imu)[0, 1])
-    diff = imu - kin
-    rmse = float(np.sqrt(np.mean(diff ** 2)))
-    return {"r": r, "rmse": rmse, "n": len(kin)}
+    kin = detrend(kin)
+    imu = detrend(imu)
+    kin = _light_lowpass(kin, shared_cutoff_hz, fs)
+    imu = _light_lowpass(imu, shared_cutoff_hz, fs)
+    if np.std(kin) == 0 or np.std(imu) == 0:
+        return None
+
+    max_lag_samples = max(1, int(round(max_lag_s * fs)))
+    best_r, best_lag = 0.0, 0
+    for lag in range(-max_lag_samples, max_lag_samples + 1):
+        if lag < 0:
+            a, b = kin[-lag:], imu[: len(imu) + lag]
+        elif lag > 0:
+            a, b = kin[: len(kin) - lag], imu[lag:]
+        else:
+            a, b = kin, imu
+        n = min(len(a), len(b))
+        if n < 20:
+            continue
+        a, b = a[:n], b[:n]
+        if np.std(a) == 0 or np.std(b) == 0:
+            continue
+        r = float(np.corrcoef(a, b)[0, 1])
+        if abs(r) > abs(best_r):
+            best_r, best_lag = r, lag
+
+    if best_lag < 0:
+        a, b = kin[-best_lag:], imu[: len(imu) + best_lag]
+    elif best_lag > 0:
+        a, b = kin[: len(kin) - best_lag], imu[best_lag:]
+    else:
+        a, b = kin, imu
+    n = min(len(a), len(b))
+    a, b = a[:n], b[:n]
+
+    sign_flip = best_r < 0
+    if sign_flip:
+        b = -b
+    rmse = float(np.sqrt(np.mean((a - b) ** 2)))
+    return {
+        "r": abs(best_r), "rmse": rmse, "n": n,
+        "lag_s": best_lag / fs, "sign_flip": sign_flip,
+    }
 
 
 # Divisão de fases em tons diferentes de uma mesma cor (navy), do mais claro (platô)
@@ -1625,27 +1670,38 @@ st.caption(
     "mesma direção anatômica, pra ver o quanto os dois sistemas concordam. Cada linha é "
     "calculada só dentro da própria pessoa/região/direção, comparando os dois sinais "
     "amostra a amostra ao longo de toda a gravação (não é uma comparação entre as duas "
-    "pessoas — 'n' é o número de pontos no tempo usados, não o número de sujeitos). Os "
-    "dois sinais já passam por filtro + remoção de tendência (o que também retira o "
-    "efeito da gravidade do acelerômetro bruto e, por isso, o viés/deslocamento de nível "
-    "não é mostrado — daria sempre ~0 por construção). **r** = correlação de Pearson "
-    "(1 = concordância perfeita); RMSE = erro médio quadrático em m/s²."
+    "pessoas — 'n' é o número de pontos no tempo usados, não o número de sujeitos). Pra "
+    "ser uma comparação justa: os dois sinais usam o MESMO corte de filtro (em vez dos "
+    "cortes diferentes da barra lateral), a melhor defasagem temporal entre os dois "
+    "sistemas é buscada automaticamente (± 0.5 s — corrige pequenos erros de sincronismo "
+    "sem alterar o sinal em si) e uma possível inversão de eixo/sinal entre os sistemas é "
+    "detectada e reportada (coluna 'Eixo invertido'). **r** = correlação de Pearson (1 = "
+    "concordância perfeita); RMSE = erro médio quadrático em m/s². 'Viés' não é mostrado: "
+    "como os dois sinais são detrend, a diferença média sempre daria ~0 por construção."
 )
 
+_shared_cutoff = min(kinem_cutoff, imu_cutoff)
 _conc_rows = []
 for _ctx in PERSON_CTXS:
     for _region in REGIONS:
-        _df_r = _ctx["sheets"][_region]
-        _catalog_r = build_catalog(_df_r)
+        _df_raw_r = _ctx["sheets_raw"][_region]
+        _catalog_r = build_catalog(_df_raw_r)
         _imu_axis_r = get_imu_axis_label(_region)
+        _t_r = _df_raw_r[time_column(_df_raw_r)].to_numpy(dtype=float)
+        _dt_r = float(np.median(np.diff(_t_r))) if len(_t_r) > 1 else 0.01
+        _fs_r = 1.0 / _dt_r if _dt_r > 0 else 100.0
         for _direction in DIRECTIONS:
-            _res = kinem_vs_imu_concordance(_df_r, _catalog_r, _imu_axis_r, _direction)
+            _res = kinem_vs_imu_concordance(
+                _df_raw_r, _catalog_r, _imu_axis_r, _direction, _fs_r, _shared_cutoff
+            )
             if _res is None:
                 continue
             _conc_rows.append({
                 "Pessoa": _ctx["label"], "Região": _region, "Direção": _direction,
                 "r (Pearson)": f"{_res['r']:.2f}",
                 "RMSE (m/s²)": f"{_res['rmse']:.2f}",
+                "Lag (s)": f"{_res['lag_s']:+.2f}",
+                "Eixo invertido": "Sim" if _res["sign_flip"] else "Não",
                 "n (amostras)": f"{_res['n']}",
             })
 

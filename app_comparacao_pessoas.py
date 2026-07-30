@@ -1544,27 +1544,42 @@ _LEITURA_CLINICA_TXT = (
 )
 st.markdown(_LEITURA_CLINICA_TXT)
 
-st.markdown("**Resumo dos principais achados**")
 st.markdown(
-    f"- **Tempo de execução**: {_B} apresentou fases de descida e subida mais longas (>20%), "
-    "sugerindo uma estratégia mais cautelosa.\n"
-    f"- **Preparação**: {_A} demonstrou maior ativação inicial, com maiores velocidades, "
-    "acelerações e amplitudes de movimento.\n"
-    f"- **Fase de descida**: {_B} apresentou maior oscilação médio-lateral do tronco; {_A} "
-    "executou um movimento mais direcionado ao plano sagital.\n"
-    f"- **Fase de subida**: {_A} realizou uma extensão mais rápida e vigorosa; {_B} manteve "
-    "maior necessidade de ajustes posturais.\n"
-    f"- **Joelho**: {_A} apresentou maior mobilidade global; {_B} mostrou maior tendência ao "
-    "valgo dinâmico.\n"
-    "- **Profundidade do movimento**: Sem diferenças relevantes entre os participantes.\n"
-    f"- **Consistência entre repetições**: {_B} apresentou maior coeficiente de variação (CV), "
-    "indicando menor repetibilidade do padrão motor.\n"
-    "- **Principal diferença relacionada ao controle motor**: Maior variabilidade entre as "
-    f"repetições e maior **controle frontal deficiente do joelho** na {_B}.\n"
-    f"- **Síntese geral**: {_A} apresentou um padrão de movimento mais dinâmico, consistente e "
-    f"estável, enquanto a {_B} adotou uma estratégia mais lenta e cautelosa, com maior demanda "
-    "de estabilização postural e maior variabilidade motora."
+    """
+    <style>
+    div[class*="st-key-quadro_resumo_achados"] li, div[class*="st-key-quadro_resumo_achados"] p {
+        font-size: 1.15rem !important;
+        line-height: 1.7 !important;
+    }
+    div[class*="st-key-quadro_resumo_achados"] h5 {
+        font-size: 1.35rem !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
+with st.container(key="quadro_resumo_achados"):
+    st.markdown("##### 🧾 Resumo dos principais achados")
+    st.markdown(
+        f"- **Tempo de execução**: {_B} apresentou fases de descida e subida mais longas (>20%), "
+        "sugerindo uma estratégia mais cautelosa.\n"
+        f"- **Preparação**: {_A} demonstrou maior ativação inicial, com maiores velocidades, "
+        "acelerações e amplitudes de movimento.\n"
+        f"- **Fase de descida**: {_B} apresentou maior oscilação médio-lateral do tronco; {_A} "
+        "executou um movimento mais direcionado ao plano sagital.\n"
+        f"- **Fase de subida**: {_A} realizou uma extensão mais rápida e vigorosa; {_B} manteve "
+        "maior necessidade de ajustes posturais.\n"
+        f"- **Joelho**: {_A} apresentou maior mobilidade global; {_B} mostrou maior tendência ao "
+        "valgo dinâmico.\n"
+        "- **Profundidade do movimento**: Sem diferenças relevantes entre os participantes.\n"
+        f"- **Consistência entre repetições**: {_B} apresentou maior coeficiente de variação (CV), "
+        "indicando menor repetibilidade do padrão motor.\n"
+        "- **Principal diferença relacionada ao controle motor**: Maior variabilidade entre as "
+        f"repetições e maior **controle frontal deficiente do joelho** na {_B}.\n"
+        f"- **Síntese geral**: {_A} apresentou um padrão de movimento mais dinâmico, consistente e "
+        f"estável, enquanto a {_B} adotou uma estratégia mais lenta e cautelosa, com maior demanda "
+        "de estabilização postural e maior variabilidade motora."
+    )
 
 st.divider()
 st.caption(

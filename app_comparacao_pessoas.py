@@ -456,6 +456,11 @@ def kinem_vs_imu_concordance(df, catalog, imu_axis_label, direction):
     ambos — isso remove o offset de gravidade do acelerômetro bruto, tornando os
     dois sinais comparáveis em forma/dinâmica, não em valor absoluto).
 
+    OBS: como os dois sinais já chegam sem tendência/média (detrend), o "viés"
+    (diferença média) sempre daria ~0 por construção — não é um resultado real,
+    então não é calculado aqui. Só r (Pearson) e RMSE seguem válidos nesse cenário,
+    pois medem forma/dinâmica do sinal, não deslocamento de nível.
+
     Unidade: cinemática vem em cm/s², IMU em m/s² — convertida aqui pra m/s².
     Retorna None se faltar alguma das duas colunas ou dados insuficientes."""
     kin_axis = next((ax for ax in AXES if KINEM_AXIS_LABEL[ax] == direction), None)
@@ -475,13 +480,7 @@ def kinem_vs_imu_concordance(df, catalog, imu_axis_label, direction):
     r = float(np.corrcoef(kin, imu)[0, 1])
     diff = imu - kin
     rmse = float(np.sqrt(np.mean(diff ** 2)))
-    bias = float(np.mean(diff))
-    sd_diff = float(np.std(diff))
-    return {
-        "r": r, "rmse": rmse, "bias": bias,
-        "loa_lower": bias - 1.96 * sd_diff, "loa_upper": bias + 1.96 * sd_diff,
-        "n": len(kin),
-    }
+    return {"r": r, "rmse": rmse, "n": len(kin)}
 
 
 # Divisão de fases em tons diferentes de uma mesma cor (navy), do mais claro (platô)
@@ -1623,11 +1622,14 @@ st.divider()
 st.subheader("🔬 Validação — Cinemática × Celular (IMU)")
 st.caption(
     "Compara a aceleração medida pela cinemática com a do acelerômetro do celular, na "
-    "mesma direção anatômica, pra ver o quanto os dois sistemas concordam. Os dois "
-    "sinais já passam por filtro + remoção de tendência (o que também retira o efeito "
-    "da gravidade do acelerômetro bruto), então a comparação é sobre a forma/dinâmica "
-    "do sinal, não o valor absoluto. **r** = correlação de Pearson (1 = concordância "
-    "perfeita); RMSE e viés em m/s²; limites de concordância = Bland-Altman (±1.96 DP)."
+    "mesma direção anatômica, pra ver o quanto os dois sistemas concordam. Cada linha é "
+    "calculada só dentro da própria pessoa/região/direção, comparando os dois sinais "
+    "amostra a amostra ao longo de toda a gravação (não é uma comparação entre as duas "
+    "pessoas — 'n' é o número de pontos no tempo usados, não o número de sujeitos). Os "
+    "dois sinais já passam por filtro + remoção de tendência (o que também retira o "
+    "efeito da gravidade do acelerômetro bruto e, por isso, o viés/deslocamento de nível "
+    "não é mostrado — daria sempre ~0 por construção). **r** = correlação de Pearson "
+    "(1 = concordância perfeita); RMSE = erro médio quadrático em m/s²."
 )
 
 _conc_rows = []
@@ -1644,8 +1646,7 @@ for _ctx in PERSON_CTXS:
                 "Pessoa": _ctx["label"], "Região": _region, "Direção": _direction,
                 "r (Pearson)": f"{_res['r']:.2f}",
                 "RMSE (m/s²)": f"{_res['rmse']:.2f}",
-                "Viés (m/s²)": f"{_res['bias']:+.2f}",
-                "Limites de concordância": f"{_res['loa_lower']:+.2f} a {_res['loa_upper']:+.2f}",
+                "n (amostras)": f"{_res['n']}",
             })
 
 if _conc_rows:

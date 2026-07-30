@@ -625,7 +625,7 @@ def _pct_of_cycle(phase_stat, total_stat):
     return 100 * phase_stat[0] / total if total else float("nan")
 
 
-_depth_lines = []
+_depth_rows = []
 for region in REGIONS:
     dep_a = net_displacement_stats(
         ctx_a["sheets"][region], ctx_a["sheets"][region][time_column(ctx_a["sheets"][region])].to_numpy(),
@@ -642,19 +642,19 @@ for region in REGIONS:
     _diff = abs(dep_a["mean"] - dep_b["mean"])
     _combined_std = dep_a["std"] + dep_b["std"]
     if _diff <= _combined_std:
-        conclusao = "valores equivalentes (a diferença é menor que a variação normal entre ciclos)"
+        conclusao = "≈ equivalentes"
     else:
         quem_desce_mais = ctx_a["label"] if abs(dep_a["mean"]) > abs(dep_b["mean"]) else ctx_b["label"]
-        conclusao = f"{quem_desce_mais} desce mais nessa região"
+        conclusao = f"{quem_desce_mais} desce mais"
         FINDINGS.append({
             "Categoria": "Profundidade", "Região": region, "Detalhe": "Vertical (descida)",
             "Quem é maior": quem_desce_mais,
             "Interpretação fisiológica": _interp_depth(region, quem_desce_mais),
         })
-    _depth_lines.append(
-        f"- **{region}**: {ctx_a['label']} = {dep_a['mean']:.3f} (±{dep_a['std']:.3f}), "
-        f"{ctx_b['label']} = {dep_b['mean']:.3f} (±{dep_b['std']:.3f}) — {conclusao}."
-    )
+    _depth_rows.append({
+        "region": region, "a_mean": dep_a["mean"], "a_std": dep_a["std"],
+        "b_mean": dep_b["mean"], "b_std": dep_b["std"], "conclusao": conclusao,
+    })
 
 _DURATION_FINDING_PCT = 20  # só entra no resumo se a diferença for >= 20%
 
@@ -688,29 +688,39 @@ _pct_desc_b = _pct_of_cycle(_dur_b['descida'], _dur_b['ciclo total'])
 _pct_sub_a = _pct_of_cycle(_dur_a['subida'], _dur_a['ciclo total'])
 _pct_sub_b = _pct_of_cycle(_dur_b['subida'], _dur_b['ciclo total'])
 
-st.info(
-    f"**Duração das fases (média ± DP entre os ciclos; % = proporção do ciclo total "
-    f"daquela pessoa; e diferença % entre as pessoas):**\n\n"
-    f"- Platô: {ctx_a['label']} {_fmt_dur(_dur_a['platô'])} [{_pct_plato_a:.0f}% do ciclo] · "
-    f"{ctx_b['label']} {_fmt_dur(_dur_b['platô'])} [{_pct_plato_b:.0f}% do ciclo] "
-    f"— {_fmt_pct_diff(_dur_a['platô'], _dur_b['platô'], ctx_a['label'], ctx_b['label'])}\n"
-    f"- Descida: {ctx_a['label']} {_fmt_dur(_dur_a['descida'])} [{_pct_desc_a:.0f}% do ciclo] · "
-    f"{ctx_b['label']} {_fmt_dur(_dur_b['descida'])} [{_pct_desc_b:.0f}% do ciclo] "
-    f"— {_fmt_pct_diff(_dur_a['descida'], _dur_b['descida'], ctx_a['label'], ctx_b['label'])}\n"
-    f"- Subida: {ctx_a['label']} {_fmt_dur(_dur_a['subida'])} [{_pct_sub_a:.0f}% do ciclo] · "
-    f"{ctx_b['label']} {_fmt_dur(_dur_b['subida'])} [{_pct_sub_b:.0f}% do ciclo] "
-    f"— {_fmt_pct_diff(_dur_a['subida'], _dur_b['subida'], ctx_a['label'], ctx_b['label'])}\n"
-    f"- Ciclo total: {ctx_a['label']} {_fmt_dur(_dur_a['ciclo total'])} "
-    f"(platô {_pct_plato_a:.0f}% / descida {_pct_desc_a:.0f}% / subida {_pct_sub_a:.0f}%) · "
-    f"{ctx_b['label']} {_fmt_dur(_dur_b['ciclo total'])} "
-    f"(platô {_pct_plato_b:.0f}% / descida {_pct_desc_b:.0f}% / subida {_pct_sub_b:.0f}%) "
-    f"— {_fmt_pct_diff(_dur_a['ciclo total'], _dur_b['ciclo total'], ctx_a['label'], ctx_b['label'])}\n\n"
-    f"**Quanto desce (deslocamento líquido Vertical na descida, unidade da coluna de "
-    f"Kinemática — confira se é cm ou m no seu sistema de captura):**\n\n"
-    + "\n".join(_depth_lines) +
-    "\n\n_Interpretação automática, calculada a partir dos ciclos detectados — não substitui "
-    "avaliação clínica._"
-)
+st.markdown("##### ⏱️ Duração das fases")
+st.caption("Tempo médio de cada fase, e quanto (%) ela ocupa do ciclo total de cada pessoa.")
+
+_dur_table_rows = [
+    ("🧍 Platô", _dur_a["platô"], _pct_plato_a, _dur_b["platô"], _pct_plato_b),
+    ("⬇️ Descida", _dur_a["descida"], _pct_desc_a, _dur_b["descida"], _pct_desc_b),
+    ("⬆️ Subida", _dur_a["subida"], _pct_sub_a, _dur_b["subida"], _pct_sub_b),
+    ("🔁 Ciclo total", _dur_a["ciclo total"], 100.0, _dur_b["ciclo total"], 100.0),
+]
+_dur_df = pd.DataFrame([
+    {
+        "Fase": nome,
+        f"{ctx_a['label']}": f"{stat_a[0]:.2f}s (±{stat_a[1]:.2f})",
+        f"% do ciclo — {ctx_a['label']}": f"{pct_a:.0f}%",
+        f"{ctx_b['label']}": f"{stat_b[0]:.2f}s (±{stat_b[1]:.2f})",
+        f"% do ciclo — {ctx_b['label']}": f"{pct_b:.0f}%",
+        "Diferença": _fmt_pct_diff(stat_a, stat_b, ctx_a["label"], ctx_b["label"]),
+    }
+    for nome, stat_a, pct_a, stat_b, pct_b in _dur_table_rows
+])
+st.dataframe(_dur_df, use_container_width=True, hide_index=True)
+
+st.markdown("##### 📏 Quanto desce (deslocamento vertical líquido na descida)")
+st.caption("Confira se a unidade da coluna de Kinemática no seu sistema de captura é cm ou m.")
+_depth_df = pd.DataFrame([
+    {"Região": region, f"{ctx_a['label']}": f"{d['a_mean']:.3f} (±{d['a_std']:.3f})",
+     f"{ctx_b['label']}": f"{d['b_mean']:.3f} (±{d['b_std']:.3f})", "Conclusão": d["conclusao"]}
+    for d in _depth_rows
+]) if _depth_rows else None
+if _depth_df is not None:
+    st.dataframe(_depth_df, use_container_width=True, hide_index=True)
+
+st.caption("_Interpretação automática, calculada a partir dos ciclos detectados — não substitui avaliação clínica._")
 
 st.divider()
 
@@ -895,7 +905,7 @@ with col_amp:
 # do CV%, com uma nota, em vez de simplesmente omitir a linha.
 _RELIABLE_CV_FACTOR = 1.0  # exige |média| >= 1x o DP pra considerar o CV% confiável
 
-_cv_lines = []
+_cv_rows = []
 for region in REGIONS:
     for direction in ("Vertical", "AP", "ML"):
         stat_a = net_displacement_stats(
@@ -912,35 +922,35 @@ for region in REGIONS:
         cv_b_ok = abs(stat_b["mean"]) >= _RELIABLE_CV_FACTOR * stat_b["std"]
         if cv_a_ok and cv_b_ok:
             quem_mais_variavel = ctx_a["label"] if stat_a["cv"] > stat_b["cv"] else ctx_b["label"]
-            _cv_lines.append(
-                f"- **{region} — {direction}**: {ctx_a['label']} CV={stat_a['cv']:.1f}% · "
-                f"{ctx_b['label']} CV={stat_b['cv']:.1f}% — {quem_mais_variavel} repete de forma menos consistente."
-            )
             _cv_maior, _cv_menor = max(stat_a["cv"], stat_b["cv"]), min(stat_a["cv"], stat_b["cv"])
-            if _cv_menor > 0 and (_cv_maior - _cv_menor) / _cv_menor >= 0.30:
+            _destaque = _cv_menor > 0 and (_cv_maior - _cv_menor) / _cv_menor >= 0.30
+            if _destaque:
                 FINDINGS.append({
                     "Categoria": "Consistência (CV)", "Região": region, "Detalhe": direction,
                     "Quem é maior": quem_mais_variavel,
                     "Interpretação fisiológica": _interp_cv(region, direction, quem_mais_variavel),
                 })
+            _cv_rows.append({
+                "Região": region, "Direção": direction,
+                f"{ctx_a['label']}": f"{stat_a['cv']:.1f}%", f"{ctx_b['label']}": f"{stat_b['cv']:.1f}%",
+                "Menos consistente": f"⚠️ {quem_mais_variavel}" if _destaque else quem_mais_variavel,
+            })
         else:
-            _cv_lines.append(
-                f"- **{region} — {direction}**: deslocamento líquido perto de zero pra pelo menos uma "
-                f"pessoa ({ctx_a['label']} {stat_a['mean']:.3f}±{stat_a['std']:.3f}, "
-                f"{ctx_b['label']} {stat_b['mean']:.3f}±{stat_b['std']:.3f}) — CV% não é confiável aqui "
-                f"(divide por um número perto de 0); use o DP absoluto acima pra comparar."
-            )
+            _cv_rows.append({
+                "Região": region, "Direção": direction,
+                f"{ctx_a['label']}": f"DP {stat_a['std']:.3f}", f"{ctx_b['label']}": f"DP {stat_b['std']:.3f}",
+                "Menos consistente": "n/d (deslocamento ≈ 0)",
+            })
 
-st.info(
-    "**Consistência entre repetições (CV do deslocamento líquido na descida — "
-    "quanto maior, menos consistente/controlado o movimento):**\n\n"
-    + "\n".join(_cv_lines) +
-    "\n\n_CV alto pode indicar fadiga, falta de controle motor ou variação real entre "
-    "tentativas — vale olhar as curvas acima pra confirmar antes de concluir algo clínico. "
-    "No L5, AP/ML costumam ter deslocamento líquido perto de zero (o tronco não se "
-    "move muito de lado/frente numa descida vertical), então o CV% degenera; por isso "
-    "essas linhas aparecem com o DP absoluto em vez do CV%._"
+st.markdown("##### 🔄 Consistência entre repetições (CV)")
+st.caption(
+    "CV = quanto o deslocamento líquido varia de um ciclo pro outro (quanto maior, menos "
+    "consistente/controlado). Quando o deslocamento é perto de zero o CV% não é confiável — "
+    "nesses casos mostramos o DP absoluto e marcamos como 'n/d'."
 )
+if _cv_rows:
+    st.dataframe(pd.DataFrame(_cv_rows), use_container_width=True, hide_index=True)
+st.caption("⚠️ = diferença de pelo menos 30% entre as pessoas nesse ponto.")
 
 st.divider()
 
@@ -1093,14 +1103,22 @@ with col_frontal:
                 "Quem é maior": quem_mais_valgo,
                 "Interpretação fisiológica": _interp_valgo(quem_mais_valgo),
             })
-            st.info(
-                "**Valgo dinâmico (pico de inclinação medial do Joelho):**\n\n"
-                f"- {ctx_a['label']}: {pa['peak']:.1f}° (±{pa['std']:.1f}) em ~{pa['frac']*100:.0f}% do ciclo\n"
-                f"- {ctx_b['label']}: {pb['peak']:.1f}° (±{pb['std']:.1f}) em ~{pb['frac']*100:.0f}% do ciclo\n\n"
-                f"**{quem_mais_valgo}** tem o pico de inclinação medial maior — indicador de mais "
-                "valgo dinâmico do joelho nesse teste.\n\n"
-                "_Proxy por 1 sensor (não é o ângulo articular real do joelho) — não substitui "
-                "avaliação clínica._"
+            st.markdown("**🦵 Valgo dinâmico** (pico de inclinação medial do Joelho)")
+            _mcol_a, _mcol_b = st.columns(2)
+            _mcol_a.metric(
+                ctx_a["label"], f"{pa['peak']:.1f}° ± {pa['std']:.1f}",
+                delta="maior" if quem_mais_valgo == ctx_a["label"] else None,
+                delta_color="inverse",
+            )
+            _mcol_b.metric(
+                ctx_b["label"], f"{pb['peak']:.1f}° ± {pb['std']:.1f}",
+                delta="maior" if quem_mais_valgo == ctx_b["label"] else None,
+                delta_color="inverse",
+            )
+            st.caption(
+                f"Pico em ~{pa['frac']*100:.0f}% ({ctx_a['label']}) e ~{pb['frac']*100:.0f}% "
+                f"({ctx_b['label']}) do ciclo. **{quem_mais_valgo}** tem o pico maior — indicador de "
+                "mais valgo dinâmico do joelho. Proxy por 1 sensor — não substitui avaliação clínica."
             )
     else:
         st.caption("Não foi possível calcular a inclinação frontal — faltam colunas de ACC/GYR necessárias.")
@@ -1111,7 +1129,7 @@ with col_sagital:
     )
     if fig_sagital is not None:
         st.plotly_chart(fig_sagital, use_container_width=False, key="tilt_sagital")
-        _div_lines = []
+        _div_rows = []
         for ctx in PERSON_CTXS:
             res_l5 = compute_tilt_curve(ctx["sheets_raw"], ctx["sheets"], "L5", ctx["trial_bounds_fn"], ctx["n_trials"], "sagital")
             res_jo = compute_tilt_curve(ctx["sheets_raw"], ctx["sheets"], "Joelho", ctx["trial_bounds_fn"], ctx["n_trials"], "sagital")
@@ -1119,18 +1137,18 @@ with col_sagital:
                 continue
             diff = res_jo["mean"] - res_l5["mean"]
             idx_max = int(np.argmax(np.abs(diff)))
-            _div_lines.append(
-                f"- **{ctx['label']}**: divergência máxima de {diff[idx_max]:.1f}° em ~{idx_max}% do ciclo "
-                f"(L5={res_l5['mean'][idx_max]:.1f}°, Joelho={res_jo['mean'][idx_max]:.1f}°)"
-            )
-        if _div_lines:
-            st.info(
-                "**Divergência L5 × Joelho no plano sagital** (o quanto o joelho se inclina de "
-                "forma diferente do tronco/pelve — esperado ser grande, já que o joelho flexiona "
-                "bem mais que o tronco numa descida):\n\n"
-                + "\n".join(_div_lines) +
-                "\n\n_Divergência parecida entre pessoas é normal aqui; a comparação mais "
-                "informativa costuma ser no plano frontal (compensação lateral), não no sagital._"
+            _div_rows.append({
+                "Pessoa": ctx["label"], "Divergência máxima": f"{diff[idx_max]:.1f}°",
+                "% do ciclo": f"~{idx_max}%",
+                "L5": f"{res_l5['mean'][idx_max]:.1f}°", "Joelho": f"{res_jo['mean'][idx_max]:.1f}°",
+            })
+        if _div_rows:
+            st.markdown("**↕️ Divergência L5 × Joelho** (plano sagital)")
+            st.dataframe(pd.DataFrame(_div_rows), use_container_width=True, hide_index=True)
+            st.caption(
+                "O quanto o joelho se inclina diferente do tronco/pelve — esperado ser grande, já "
+                "que o joelho flexiona bem mais que o tronco numa descida. Divergência parecida "
+                "entre pessoas é normal; a comparação mais informativa costuma ser no plano frontal."
             )
     else:
         st.caption("Não foi possível calcular a inclinação sagital — faltam colunas de ACC/GYR necessárias.")

@@ -1480,73 +1480,108 @@ _cv_count_b = sum(1 for f in _cv_f if f["Quem é maior"] == ctx_b["label"])
 _valgo_count_a = sum(1 for f in _valgo_f if f["Quem é maior"] == ctx_a["label"])
 _valgo_count_b = sum(1 for f in _valgo_f if f["Quem é maior"] == ctx_b["label"])
 
-_paragrafos = [
-    f"Juntando duração de fase, profundidade, amplitude por direção, consistência entre "
-    f"repetições (CV) e inclinação frontal/sagital medidas acima, dá pra montar uma leitura "
-    f"comparativa de controle motor entre {ctx_a['label']} e {ctx_b['label']} — como hipótese "
-    "de trabalho, não como diagnóstico fechado."
-]
+_A, _B = ctx_a["label"], ctx_b["label"]
 
-if _cv_f:
-    if _cv_count_a == _cv_count_b:
-        _paragrafos.append(
-            f"**Consistência entre repetições** (o proxy mais direto de controle motor aqui, "
-            f"por medir o quanto o padrão se repete ciclo a ciclo): {ctx_a['label']} e "
-            f"{ctx_b['label']} tiveram número parecido de combinações região/direção com CV "
-            f"mais alto ({_cv_count_a} vs {_cv_count_b}), sem um padrão claro de quem repete o "
-            "movimento de forma mais controlada."
-        )
-    else:
-        _menos_consistente = ctx_a["label"] if _cv_count_a > _cv_count_b else ctx_b["label"]
-        _mais_consistente = ctx_b["label"] if _menos_consistente == ctx_a["label"] else ctx_a["label"]
-        _paragrafos.append(
-            f"**Consistência entre repetições** (o proxy mais direto de controle motor aqui, "
-            f"por medir o quanto o padrão se repete ciclo a ciclo): {_menos_consistente} teve CV "
-            f"mais alto em mais combinações região/direção ({max(_cv_count_a, _cv_count_b)} vs "
-            f"{min(_cv_count_a, _cv_count_b)}), sugerindo repetições um pouco menos uniformes que "
-            f"{_mais_consistente} nesse teste — pode refletir controle motor, fadiga acumulada "
-            "ao longo das tentativas, ou menor familiaridade com o movimento."
-        )
-else:
-    _paragrafos.append(
-        "**Consistência entre repetições**: não houve diferença relevante de CV entre as duas "
-        "pessoas — ambas repetiram o movimento de forma parecida ciclo a ciclo, o que é um "
-        "bom sinal de controle motor semelhante nesse aspecto."
-    )
-
-if _valgo_f:
-    _quem_valgo = _valgo_f[0]["Quem é maior"]
-    _paragrafos.append(
-        f"**Controle frontal do joelho**: {_quem_valgo} apresentou pico de inclinação medial "
-        "(valgo dinâmico) maior, o que costuma estar associado a menor controle de "
-        "quadril/joelho no plano frontal durante a descida (ex.: fraqueza de glúteo "
-        "médio/rotadores externos de quadril) — vale confirmar com avaliação funcional "
-        "presencial, já que aqui é uma estimativa por 1 sensor, não o ângulo articular real."
-    )
-else:
-    _paragrafos.append(
-        "**Controle frontal do joelho**: o pico de inclinação medial do joelho ficou parecido "
-        "entre as duas pessoas — sem sinal de valgo dinâmico assimétrico relevante nesse teste."
-    )
-
+# ---- Ritmo do movimento -----------------------------------------------------
 if _dur_f:
     _dur_bits = []
     for f in _dur_f:
         _fase = f["Detalhe"]
         _mais_longa = f["Quem é maior"]
-        _mais_curta = ctx_b["label"] if _mais_longa == ctx_a["label"] else ctx_a["label"]
-        _dur_bits.append(f"**{_fase}** ({_mais_longa} demora mais, {_mais_curta} é mais rápida)")
-    _paragrafos.append(
-        "**Ritmo do movimento**: houve diferença de pelo menos 20% na duração de "
-        + "; ".join(_dur_bits) + ". Fase de descida mais longa costuma indicar controle "
-        "excêntrico mais cauteloso (ou menos confiança/força pra descer rápido); fase mais "
-        "curta pode indicar mais confiança/força — ou, inversamente, um movimento mais "
-        "'largado', com menos controle. Isoladamente, essa diferença de ritmo não indica por si "
-        "só melhor ou pior controle motor — mas mostra que a pessoa mais rápida em cada fase "
-        "listada acima merece atenção redobrada se também aparecer com CV alto ou valgo maior."
+        _mais_curta = _B if _mais_longa == _A else _A
+        _dur_bits.append(f"{_fase} ({_mais_longa} demora mais, {_mais_curta} é mais rápida)")
+    _ritmo_txt = (
+        "no **ritmo do movimento**, houve diferença de pelo menos 20% na duração de "
+        + "; ".join(_dur_bits) + " — fase de descida mais longa costuma indicar controle "
+        "excêntrico mais cauteloso, enquanto uma fase mais curta pode indicar mais "
+        "confiança/força ou, inversamente, um movimento mais 'largado', com menos controle"
+    )
+else:
+    _ritmo_txt = "no **ritmo do movimento**, as durações de fase ficaram parecidas entre as duas pessoas"
+
+# ---- Consistência do movimento (CV) ----------------------------------------
+if _cv_f:
+    if _cv_count_a == _cv_count_b:
+        _cv_txt = (
+            f"quanto à **consistência do movimento** — o proxy mais direto de controle motor "
+            f"aqui, por medir o quanto o padrão se repete ciclo a ciclo — {_A} e {_B} tiveram "
+            f"número parecido de combinações região/direção com CV mais alto ({_cv_count_a} vs "
+            f"{_cv_count_b}), sem um padrão claro de quem repete o movimento de forma mais "
+            "controlada"
+        )
+    else:
+        _menos_consistente = _A if _cv_count_a > _cv_count_b else _B
+        _mais_consistente = _B if _menos_consistente == _A else _A
+        _cv_txt = (
+            f"quanto à **consistência do movimento** — o proxy mais direto de controle motor "
+            f"aqui — {_menos_consistente} teve CV mais alto em mais combinações região/direção "
+            f"({max(_cv_count_a, _cv_count_b)} vs {min(_cv_count_a, _cv_count_b)}), sugerindo "
+            f"repetições um pouco menos uniformes que {_mais_consistente}, o que pode refletir "
+            "controle motor, fadiga acumulada ao longo das tentativas ou menor familiaridade "
+            "com o movimento"
+        )
+else:
+    _cv_txt = (
+        "quanto à **consistência do movimento**, não houve diferença relevante de CV entre as "
+        "duas pessoas — ambas repetiram o movimento de forma parecida ciclo a ciclo"
     )
 
-_A, _B = ctx_a["label"], ctx_b["label"]
+# ---- Controle frontal do joelho (valgo dinâmico) ---------------------------
+if _valgo_f:
+    _quem_valgo = _valgo_f[0]["Quem é maior"]
+    _valgo_txt = (
+        f"em relação ao **controle frontal do joelho**, {_quem_valgo} apresentou pico de "
+        "inclinação medial (valgo dinâmico) maior, o que costuma estar associado a menor "
+        "controle de quadril/joelho nesse plano durante a descida (ex.: fraqueza de glúteo "
+        "médio/rotadores externos de quadril) — vale confirmar com avaliação funcional "
+        "presencial, já que aqui é uma estimativa por 1 sensor, não o ângulo articular real"
+    )
+else:
+    _valgo_txt = (
+        "em relação ao **controle frontal do joelho**, o pico de inclinação medial ficou "
+        "parecido entre as duas pessoas, sem sinal de valgo dinâmico assimétrico relevante"
+    )
+
+# ---- Profundidade do movimento ---------------------------------------------
+if _depth_f:
+    _regioes_prof = ", ".join(sorted({f["Região"] for f in _depth_f}))
+    _prof_txt = (
+        f"e, na profundidade do movimento, houve diferença real (acima da variação normal "
+        f"entre ciclos) na região {_regioes_prof} — descer menos pode indicar limitação de "
+        "mobilidade ou estratégia de proteção, e descer mais pode indicar maior "
+        "mobilidade/confiança"
+    )
+else:
+    _prof_txt = "e a profundidade do movimento ficou equivalente entre as duas pessoas"
+
+# ---- Fechamento -------------------------------------------------------------
+if not FINDINGS:
+    _fechamento = (
+        f"No geral, {_A} e {_B} tiveram um padrão de movimento bastante parecido em todas as "
+        "medidas analisadas — não há, nesse teste, sinal de diferença relevante de controle "
+        "motor entre as duas pessoas."
+    )
+else:
+    _eixo_principal = (
+        "a consistência do movimento e o controle frontal do joelho" if (_cv_f or _valgo_f)
+        else "o ritmo e a amplitude do movimento"
+    )
+    _fechamento = (
+        f"No geral, o achado mais relevante para controle motor entre {_A} e {_B} é "
+        f"{_eixo_principal} — os demais achados (ritmo, amplitude, profundidade) tendem a "
+        "refletir mais estratégia/técnica de movimento do que controle motor propriamente "
+        "dito. Essa síntese é gerada automaticamente a partir dos limiares definidos no app e "
+        "não substitui avaliação clínica presencial."
+    )
+
+_texto_unico = (
+    f"Juntando duração de fase, profundidade, amplitude por direção, consistência entre "
+    f"repetições (CV) e inclinação frontal/sagital medidas acima, dá pra montar uma leitura "
+    f"comparativa de controle motor entre {_A} e {_B} — como hipótese de trabalho, não como "
+    f"diagnóstico fechado: {_ritmo_txt}; {_cv_txt}; {_valgo_txt}; {_prof_txt}. {_fechamento}"
+)
+
+_paragrafos = [_texto_unico]
 _ESTRATEGIA_MOTORA_TXT = (
     f"A comparação entre os participantes revelou estratégias motoras distintas ao longo das "
     f"três fases do teste. Na análise temporal, a {_B} apresentou maior duração tanto na fase "
@@ -1589,31 +1624,6 @@ _ESTRATEGIA_MOTORA_TXT = (
     "estável e eficiente durante todas as fases do teste."
 )
 _paragrafos.append(f"**🎯 Resumo da estratégia de controle motor**\n\n{_ESTRATEGIA_MOTORA_TXT}")
-
-if _depth_f:
-    _regioes_prof = ", ".join(sorted({f["Região"] for f in _depth_f}))
-    _paragrafos.append(
-        f"**Profundidade do movimento**: houve diferença real (acima da variação normal entre "
-        f"ciclos) na região {_regioes_prof}. Descer menos pode indicar limitação de mobilidade "
-        "ou estratégia de proteção; descer mais pode indicar maior mobilidade/confiança — de "
-        "novo, não é diretamente 'bom' ou 'ruim' controle motor sem mais contexto clínico."
-    )
-
-if not FINDINGS:
-    _paragrafos.append(
-        f"No geral, {ctx_a['label']} e {ctx_b['label']} tiveram um padrão de movimento bastante "
-        "parecido em todas as medidas analisadas — não há, nesse teste, sinal de diferença "
-        "relevante de controle motor entre as duas pessoas."
-    )
-else:
-    _eixo_principal = "consistência entre repetições e o valgo dinâmico" if (_cv_f or _valgo_f) else "ritmo e amplitude do movimento"
-    _paragrafos.append(
-        f"No geral, o achado mais relevante para controle motor entre {ctx_a['label']} e "
-        f"{ctx_b['label']} é a {_eixo_principal} — os demais achados (ritmo, amplitude, "
-        "profundidade) tendem a refletir mais estratégia/técnica de movimento do que controle "
-        "motor propriamente dito. Essa síntese é gerada automaticamente a partir dos limiares "
-        "definidos no app e não substitui avaliação clínica presencial."
-    )
 
 for _p in _paragrafos:
     st.markdown(_p)

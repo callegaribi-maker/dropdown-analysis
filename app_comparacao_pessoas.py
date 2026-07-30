@@ -469,9 +469,11 @@ def kinem_vs_imu_concordance(df_raw, catalog, imu_axis_label, direction, fs, sha
     "Viés" não é calculado: como os dois sinais são detrend, a diferença média
     sempre daria ~0 por construção, não é um resultado real. Além de r e RMSE,
     também calcula CCC (concordância de Lin — penaliza diferença de escala/
-    amplitude, não só se as curvas andam juntas no tempo) e SEM/MDC95 (erro
+    amplitude, não só se as curvas andam juntas no tempo), SEM/MDC95 (erro
     padrão de medida / mínima mudança detectável, a partir do desvio-padrão da
-    diferença ponto-a-ponto entre os dois sinais).
+    diferença ponto-a-ponto entre os dois sinais) e um fator de escala (razão
+    entre o desvio-padrão do celular e o da cinemática, pra deixar explícito o
+    tamanho de qualquer discrepância de amplitude por trás de um CCC baixo).
     Retorna None se faltar alguma das duas colunas ou dados insuficientes."""
     kin_axis = next((ax for ax in AXES if KINEM_AXIS_LABEL[ax] == direction), None)
     imu_axis = next((ax for ax in AXES if imu_axis_label[ax] == direction), None)
@@ -539,6 +541,14 @@ def kinem_vs_imu_concordance(df_raw, catalog, imu_axis_label, direction, fs, sha
     denom = var_a + var_b + (mean_a - mean_b) ** 2
     ccc = (2 * covar) / denom if denom != 0 else 0.0
 
+    # Fator de escala: quantas vezes a amplitude do celular é maior/menor que a da
+    # cinemática (razão de desvio-padrão). Isso explica de forma direta um CCC baixo
+    # mesmo com r moderado — mostra que o "problema" é de escala, não de padrão
+    # temporal, e permite ver se essa razão é ao menos parecida entre linhas (o que
+    # sugeriria um fator de calibração fixo) ou muito variável (sugerindo diferença
+    # de conteúdo do sinal, não só de unidade/ganho).
+    scale_factor = float(np.std(b) / np.std(a)) if np.std(a) != 0 else float("nan")
+
     # SEM (erro padrão de medida) e MDC95 (mínima mudança detectável), calculados a
     # partir do desvio-padrão da diferença ponto-a-ponto entre os dois sinais —
     # abordagem padrão pra comparação entre dois instrumentos/métodos (em vez de
@@ -552,7 +562,7 @@ def kinem_vs_imu_concordance(df_raw, catalog, imu_axis_label, direction, fs, sha
 
     return {
         "r": abs(best_r), "rmse": rmse, "n": n, "ccc": ccc,
-        "sem": sem, "mdc95": mdc95,
+        "sem": sem, "mdc95": mdc95, "scale_factor": scale_factor,
         "lag_s": best_lag / fs, "sign_flip": sign_flip,
     }
 
@@ -1710,8 +1720,11 @@ st.caption(
     "**SEM** = erro padrão de medida (m/s²), a partir do desvio-padrão da diferença ponto-a-"
     "ponto entre os dois sinais; **MDC95** = mínima mudança detectável (m/s²) — abaixo desse "
     "valor, uma diferença entre os dois sistemas pode ser apenas ruído de medição, não uma "
-    "mudança real. 'Viés' não é mostrado: como os dois sinais são detrend, a diferença média "
-    "sempre daria ~0 por construção."
+    "mudança real; **Fator de escala** = quantas vezes a amplitude do celular é maior que a "
+    "da cinemática (razão de desvio-padrão) — ajuda a entender um CCC baixo: se esse fator "
+    "for muito diferente de 1, o problema não é o padrão temporal (isso o r já mostra), é que "
+    "os dois sistemas simplesmente medem em escalas bem diferentes. 'Viés' não é mostrado: "
+    "como os dois sinais são detrend, a diferença média sempre daria ~0 por construção."
 )
 
 _shared_cutoff = min(kinem_cutoff, imu_cutoff)
@@ -1737,6 +1750,7 @@ for _ctx in PERSON_CTXS:
                 "RMSE (m/s²)": f"{_res['rmse']:.2f}",
                 "SEM (m/s²)": f"{_res['sem']:.2f}",
                 "MDC95 (m/s²)": f"{_res['mdc95']:.2f}",
+                "Fator de escala": f"{_res['scale_factor']:.0f}x",
                 "n (amostras)": f"{_res['n']}",
             })
 
@@ -1745,8 +1759,11 @@ if _conc_rows:
         _render_slide_table(pd.DataFrame(_conc_rows))
         _rs = [float(_row["r (Pearson)"]) for _row in _conc_rows]
         _cccs = [float(_row["CCC (Lin)"]) for _row in _conc_rows]
+        _scales = [float(_row["Fator de escala"].rstrip("x")) for _row in _conc_rows]
         _r_media = sum(_rs) / len(_rs)
         _ccc_media = sum(_cccs) / len(_cccs)
+        _scale_media = sum(_scales) / len(_scales)
+        _scale_cv = (np.std(_scales) / _scale_media) if _scale_media else float("nan")
         _n_boa = sum(1 for _r in _rs if _r >= 0.7)
         _n_mod = sum(1 for _r in _rs if 0.4 <= _r < 0.7)
         _n_fraca = sum(1 for _r in _rs if _r < 0.4)
@@ -1757,7 +1774,12 @@ if _conc_rows:
             f"0.4–0.7 = moderada, < 0.4 = fraca). De {len(_rs)} combinações região/direção/pessoa: "
             f"{_n_boa} com boa concordância (r), {_n_mod} moderada e {_n_fraca} fraca. Isso não "
             "valida o celular como substituto clínico da cinemática — é um indicador de quão "
-            "parecidos os dois sinais se comportam nesse teste específico."
+            "parecidos os dois sinais se comportam nesse teste específico. O fator de escala "
+            f"médio é {_scale_media:.0f}x (celular com amplitude bem maior que a cinemática), e "
+            f"varia bastante entre linhas (coeficiente de variação de {_scale_cv:.0%}) — como "
+            "não é um valor consistente, não parece um simples fator de calibração fixo, e sim "
+            "uma diferença real de conteúdo/banda de frequência entre os dois tipos de sensor. "
+            "É por isso que o CCC fica baixo mesmo quando o r é moderado."
         )
 else:
     st.caption(

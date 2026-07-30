@@ -14,7 +14,8 @@ L5 x Joelho de B) — cor = pessoa, tracejado = região (L5 sólido, Joelho trac
 
 Cada curva é a RESULTANTE entre os ciclos daquela pessoa/região: média ± desvio
 padrão, tempo normalizado (0-1) por ciclo. A segmentação em fases (platô / descida /
-subida) aparece em TODOS os gráficos: o fundo colorido (cinza/laranja/verde) usa a
+subida) aparece em TODOS os gráficos: o fundo em tons de azul-marinho (mais claro a
+mais escuro, platô → descida → subida) usa a
 média das fases entre as duas pessoas (referência visual única, pra não conflitar),
 e linhas verticais pontilhadas, na cor de cada pessoa, marcam o início da descida e o
 vale exatos dela.
@@ -410,9 +411,11 @@ def phase_amplitude_stats_axis(df, df_t, colname, trial_bounds_fn, n_trials):
     return out
 
 
-DESCIDA_COLOR = "rgba(255,127,14,0.18)"
-SUBIDA_COLOR = "rgba(44,160,44,0.18)"
-PLATEAU_COLOR = "rgba(150,150,150,0.25)"
+# Divisão de fases em tons diferentes de uma mesma cor (navy), do mais claro (platô)
+# ao mais escuro (subida) — visual monocromático e elegante.
+PLATEAU_COLOR = "rgba(20, 33, 61, 0.06)"
+DESCIDA_COLOR = "rgba(20, 33, 61, 0.15)"
+SUBIDA_COLOR = "rgba(20, 33, 61, 0.26)"
 
 KINEM_AXIS_LABEL = {"X": "ML", "Y": "AP", "Z": "Vertical"}
 IMU_AXIS_LABEL_JOELHO = {"X": "AP", "Y": "Vertical", "Z": "ML"}
@@ -469,15 +472,24 @@ def _elegant_layout(fig_obj):
     """Aplica um visual consistente e elegante (fonte, cores, grid, legenda) a
     qualquer figura Plotly da análise — pensado pra ficar bom em prints/slides."""
     fig_obj.update_layout(
-        font=dict(family=ELEGANT_FONT, size=13, color="#2c3440"),
+        font=dict(family=ELEGANT_FONT, size=15, color="#000000"),
         paper_bgcolor="white",
         plot_bgcolor="#fafbfc",
-        title=dict(font=dict(size=16, family=ELEGANT_FONT, color="#14213d")),
-        legend=dict(font=dict(size=12, family=ELEGANT_FONT), bgcolor="rgba(255,255,255,0)"),
-        hoverlabel=dict(font=dict(family=ELEGANT_FONT, size=12)),
+        legend=dict(font=dict(size=14, family=ELEGANT_FONT, color="#000000"), bgcolor="rgba(255,255,255,0)"),
+        hoverlabel=dict(font=dict(family=ELEGANT_FONT, size=13)),
     )
-    fig_obj.update_xaxes(gridcolor="#e9edf2", zerolinecolor="#d7dde4", linecolor="#d7dde4", title_font=dict(size=12.5))
-    fig_obj.update_yaxes(gridcolor="#e9edf2", zerolinecolor="#d7dde4", linecolor="#d7dde4", title_font=dict(size=12.5))
+    # só mexe no título da figura (fonte/cor) se ela já tiver um texto de título —
+    # senão o Plotly cria um objeto de título "vazio" que às vezes renderiza "undefined".
+    if fig_obj.layout.title is not None and fig_obj.layout.title.text:
+        fig_obj.update_layout(title=dict(font=dict(size=19, family=ELEGANT_FONT, color="#000000")))
+    fig_obj.update_xaxes(
+        gridcolor="#e9edf2", zerolinecolor="#d7dde4", linecolor="#000000",
+        title_font=dict(size=15, color="#000000"), tickfont=dict(size=13, color="#000000"),
+    )
+    fig_obj.update_yaxes(
+        gridcolor="#e9edf2", zerolinecolor="#d7dde4", linecolor="#000000",
+        title_font=dict(size=15, color="#000000"), tickfont=dict(size=13, color="#000000"),
+    )
     return fig_obj
 
 
@@ -818,12 +830,12 @@ legend_bits = " / ".join(
 )
 st.caption(
     f"Cor = pessoa ({legend_bits}); tracejado = região (L5 sólido, Joelho tracejado). "
-    "Sombra = ±1 desvio padrão entre os ciclos daquela pessoa/região. Fundo cinza = "
-    "platô, laranja = descida, verde = subida (usando a média das fases entre as duas "
-    "pessoas, já que a divisão de cada uma pode variar um pouco); as linhas verticais "
-    "pontilhadas, na cor de cada pessoa, marcam o início da descida e o vale exatos "
-    "dela. Cada painel já dá pra ler nos dois sentidos: A×B (compare as cores) e "
-    "L5×Joelho (compare sólido×tracejado, dentro da mesma cor)."
+    "Sombra = ±1 desvio padrão entre os ciclos daquela pessoa/região. Fundo em tons de "
+    "azul-marinho (mais claro = platô, médio = descida, mais escuro = subida — usando "
+    "a média das fases entre as duas pessoas, já que a divisão de cada uma pode variar "
+    "um pouco); as linhas verticais pontilhadas, na cor de cada pessoa, marcam o início "
+    "da descida e o vale exatos dela. Cada painel já dá pra ler nos dois sentidos: A×B "
+    "(compare as cores) e L5×Joelho (compare sólido×tracejado, dentro da mesma cor)."
 )
 
 fig = make_subplots(

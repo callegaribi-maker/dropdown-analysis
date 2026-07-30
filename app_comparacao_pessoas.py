@@ -531,6 +531,37 @@ def _elegant_layout(fig_obj):
     return fig_obj
 
 
+def _render_slide_table(df):
+    """Renderiza um DataFrame pequeno como HTML puro com estilo inline (cabeçalho
+    escuro/texto branco garantido, células compactas — sem largura esticada). Usa
+    estilo inline pra não depender do CSS do Streamlit, que pode sobrescrever cores
+    de texto em elementos <th>/<td> gerados automaticamente."""
+    cols = list(df.columns)
+    thead_cells = "".join(
+        f'<th style="background:#1f2937;color:#ffffff;font-weight:700;'
+        f'padding:7px 12px;text-align:left;border-bottom:2px solid #111827;'
+        f'white-space:nowrap;">{c}</th>'
+        for c in cols
+    )
+    body_rows = []
+    for i, (_, row) in enumerate(df.iterrows()):
+        bg = "#ffffff" if i % 2 == 0 else "#f2f3f5"
+        cells = "".join(
+            f'<td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;'
+            f'color:#1a2332;background:{bg};white-space:nowrap;">{row[c]}</td>'
+            for c in cols
+        )
+        body_rows.append(f"<tr>{cells}</tr>")
+    html = (
+        '<div style="overflow-x:auto;"><table style="border-collapse:collapse;'
+        'width:auto;font-size:0.92rem;font-family:Inter,sans-serif;">'
+        f"<thead><tr>{thead_cells}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        "</table></div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
 # ----------------------------------------------------------------------------
 # UI — upload
 # ----------------------------------------------------------------------------
@@ -843,8 +874,7 @@ with st.container(key="quadro_duracao"):
         }
         for nome, stat_a, pct_a, stat_b, pct_b in _dur_table_rows
     ])
-    _dur_df.index = [""] * len(_dur_df)
-    st.table(_dur_df)
+    _render_slide_table(_dur_df)
 
 with st.container(key="quadro_profundidade"):
     st.markdown("##### 📏 Deslocamento vertical líquido na descida")
@@ -855,8 +885,7 @@ with st.container(key="quadro_profundidade"):
         for d in _depth_rows
     ]) if _depth_rows else None
     if _depth_df is not None:
-        _depth_df.index = [""] * len(_depth_df)
-        st.table(_depth_df)
+        _render_slide_table(_depth_df)
     st.caption("_Interpretação automática, calculada a partir dos ciclos detectados — não substitui avaliação clínica._")
 
 st.divider()

@@ -54,7 +54,6 @@ st.markdown(
     .block-container {
         padding-top: 2.2rem;
         padding-bottom: 3rem;
-        max-width: 1250px;
     }
 
     h1, h2, h3, [data-testid="stMarkdownContainer"] h1,

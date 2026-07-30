@@ -490,9 +490,9 @@ DIRECTIONS = ["Vertical", "AP", "ML"]
 PERSON_COLORS = {"A": "#2563eb", "B": "#dc2626"}  # A = azul, B = vermelho (tons elegantes)
 REGION_DASH = {"L5": "solid", "Joelho": "dash"}
 
-H_SPACING = 0.10
-V_SPACING = 0.14
-CELL_PX = 260
+H_SPACING = 0.09
+V_SPACING = 0.045
+CELL_PX = 320
 MARGIN = dict(l=10, r=10, t=90, b=10)
 
 ELEGANT_FONT = "Inter, -apple-system, 'Segoe UI', sans-serif"

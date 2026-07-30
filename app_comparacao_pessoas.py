@@ -523,11 +523,11 @@ def _elegant_layout(fig_obj):
     if fig_obj.layout.title is not None and fig_obj.layout.title.text:
         fig_obj.update_layout(title=dict(font=dict(size=19, family=ELEGANT_FONT, color="#000000")))
     fig_obj.update_xaxes(
-        showgrid=False, zeroline=False, linecolor="#000000",
+        showgrid=False, zeroline=False, showline=True, linecolor="#000000", linewidth=1,
         title_font=dict(size=15, color="#000000"), tickfont=dict(size=13, color="#000000"),
     )
     fig_obj.update_yaxes(
-        showgrid=False, zeroline=False, linecolor="#000000",
+        showgrid=False, zeroline=False, showline=True, linecolor="#000000", linewidth=1,
         title_font=dict(size=15, color="#000000"), tickfont=dict(size=13, color="#000000"),
     )
     return fig_obj

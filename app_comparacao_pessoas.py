@@ -809,6 +809,13 @@ for col_i, ctx in enumerate(PERSON_CTXS, start=1):
         fig_check.add_vrect(x0=s, x1=v, fillcolor=DESCIDA_COLOR, line_width=0, layer="below", row=1, col=col_i)
         fig_check.add_vrect(x0=v, x1=e, fillcolor=SUBIDA_COLOR, line_width=0, layer="below", row=1, col=col_i)
 fig_check.update_xaxes(title_text="Tempo (s)")
+# eixo Y compartilhado entre os dois painéis — sem isso, cada subplot escolhe seus
+# próprios ticks "bonitos" com base no próprio range de dados, e um painel pode
+# acabar sem mostrar um valor (ex.: 0.05) que o outro mostra.
+_y_all = np.concatenate([ctx_a["ref_signal"], ctx_b["ref_signal"]])
+_y_pad = 0.08 * (float(np.nanmax(_y_all)) - float(np.nanmin(_y_all)) or 1.0)
+_y_range = [float(np.nanmin(_y_all)) - _y_pad, float(np.nanmax(_y_all)) + _y_pad]
+fig_check.update_yaxes(range=_y_range, matches="y")
 fig_check.update_layout(height=280, margin=dict(l=10, r=10, t=40, b=10), plot_bgcolor="white")
 _elegant_layout(fig_check)
 st.plotly_chart(fig_check, use_container_width=True)

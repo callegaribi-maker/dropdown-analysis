@@ -533,28 +533,29 @@ def _elegant_layout(fig_obj):
 
 def _render_slide_table(df):
     """Renderiza um DataFrame pequeno como HTML puro com estilo inline (cabeçalho
-    escuro/texto branco garantido, células compactas — sem largura esticada). Usa
-    estilo inline pra não depender do CSS do Streamlit, que pode sobrescrever cores
-    de texto em elementos <th>/<td> gerados automaticamente."""
+    num azul que combina com o quadro ao redor, texto branco garantido, células
+    compactas com quebra de linha — não estica a largura). Usa estilo inline pra
+    não depender do CSS do Streamlit, que pode sobrescrever cores de texto em
+    elementos <th>/<td> gerados automaticamente."""
     cols = list(df.columns)
     thead_cells = "".join(
-        f'<th style="background:#1f2937;color:#ffffff;font-weight:700;'
-        f'padding:7px 12px;text-align:left;border-bottom:2px solid #111827;'
-        f'white-space:nowrap;">{c}</th>'
+        f'<th style="background:#1d4ed8;color:#ffffff;font-weight:700;'
+        f'padding:7px 12px;text-align:left;border-bottom:2px solid #1e3a8a;'
+        f'white-space:normal;">{c}</th>'
         for c in cols
     )
     body_rows = []
     for i, (_, row) in enumerate(df.iterrows()):
-        bg = "#ffffff" if i % 2 == 0 else "#f2f3f5"
+        bg = "#ffffff" if i % 2 == 0 else "#eaf0fc"
         cells = "".join(
-            f'<td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;'
-            f'color:#1a2332;background:{bg};white-space:nowrap;">{row[c]}</td>'
+            f'<td style="padding:6px 12px;border-bottom:1px solid #dbe6fb;'
+            f'color:#1a2332;background:{bg};white-space:normal;">{row[c]}</td>'
             for c in cols
         )
         body_rows.append(f"<tr>{cells}</tr>")
     html = (
         '<div style="overflow-x:auto;"><table style="border-collapse:collapse;'
-        'width:auto;font-size:0.92rem;font-family:Inter,sans-serif;">'
+        'width:100%;font-size:0.92rem;font-family:Inter,sans-serif;">'
         f"<thead><tr>{thead_cells}</tr></thead>"
         f"<tbody>{''.join(body_rows)}</tbody>"
         "</table></div>"
@@ -853,40 +854,44 @@ _pct_desc_b = _pct_of_cycle(_dur_b['descida'], _dur_b['ciclo total'])
 _pct_sub_a = _pct_of_cycle(_dur_a['subida'], _dur_a['ciclo total'])
 _pct_sub_b = _pct_of_cycle(_dur_b['subida'], _dur_b['ciclo total'])
 
-with st.container(key="quadro_duracao"):
-    st.markdown("##### ⏱️ Duração das fases")
-    st.caption("Tempo médio de cada fase, e quanto (%) ela ocupa do ciclo total de cada pessoa.")
+col_duracao, col_profundidade = st.columns(2)
 
-    _dur_table_rows = [
-        ("🧍 Platô", _dur_a["platô"], _pct_plato_a, _dur_b["platô"], _pct_plato_b),
-        ("⬇️ Descida", _dur_a["descida"], _pct_desc_a, _dur_b["descida"], _pct_desc_b),
-        ("⬆️ Subida", _dur_a["subida"], _pct_sub_a, _dur_b["subida"], _pct_sub_b),
-        ("🔁 Ciclo total", _dur_a["ciclo total"], 100.0, _dur_b["ciclo total"], 100.0),
-    ]
-    _dur_df = pd.DataFrame([
-        {
-            "Fase": nome,
-            f"{ctx_a['label']}": f"{stat_a[0]:.2f}s (±{stat_a[1]:.2f})",
-            f"% do ciclo — {ctx_a['label']}": f"{pct_a:.0f}%",
-            f"{ctx_b['label']}": f"{stat_b[0]:.2f}s (±{stat_b[1]:.2f})",
-            f"% do ciclo — {ctx_b['label']}": f"{pct_b:.0f}%",
-            "Diferença": _fmt_pct_diff(stat_a, stat_b, ctx_a["label"], ctx_b["label"]),
-        }
-        for nome, stat_a, pct_a, stat_b, pct_b in _dur_table_rows
-    ])
-    _render_slide_table(_dur_df)
+with col_duracao:
+    with st.container(key="quadro_duracao"):
+        st.markdown("##### ⏱️ Duração das fases")
+        st.caption("Tempo médio de cada fase, e quanto (%) ela ocupa do ciclo total de cada pessoa.")
 
-with st.container(key="quadro_profundidade"):
-    st.markdown("##### 📏 Deslocamento vertical líquido na descida")
-    st.caption("Confira se a unidade da coluna de Kinemática no seu sistema de captura é cm ou m.")
-    _depth_df = pd.DataFrame([
-        {"Região": d["region"], f"{ctx_a['label']}": f"{d['a_mean']:.3f} (±{d['a_std']:.3f})",
-         f"{ctx_b['label']}": f"{d['b_mean']:.3f} (±{d['b_std']:.3f})", "Conclusão": d["conclusao"]}
-        for d in _depth_rows
-    ]) if _depth_rows else None
-    if _depth_df is not None:
-        _render_slide_table(_depth_df)
-    st.caption("_Interpretação automática, calculada a partir dos ciclos detectados — não substitui avaliação clínica._")
+        _dur_table_rows = [
+            ("🧍 Platô", _dur_a["platô"], _pct_plato_a, _dur_b["platô"], _pct_plato_b),
+            ("⬇️ Descida", _dur_a["descida"], _pct_desc_a, _dur_b["descida"], _pct_desc_b),
+            ("⬆️ Subida", _dur_a["subida"], _pct_sub_a, _dur_b["subida"], _pct_sub_b),
+            ("🔁 Ciclo total", _dur_a["ciclo total"], 100.0, _dur_b["ciclo total"], 100.0),
+        ]
+        _dur_df = pd.DataFrame([
+            {
+                "Fase": nome,
+                f"{ctx_a['label']}": f"{stat_a[0]:.2f}s (±{stat_a[1]:.2f})",
+                f"% do ciclo — {ctx_a['label']}": f"{pct_a:.0f}%",
+                f"{ctx_b['label']}": f"{stat_b[0]:.2f}s (±{stat_b[1]:.2f})",
+                f"% do ciclo — {ctx_b['label']}": f"{pct_b:.0f}%",
+                "Diferença": _fmt_pct_diff(stat_a, stat_b, ctx_a["label"], ctx_b["label"]),
+            }
+            for nome, stat_a, pct_a, stat_b, pct_b in _dur_table_rows
+        ])
+        _render_slide_table(_dur_df)
+
+with col_profundidade:
+    with st.container(key="quadro_profundidade"):
+        st.markdown("##### 📏 Deslocamento vertical líquido na descida")
+        st.caption("Confira se a unidade da coluna de Kinemática no seu sistema de captura é cm ou m.")
+        _depth_df = pd.DataFrame([
+            {"Região": d["region"], f"{ctx_a['label']}": f"{d['a_mean']:.3f} (±{d['a_std']:.3f})",
+             f"{ctx_b['label']}": f"{d['b_mean']:.3f} (±{d['b_std']:.3f})", "Conclusão": d["conclusao"]}
+            for d in _depth_rows
+        ]) if _depth_rows else None
+        if _depth_df is not None:
+            _render_slide_table(_depth_df)
+        st.caption("_Interpretação automática, calculada a partir dos ciclos detectados — não substitui avaliação clínica._")
 
 st.divider()
 

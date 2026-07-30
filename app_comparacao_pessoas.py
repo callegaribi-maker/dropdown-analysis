@@ -1270,14 +1270,20 @@ else:
     )
 
 if _dur_f:
-    _fases_txt = ", ".join(sorted({f["Detalhe"] for f in _dur_f}))
+    _dur_bits = []
+    for f in _dur_f:
+        _fase = f["Detalhe"]
+        _mais_longa = f["Quem é maior"]
+        _mais_curta = ctx_b["label"] if _mais_longa == ctx_a["label"] else ctx_a["label"]
+        _dur_bits.append(f"**{_fase}** ({_mais_longa} demora mais, {_mais_curta} é mais rápida)")
     _paragrafos.append(
-        f"**Ritmo do movimento**: houve diferença de pelo menos 20% na duração da(s) fase(s) "
-        f"{_fases_txt} entre as duas pessoas. Fase de descida mais longa costuma indicar "
-        "controle excêntrico mais cauteloso (ou menos confiança/força pra descer rápido); fase "
-        "mais curta pode indicar mais confiança/força — ou, inversamente, um movimento mais "
+        "**Ritmo do movimento**: houve diferença de pelo menos 20% na duração de "
+        + "; ".join(_dur_bits) + ". Fase de descida mais longa costuma indicar controle "
+        "excêntrico mais cauteloso (ou menos confiança/força pra descer rápido); fase mais "
+        "curta pode indicar mais confiança/força — ou, inversamente, um movimento mais "
         "'largado', com menos controle. Isoladamente, essa diferença de ritmo não indica por si "
-        "só melhor ou pior controle motor."
+        "só melhor ou pior controle motor — mas mostra que a pessoa mais rápida em cada fase "
+        "listada acima merece atenção redobrada se também aparecer com CV alto ou valgo maior."
     )
 
 if _amp_f:

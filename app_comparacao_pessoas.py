@@ -95,27 +95,37 @@ st.markdown(
     }
 
     /* st.table — tabela estática em HTML, com fonte maior e visual mais elegante
-       (pensado pra ficar nítido em prints/slides). */
+       (pensado pra ficar nítido em prints/slides). Fundo branco/neutro (não azul)
+       pra destacar dentro dos quadros azuis; células mais compactas/quadradas. */
     [data-testid="stTable"] table {
-        font-size: 1.02rem;
+        font-size: 0.92rem;
         border-collapse: collapse;
+        table-layout: fixed;
         width: 100%;
+        background-color: #ffffff;
+    }
+    [data-testid="stTable"] th, [data-testid="stTable"] td {
+        max-width: 160px;
+        white-space: normal;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
     }
     [data-testid="stTable"] thead th {
-        background-color: #e8eefb;
-        color: #14213d;
+        background-color: #1f2937;
+        color: #ffffff;
         font-weight: 700;
-        padding: 0.65rem 0.9rem;
+        padding: 0.45rem 0.6rem;
         text-align: left;
-        border-bottom: 2px solid #c7d3ea;
+        border-bottom: 2px solid #111827;
     }
     [data-testid="stTable"] tbody td {
-        padding: 0.55rem 0.9rem;
-        border-bottom: 1px solid #e9edf5;
+        padding: 0.4rem 0.6rem;
+        border-bottom: 1px solid #e5e7eb;
         color: #1a2332;
+        background-color: #ffffff;
     }
     [data-testid="stTable"] tbody tr:last-child td { border-bottom: none; }
-    [data-testid="stTable"] tbody tr:nth-child(even) { background-color: #f7f9fc; }
+    [data-testid="stTable"] tbody tr:nth-child(even) td { background-color: #f2f3f5; }
 
     hr { margin: 1.8rem 0; border-color: #e2e8f0; }
 
@@ -831,18 +841,6 @@ with st.container(key="quadro_duracao"):
     ])
     _dur_df.index = [""] * len(_dur_df)
     st.table(_dur_df)
-
-with st.container(key="quadro_profundidade"):
-    st.markdown("##### 📏 Quanto desce (deslocamento vertical líquido na descida)")
-    st.caption("Confira se a unidade da coluna de Kinemática no seu sistema de captura é cm ou m.")
-    _depth_df = pd.DataFrame([
-        {"Região": d["region"], f"{ctx_a['label']}": f"{d['a_mean']:.3f} (±{d['a_std']:.3f})",
-         f"{ctx_b['label']}": f"{d['b_mean']:.3f} (±{d['b_std']:.3f})", "Conclusão": d["conclusao"]}
-        for d in _depth_rows
-    ]) if _depth_rows else None
-    if _depth_df is not None:
-        _depth_df.index = [""] * len(_depth_df)
-        st.table(_depth_df)
     st.caption("_Interpretação automática, calculada a partir dos ciclos detectados — não substitui avaliação clínica._")
 
 st.divider()

@@ -537,12 +537,15 @@ NAVY = "#1e3a5f"
 NAVY_DARK = "#122540"
 
 
-def _render_slide_table(df):
+def _render_slide_table(df, highlights=None):
     """Renderiza um DataFrame pequeno como HTML puro com estilo inline (cabeçalho
     num azul-marinho que combina com o quadro ao redor, texto branco garantido,
     células compactas com quebra de linha — não estica a largura). Usa estilo
     inline pra não depender do CSS do Streamlit, que pode sobrescrever cores de
-    texto em elementos <th>/<td> gerados automaticamente."""
+    texto em elementos <th>/<td> gerados automaticamente.
+
+    `highlights`, se passado, é uma lista (1 por linha) com o nome da coluna a
+    destacar em amarelo naquela linha, ou None se nenhuma."""
     cols = list(df.columns)
     thead_cells = "".join(
         f'<th style="background:{NAVY};color:#ffffff;font-weight:700;'
@@ -552,10 +555,12 @@ def _render_slide_table(df):
     )
     body_rows = []
     for i, (_, row) in enumerate(df.iterrows()):
-        bg = "#ffffff" if i % 2 == 0 else "#eaf0fc"
+        bg_row = "#ffffff" if i % 2 == 0 else "#eaf0fc"
+        target_col = highlights[i] if highlights else None
         cells = "".join(
             f'<td style="padding:6px 12px;border-bottom:1px solid #dbe6fb;'
-            f'color:#1a2332;background:{bg};white-space:normal;">{row[c]}</td>'
+            f'color:#1a2332;background:{"#ffe066" if c == target_col else bg_row};'
+            f'white-space:normal;">{row[c]}</td>'
             for c in cols
         )
         body_rows.append(f"<tr>{cells}</tr>")
@@ -793,7 +798,7 @@ st.caption(
     "na barra lateral (valem para as duas pessoas)."
 )
 
-fig_check = make_subplots(rows=1, cols=2, subplot_titles=[ctx_a["label"], ctx_b["label"]])
+fig_check = make_subplots(rows=1, cols=2, subplot_titles=[f"<b>{ctx_a['label']}</b>", f"<b>{ctx_b['label']}</b>"])
 for col_i, ctx in enumerate(PERSON_CTXS, start=1):
     fig_check.add_trace(
         go.Scatter(x=ctx["t"], y=ctx["ref_signal"], mode="lines", line=dict(color=ctx["color"], width=3.5), showlegend=False),
@@ -1025,9 +1030,7 @@ fig.update_layout(
 )
 _elegant_layout(fig)
 
-col_chart, col_amp = st.columns([3, 2])
-with col_chart:
-    st.plotly_chart(fig, use_container_width=False, key="compare_main")
+st.plotly_chart(fig, use_container_width=False, key="compare_main")
 
 _AMP_HIGHLIGHT_PCT = 0.30  # só pinta se a maior for pelo menos 30% maior que a menor
 
@@ -1046,79 +1049,71 @@ def _cell_highlight(ma, mb, col_a_name, col_b_name):
     return None
 
 
-with col_amp:
-    col_a_name = f"{ctx_a['label']}"
-    col_b_name = f"{ctx_b['label']}"
+st.markdown("##### 📐 Amplitude por fase (pico-a-pico do sinal, média ± DP entre os ciclos)")
+st.caption(
+    "Para cada variável (Deslocamento, Velocidade, Aceleração, ACC, GYR), em cada "
+    "direção anatômica (Vertical/AP/ML), separada por platô/descida/subida, uma "
+    f"tabela por região. Em amarelo: diferenças de pelo menos {_AMP_HIGHLIGHT_PCT*100:.0f}% "
+    "entre as duas pessoas (a menor delas fica sem destaque)."
+)
 
-    st.info(
-        "**Amplitude por fase (pico-a-pico do sinal), média ± DP entre os ciclos** — "
-        "para cada variável (Deslocamento, Velocidade, Aceleração, ACC, GYR), em cada "
-        "direção anatômica (Vertical/AP/ML), separada por platô/descida/subida, uma "
-        f"tabela por região. Em amarelo: diferenças de pelo menos {_AMP_HIGHLIGHT_PCT*100:.0f}% "
-        "entre as duas pessoas (a menor delas fica sem destaque)."
-    )
+col_a_name = f"{ctx_a['label']}"
+col_b_name = f"{ctx_b['label']}"
+_amp_cols = st.columns(len(REGIONS)) if REGIONS else []
 
-    for region in REGIONS:
-        imu_axis_r = get_imu_axis_label(region)
-        df_a_r = ctx_a["sheets"][region]
-        df_b_r = ctx_b["sheets"][region]
-        cat_a_r = build_catalog(df_a_r)
-        cat_b_r = build_catalog(df_b_r)
-        t_a_r = df_a_r[time_column(df_a_r)].to_numpy()
-        t_b_r = df_b_r[time_column(df_b_r)].to_numpy()
+for _region_col, region in zip(_amp_cols, REGIONS):
+    with _region_col:
+        with st.container(key=f"quadro_amp_{region}"):
+            st.markdown(f"**{region}**")
+            imu_axis_r = get_imu_axis_label(region)
+            df_a_r = ctx_a["sheets"][region]
+            df_b_r = ctx_b["sheets"][region]
+            cat_a_r = build_catalog(df_a_r)
+            cat_b_r = build_catalog(df_b_r)
+            t_a_r = df_a_r[time_column(df_a_r)].to_numpy()
+            t_b_r = df_b_r[time_column(df_b_r)].to_numpy()
 
-        _amp_rows = []
-        _highlight_targets = []  # 1 entrada por linha: None ou nome da coluna a pintar
-        for grp, (label, unit), is_kinem in SIGNAL_ROWS:
-            for direction in DIRECTIONS:
-                axis = next((ax for ax in AXES if axis_direction(is_kinem, ax, imu_axis_r) == direction), None)
-                if axis is None:
-                    continue
-                colname_a = cat_a_r.get(grp, {}).get(axis)
-                colname_b = cat_b_r.get(grp, {}).get(axis)
-                if colname_a is None or colname_b is None:
-                    continue
-                amp_a = phase_amplitude_stats_axis(df_a_r, t_a_r, colname_a, ctx_a["trial_bounds_fn"], ctx_a["n_trials"])
-                amp_b = phase_amplitude_stats_axis(df_b_r, t_b_r, colname_b, ctx_b["trial_bounds_fn"], ctx_b["n_trials"])
-                for phase_name in ("platô", "descida", "subida"):
-                    ma, sa = amp_a[phase_name]
-                    mb, sb = amp_b[phase_name]
-                    _amp_rows.append({
-                        "Direção": direction, "Fase": phase_name, "Variável": f"{label} ({unit})",
-                        col_a_name: "—" if np.isnan(ma) else f"{ma:.3f} ± {sa:.3f}",
-                        col_b_name: "—" if np.isnan(mb) else f"{mb:.3f} ± {sb:.3f}",
-                    })
-                    # destaque baseado no valor JÁ ARREDONDADO (o mesmo que aparece na
-                    # célula) — assim a cor sempre bate com o que a pessoa está lendo.
-                    _ma_disp = round(ma, 3) if not np.isnan(ma) else ma
-                    _mb_disp = round(mb, 3) if not np.isnan(mb) else mb
-                    _target = _cell_highlight(_ma_disp, _mb_disp, col_a_name, col_b_name)
-                    _highlight_targets.append(_target)
-                    if _target is not None:
-                        _quem_maior = ctx_a["label"] if _target == col_a_name else ctx_b["label"]
-                        FINDINGS.append({
-                            "Categoria": "Amplitude por fase", "Região": region,
-                            "Detalhe": f"{direction} · {phase_name} · {label}",
-                            "Quem é maior": _quem_maior,
-                            "Interpretação fisiológica": _interp_amplitude(label, direction, region, phase_name, _quem_maior),
+            _amp_rows = []
+            _highlight_targets = []  # 1 entrada por linha: None ou nome da coluna a pintar
+            for grp, (label, unit), is_kinem in SIGNAL_ROWS:
+                for direction in DIRECTIONS:
+                    axis = next((ax for ax in AXES if axis_direction(is_kinem, ax, imu_axis_r) == direction), None)
+                    if axis is None:
+                        continue
+                    colname_a = cat_a_r.get(grp, {}).get(axis)
+                    colname_b = cat_b_r.get(grp, {}).get(axis)
+                    if colname_a is None or colname_b is None:
+                        continue
+                    amp_a = phase_amplitude_stats_axis(df_a_r, t_a_r, colname_a, ctx_a["trial_bounds_fn"], ctx_a["n_trials"])
+                    amp_b = phase_amplitude_stats_axis(df_b_r, t_b_r, colname_b, ctx_b["trial_bounds_fn"], ctx_b["n_trials"])
+                    for phase_name in ("platô", "descida", "subida"):
+                        ma, sa = amp_a[phase_name]
+                        mb, sb = amp_b[phase_name]
+                        _amp_rows.append({
+                            "Direção": direction, "Fase": phase_name, "Variável": f"{label} ({unit})",
+                            col_a_name: "—" if np.isnan(ma) else f"{ma:.3f} ± {sa:.3f}",
+                            col_b_name: "—" if np.isnan(mb) else f"{mb:.3f} ± {sb:.3f}",
                         })
+                        # destaque baseado no valor JÁ ARREDONDADO (o mesmo que aparece na
+                        # célula) — assim a cor sempre bate com o que a pessoa está lendo.
+                        _ma_disp = round(ma, 3) if not np.isnan(ma) else ma
+                        _mb_disp = round(mb, 3) if not np.isnan(mb) else mb
+                        _target = _cell_highlight(_ma_disp, _mb_disp, col_a_name, col_b_name)
+                        _highlight_targets.append(_target)
+                        if _target is not None:
+                            _quem_maior = ctx_a["label"] if _target == col_a_name else ctx_b["label"]
+                            FINDINGS.append({
+                                "Categoria": "Amplitude por fase", "Região": region,
+                                "Detalhe": f"{direction} · {phase_name} · {label}",
+                                "Quem é maior": _quem_maior,
+                                "Interpretação fisiológica": _interp_amplitude(label, direction, region, phase_name, _quem_maior),
+                            })
 
-        st.markdown(f"**{region}**")
-        if not _amp_rows:
-            st.caption("Sem dados suficientes para calcular a amplitude por fase.")
-            continue
-
-        _amp_df = pd.DataFrame(_amp_rows)
-        try:
-            _style_df = pd.DataFrame("", index=_amp_df.index, columns=_amp_df.columns)
-            for _i, _target_col in enumerate(_highlight_targets):
-                if _target_col is not None:
-                    _style_df.at[_i, _target_col] = "background-color: #ffe066"
-            _styled = _amp_df.style.apply(lambda _: _style_df, axis=None).hide(axis="index")
-            st.dataframe(_styled, use_container_width=True, height=380)
-        except Exception:
-            # fallback sem cor, caso o ambiente não tenha jinja2 (necessário pro Styler)
-            st.dataframe(_amp_df, use_container_width=True, hide_index=True, height=380)
+            if not _amp_rows:
+                st.caption("Sem dados suficientes para calcular a amplitude por fase.")
+            else:
+                _amp_df = pd.DataFrame(_amp_rows)
+                _render_slide_table(_amp_df, highlights=_highlight_targets)
 
 # ---- Bloco de interpretação: consistência entre repetições (CV) -------------
 # CV = DP/média do deslocamento líquido. Quando a média está perto de zero (comum no

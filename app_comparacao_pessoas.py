@@ -94,6 +94,29 @@ st.markdown(
         overflow: hidden;
     }
 
+    /* st.table — tabela estática em HTML, com fonte maior e visual mais elegante
+       (pensado pra ficar nítido em prints/slides). */
+    [data-testid="stTable"] table {
+        font-size: 1.02rem;
+        border-collapse: collapse;
+        width: 100%;
+    }
+    [data-testid="stTable"] thead th {
+        background-color: #e8eefb;
+        color: #14213d;
+        font-weight: 700;
+        padding: 0.65rem 0.9rem;
+        text-align: left;
+        border-bottom: 2px solid #c7d3ea;
+    }
+    [data-testid="stTable"] tbody td {
+        padding: 0.55rem 0.9rem;
+        border-bottom: 1px solid #e9edf5;
+        color: #1a2332;
+    }
+    [data-testid="stTable"] tbody tr:last-child td { border-bottom: none; }
+    [data-testid="stTable"] tbody tr:nth-child(even) { background-color: #f7f9fc; }
+
     hr { margin: 1.8rem 0; border-color: #e2e8f0; }
 
     [data-testid="stCaptionContainer"], .stCaption { color: #667085 !important; }
@@ -676,7 +699,7 @@ st.caption(
 fig_check = make_subplots(rows=1, cols=2, subplot_titles=[ctx_a["label"], ctx_b["label"]])
 for col_i, ctx in enumerate(PERSON_CTXS, start=1):
     fig_check.add_trace(
-        go.Scatter(x=ctx["t"], y=ctx["ref_signal"], mode="lines", line=dict(color=ctx["color"]), showlegend=False),
+        go.Scatter(x=ctx["t"], y=ctx["ref_signal"], mode="lines", line=dict(color=ctx["color"], width=3.5), showlegend=False),
         row=1, col=col_i,
     )
     for i in range(ctx["n_trials"]):
@@ -785,39 +808,42 @@ _pct_desc_b = _pct_of_cycle(_dur_b['descida'], _dur_b['ciclo total'])
 _pct_sub_a = _pct_of_cycle(_dur_a['subida'], _dur_a['ciclo total'])
 _pct_sub_b = _pct_of_cycle(_dur_b['subida'], _dur_b['ciclo total'])
 
-st.markdown("##### ⏱️ Duração das fases")
-st.caption("Tempo médio de cada fase, e quanto (%) ela ocupa do ciclo total de cada pessoa.")
+with st.container(key="quadro_duracao"):
+    st.markdown("##### ⏱️ Duração das fases")
+    st.caption("Tempo médio de cada fase, e quanto (%) ela ocupa do ciclo total de cada pessoa.")
 
-_dur_table_rows = [
-    ("🧍 Platô", _dur_a["platô"], _pct_plato_a, _dur_b["platô"], _pct_plato_b),
-    ("⬇️ Descida", _dur_a["descida"], _pct_desc_a, _dur_b["descida"], _pct_desc_b),
-    ("⬆️ Subida", _dur_a["subida"], _pct_sub_a, _dur_b["subida"], _pct_sub_b),
-    ("🔁 Ciclo total", _dur_a["ciclo total"], 100.0, _dur_b["ciclo total"], 100.0),
-]
-_dur_df = pd.DataFrame([
-    {
-        "Fase": nome,
-        f"{ctx_a['label']}": f"{stat_a[0]:.2f}s (±{stat_a[1]:.2f})",
-        f"% do ciclo — {ctx_a['label']}": f"{pct_a:.0f}%",
-        f"{ctx_b['label']}": f"{stat_b[0]:.2f}s (±{stat_b[1]:.2f})",
-        f"% do ciclo — {ctx_b['label']}": f"{pct_b:.0f}%",
-        "Diferença": _fmt_pct_diff(stat_a, stat_b, ctx_a["label"], ctx_b["label"]),
-    }
-    for nome, stat_a, pct_a, stat_b, pct_b in _dur_table_rows
-])
-st.dataframe(_dur_df, use_container_width=True, hide_index=True)
+    _dur_table_rows = [
+        ("🧍 Platô", _dur_a["platô"], _pct_plato_a, _dur_b["platô"], _pct_plato_b),
+        ("⬇️ Descida", _dur_a["descida"], _pct_desc_a, _dur_b["descida"], _pct_desc_b),
+        ("⬆️ Subida", _dur_a["subida"], _pct_sub_a, _dur_b["subida"], _pct_sub_b),
+        ("🔁 Ciclo total", _dur_a["ciclo total"], 100.0, _dur_b["ciclo total"], 100.0),
+    ]
+    _dur_df = pd.DataFrame([
+        {
+            "Fase": nome,
+            f"{ctx_a['label']}": f"{stat_a[0]:.2f}s (±{stat_a[1]:.2f})",
+            f"% do ciclo — {ctx_a['label']}": f"{pct_a:.0f}%",
+            f"{ctx_b['label']}": f"{stat_b[0]:.2f}s (±{stat_b[1]:.2f})",
+            f"% do ciclo — {ctx_b['label']}": f"{pct_b:.0f}%",
+            "Diferença": _fmt_pct_diff(stat_a, stat_b, ctx_a["label"], ctx_b["label"]),
+        }
+        for nome, stat_a, pct_a, stat_b, pct_b in _dur_table_rows
+    ])
+    _dur_df.index = [""] * len(_dur_df)
+    st.table(_dur_df)
 
-st.markdown("##### 📏 Quanto desce (deslocamento vertical líquido na descida)")
-st.caption("Confira se a unidade da coluna de Kinemática no seu sistema de captura é cm ou m.")
-_depth_df = pd.DataFrame([
-    {"Região": region, f"{ctx_a['label']}": f"{d['a_mean']:.3f} (±{d['a_std']:.3f})",
-     f"{ctx_b['label']}": f"{d['b_mean']:.3f} (±{d['b_std']:.3f})", "Conclusão": d["conclusao"]}
-    for d in _depth_rows
-]) if _depth_rows else None
-if _depth_df is not None:
-    st.dataframe(_depth_df, use_container_width=True, hide_index=True)
-
-st.caption("_Interpretação automática, calculada a partir dos ciclos detectados — não substitui avaliação clínica._")
+with st.container(key="quadro_profundidade"):
+    st.markdown("##### 📏 Quanto desce (deslocamento vertical líquido na descida)")
+    st.caption("Confira se a unidade da coluna de Kinemática no seu sistema de captura é cm ou m.")
+    _depth_df = pd.DataFrame([
+        {"Região": d["region"], f"{ctx_a['label']}": f"{d['a_mean']:.3f} (±{d['a_std']:.3f})",
+         f"{ctx_b['label']}": f"{d['b_mean']:.3f} (±{d['b_std']:.3f})", "Conclusão": d["conclusao"]}
+        for d in _depth_rows
+    ]) if _depth_rows else None
+    if _depth_df is not None:
+        _depth_df.index = [""] * len(_depth_df)
+        st.table(_depth_df)
+    st.caption("_Interpretação automática, calculada a partir dos ciclos detectados — não substitui avaliação clínica._")
 
 st.divider()
 
@@ -875,7 +901,7 @@ for row_i, (grp, (label, unit), is_kinem) in enumerate(SIGNAL_ROWS, start=1):
                 fig.add_trace(
                     go.Scatter(
                         x=GRID, y=mean_y, mode="lines",
-                        line=dict(color=color, width=2.2, dash=dash),
+                        line=dict(color=color, width=3.2, dash=dash),
                         name=trace_key, legendgroup=trace_key,
                         showlegend=trace_key not in legend_shown,
                     ),
@@ -1138,7 +1164,7 @@ def build_tilt_combo_figure(plane, y_title, chart_title):
             ))
             anchor_note = "" if res["use_anchor"] else " (só giro)"
             fig_t.add_trace(go.Scatter(
-                x=GRID, y=m, mode="lines", line=dict(color=color, width=2.2, dash=dash),
+                x=GRID, y=m, mode="lines", line=dict(color=color, width=3.2, dash=dash),
                 name=f"{ctx['label']} - {region}{anchor_note}",
             ))
     if not any_trace:

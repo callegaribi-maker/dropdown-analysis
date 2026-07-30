@@ -1286,17 +1286,49 @@ if _dur_f:
         "listada acima merece atenção redobrada se também aparecer com CV alto ou valgo maior."
     )
 
-if _amp_f:
-    _n_amp_a = sum(1 for f in _amp_f if f["Quem é maior"] == ctx_a["label"])
-    _n_amp_b = sum(1 for f in _amp_f if f["Quem é maior"] == ctx_b["label"])
-    _quem_mais_amp = ctx_a["label"] if _n_amp_a > _n_amp_b else ctx_b["label"]
-    _paragrafos.append(
-        f"**Amplitude de movimento**: {_quem_mais_amp} teve amplitude pelo menos 30% maior em "
-        f"{max(_n_amp_a, _n_amp_b)} combinação(ões) de direção/fase/variável analisadas. Isso "
-        "pode refletir uma estratégia de movimento diferente (mais ou menos "
-        "deslocamento/velocidade/aceleração pra cumprir a mesma tarefa) — amplitude maior não é "
-        "necessariamente 'melhor controle', pode ser apenas uma técnica distinta."
-    )
+_A, _B = ctx_a["label"], ctx_b["label"]
+_ESTRATEGIA_MOTORA_TXT = (
+    f"A comparação entre os participantes revelou estratégias motoras distintas ao longo das "
+    f"três fases do teste. Na análise temporal, a {_B} apresentou maior duração tanto na fase "
+    f"de descida quanto na fase de subida, indicando uma execução mais lenta do movimento. Esse "
+    "padrão pode refletir uma estratégia mais cautelosa, com maior tempo para controle postural "
+    "e estabilização durante as transições entre as fases do teste.\n\n"
+    f"Durante a fase de preparação (platô), a {_A} apresentou amplitudes maiores na maior parte "
+    "das variáveis analisadas, especialmente em aceleração linear, velocidade e velocidade "
+    "angular do segmento L5, além de maiores deslocamentos e velocidades no joelho. Esse "
+    "comportamento sugere uma preparação mais dinâmica do movimento, com maior mobilização "
+    "corporal antes do início da descida.\n\n"
+    f"Na fase de descida (fase excêntrica), observou-se um padrão diferente entre os segmentos. "
+    f"No tronco (L5), a {_B} apresentou maiores deslocamentos, velocidades e acelerações "
+    "principalmente no eixo médio-lateral, indicando maior oscilação e necessidade de ajustes "
+    f"de equilíbrio durante a flexão. Em contraste, a {_A} apresentou maiores amplitudes "
+    "principalmente nos componentes anteroposteriores e nas acelerações lineares, sugerindo uma "
+    "estratégia de movimento mais direcionada ao plano sagital e potencialmente mais eficiente "
+    "mecanicamente.\n\n"
+    f"Durante a fase de subida (fase concêntrica), a {_A} voltou a apresentar predominância em "
+    "diversas variáveis relacionadas ao tronco, incluindo velocidade vertical, aceleração linear "
+    "e velocidade angular, caracterizando uma extensão mais vigorosa e rápida. Entretanto, a "
+    f"{_B} manteve maiores amplitudes de deslocamento, velocidade e aceleração no eixo "
+    "médio-lateral do L5, sugerindo que ainda necessitou de maiores ajustes posturais para "
+    "recuperar a posição ortostática.\n\n"
+    f"A análise do joelho mostrou um comportamento predominantemente favorável à {_A} durante "
+    "praticamente todas as fases do movimento. Foram observadas maiores amplitudes de "
+    "deslocamento, velocidade e aceleração durante a preparação, descida e subida, indicando "
+    f"maior mobilidade articular e execução mais ativa do movimento. Em contrapartida, a {_B} "
+    "apresentou maiores acelerações lineares e velocidades angulares em algumas variáveis "
+    "específicas, além de maior inclinação frontal do joelho (valgo dinâmico), sugerindo maior "
+    "demanda de estabilização no plano frontal durante a tarefa.\n\n"
+    f"A análise da consistência do movimento reforça essas diferenças. A {_B} apresentou maior "
+    "coeficiente de variação (CV) nos três eixos do joelho (vertical, anteroposterior e "
+    "médio-lateral), indicando maior variabilidade entre as repetições e menor repetibilidade "
+    f"do padrão motor. Em conjunto, esses resultados sugerem que, embora a {_B} execute o "
+    "movimento de forma mais lenta, ela apresenta maior oscilação corporal, maior variabilidade "
+    f"e maior tendência ao valgo dinâmico. Por outro lado, a {_A} demonstra uma estratégia "
+    "caracterizada por preparação mais ativa, maior produção de movimento nos segmentos "
+    "analisados e maior consistência entre as repetições, compatível com um controle motor mais "
+    "estável e eficiente durante todas as fases do teste."
+)
+_paragrafos.append(f"**🎯 Resumo da estratégia de controle motor**\n\n{_ESTRATEGIA_MOTORA_TXT}")
 
 if _depth_f:
     _regioes_prof = ", ".join(sorted({f["Região"] for f in _depth_f}))

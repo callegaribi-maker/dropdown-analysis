@@ -531,16 +531,20 @@ def _elegant_layout(fig_obj):
     return fig_obj
 
 
+NAVY = "#1e3a5f"
+NAVY_DARK = "#122540"
+
+
 def _render_slide_table(df):
     """Renderiza um DataFrame pequeno como HTML puro com estilo inline (cabeçalho
-    num azul que combina com o quadro ao redor, texto branco garantido, células
-    compactas com quebra de linha — não estica a largura). Usa estilo inline pra
-    não depender do CSS do Streamlit, que pode sobrescrever cores de texto em
-    elementos <th>/<td> gerados automaticamente."""
+    num azul-marinho que combina com o quadro ao redor, texto branco garantido,
+    células compactas com quebra de linha — não estica a largura). Usa estilo
+    inline pra não depender do CSS do Streamlit, que pode sobrescrever cores de
+    texto em elementos <th>/<td> gerados automaticamente."""
     cols = list(df.columns)
     thead_cells = "".join(
-        f'<th style="background:#1d4ed8;color:#ffffff;font-weight:700;'
-        f'padding:7px 12px;text-align:left;border-bottom:2px solid #1e3a8a;'
+        f'<th style="background:{NAVY};color:#ffffff;font-weight:700;'
+        f'padding:7px 12px;text-align:left;border-bottom:2px solid {NAVY_DARK};'
         f'white-space:normal;">{c}</th>'
         for c in cols
     )
@@ -559,6 +563,51 @@ def _render_slide_table(df):
         f"<thead><tr>{thead_cells}</tr></thead>"
         f"<tbody>{''.join(body_rows)}</tbody>"
         "</table></div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _render_duracao_table(rows, label_a, label_b):
+    """Tabela de duração das fases com cabeçalho em 2 níveis — Fase / Pessoa A
+    (Duração + % do ciclo) / Pessoa B (Duração + % do ciclo) / Diferença — em
+    azul-marinho, pra combinar com o quadro ao redor."""
+    th_top = (
+        f'background:{NAVY};color:#ffffff;font-weight:700;padding:7px 12px;'
+        f'border-bottom:1px solid rgba(255,255,255,0.25);'
+        f'border-right:1px solid rgba(255,255,255,0.25);white-space:normal;'
+    )
+    th_sub = (
+        f'background:{NAVY};color:#ffffff;font-weight:600;padding:6px 12px;'
+        f'text-align:left;border-bottom:2px solid {NAVY_DARK};'
+        f'border-right:1px solid rgba(255,255,255,0.25);white-space:normal;'
+    )
+    header_html = (
+        "<thead>"
+        f'<tr><th rowspan="2" style="{th_top}text-align:left;">Fase</th>'
+        f'<th colspan="2" style="{th_top}text-align:center;">{label_a}</th>'
+        f'<th colspan="2" style="{th_top}text-align:center;">{label_b}</th>'
+        f'<th rowspan="2" style="{th_top}text-align:left;">Diferença</th></tr>'
+        f'<tr><th style="{th_sub}">Duração</th><th style="{th_sub}">% do ciclo</th>'
+        f'<th style="{th_sub}">Duração</th><th style="{th_sub}">% do ciclo</th></tr>'
+        "</thead>"
+    )
+    body_rows = []
+    for i, (nome, stat_a, pct_a, stat_b, pct_b, diff) in enumerate(rows):
+        bg = "#ffffff" if i % 2 == 0 else "#eaf0fc"
+        vals = (
+            nome, f"{stat_a[0]:.2f}s (±{stat_a[1]:.2f})", f"{pct_a:.0f}%",
+            f"{stat_b[0]:.2f}s (±{stat_b[1]:.2f})", f"{pct_b:.0f}%", diff,
+        )
+        cells = "".join(
+            f'<td style="padding:6px 12px;border-bottom:1px solid #dbe6fb;'
+            f'color:#1a2332;background:{bg};white-space:normal;">{val}</td>'
+            for val in vals
+        )
+        body_rows.append(f"<tr>{cells}</tr>")
+    html = (
+        '<div style="overflow-x:auto;"><table style="border-collapse:collapse;'
+        'width:100%;font-size:0.92rem;font-family:Inter,sans-serif;">'
+        f"{header_html}<tbody>{''.join(body_rows)}</tbody></table></div>"
     )
     st.markdown(html, unsafe_allow_html=True)
 
@@ -867,18 +916,11 @@ with col_duracao:
             ("⬆️ Subida", _dur_a["subida"], _pct_sub_a, _dur_b["subida"], _pct_sub_b),
             ("🔁 Ciclo total", _dur_a["ciclo total"], 100.0, _dur_b["ciclo total"], 100.0),
         ]
-        _dur_df = pd.DataFrame([
-            {
-                "Fase": nome,
-                f"{ctx_a['label']}": f"{stat_a[0]:.2f}s (±{stat_a[1]:.2f})",
-                f"% do ciclo — {ctx_a['label']}": f"{pct_a:.0f}%",
-                f"{ctx_b['label']}": f"{stat_b[0]:.2f}s (±{stat_b[1]:.2f})",
-                f"% do ciclo — {ctx_b['label']}": f"{pct_b:.0f}%",
-                "Diferença": _fmt_pct_diff(stat_a, stat_b, ctx_a["label"], ctx_b["label"]),
-            }
+        _dur_rows_full = [
+            (nome, stat_a, pct_a, stat_b, pct_b, _fmt_pct_diff(stat_a, stat_b, ctx_a["label"], ctx_b["label"]))
             for nome, stat_a, pct_a, stat_b, pct_b in _dur_table_rows
-        ])
-        _render_slide_table(_dur_df)
+        ]
+        _render_duracao_table(_dur_rows_full, ctx_a["label"], ctx_b["label"])
 
 with col_profundidade:
     with st.container(key="quadro_profundidade"):

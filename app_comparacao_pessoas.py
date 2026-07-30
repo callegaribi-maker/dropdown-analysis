@@ -412,10 +412,11 @@ def phase_amplitude_stats_axis(df, df_t, colname, trial_bounds_fn, n_trials):
 
 
 # Divisão de fases em tons diferentes de uma mesma cor (navy), do mais claro (platô)
-# ao mais escuro (subida) — visual monocromático e elegante.
-PLATEAU_COLOR = "rgba(20, 33, 61, 0.06)"
-DESCIDA_COLOR = "rgba(20, 33, 61, 0.15)"
-SUBIDA_COLOR = "rgba(20, 33, 61, 0.26)"
+# ao mais escuro (subida) — visual monocromático, com saltos grandes o bastante pra
+# diferenciar bem as 3 fases mesmo em print.
+PLATEAU_COLOR = "rgba(20, 33, 61, 0.05)"
+DESCIDA_COLOR = "rgba(20, 33, 61, 0.22)"
+SUBIDA_COLOR = "rgba(20, 33, 61, 0.42)"
 
 KINEM_AXIS_LABEL = {"X": "ML", "Y": "AP", "Z": "Vertical"}
 IMU_AXIS_LABEL_JOELHO = {"X": "AP", "Y": "Vertical", "Z": "ML"}
@@ -483,11 +484,11 @@ def _elegant_layout(fig_obj):
     if fig_obj.layout.title is not None and fig_obj.layout.title.text:
         fig_obj.update_layout(title=dict(font=dict(size=19, family=ELEGANT_FONT, color="#000000")))
     fig_obj.update_xaxes(
-        gridcolor="#e9edf2", zerolinecolor="#d7dde4", linecolor="#000000",
+        showgrid=False, zeroline=False, linecolor="#000000",
         title_font=dict(size=15, color="#000000"), tickfont=dict(size=13, color="#000000"),
     )
     fig_obj.update_yaxes(
-        gridcolor="#e9edf2", zerolinecolor="#d7dde4", linecolor="#000000",
+        showgrid=False, zeroline=False, linecolor="#000000",
         title_font=dict(size=15, color="#000000"), tickfont=dict(size=13, color="#000000"),
     )
     return fig_obj

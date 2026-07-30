@@ -37,6 +37,72 @@ from scipy.signal import butter, detrend, filtfilt, find_peaks
 st.set_page_config(page_title="Dropdown Analysis - Comparação entre pessoas", layout="wide")
 
 # ----------------------------------------------------------------------------
+# Estilo visual — pensado pra ficar elegante em prints/screenshots de apresentação
+# ----------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"], [data-testid="stAppViewContainer"] {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    }
+
+    /* esconde o chrome padrão do Streamlit (menu, footer) pra prints mais limpos */
+    #MainMenu, footer, [data-testid="stToolbar"] {visibility: hidden;}
+
+    .block-container {
+        padding-top: 2.2rem;
+        padding-bottom: 3rem;
+        max-width: 1250px;
+    }
+
+    h1, h2, h3, [data-testid="stMarkdownContainer"] h1,
+    [data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3 {
+        font-weight: 700 !important;
+        color: #14213d !important;
+        letter-spacing: -0.01em;
+    }
+    h1 { font-size: 2rem !important; }
+    h3 { font-size: 1.25rem !important; }
+
+    p, li, span, label { color: #2c3440; }
+
+    /* quadros azuis — cards com sombra leve, consistentes em toda a análise */
+    div[class*="st-key-quadro_"] {
+        background-color: rgba(37, 99, 235, 0.06);
+        border: 1px solid rgba(37, 99, 235, 0.20);
+        border-radius: 0.75rem;
+        padding: 1.1rem 1.3rem;
+        box-shadow: 0 1px 4px rgba(20, 33, 61, 0.06);
+    }
+
+    /* métricas com visual de card */
+    [data-testid="stMetric"] {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 0.6rem;
+        padding: 0.9rem 1rem 0.7rem;
+    }
+    [data-testid="stMetricValue"] { font-weight: 700 !important; color: #14213d !important; }
+    [data-testid="stMetricLabel"] { font-weight: 600 !important; color: #55607a !important; }
+
+    /* tabelas com cantos arredondados e borda sutil */
+    [data-testid="stDataFrame"], [data-testid="stTable"] {
+        border: 1px solid #e2e8f0;
+        border-radius: 0.6rem;
+        overflow: hidden;
+    }
+
+    hr { margin: 1.8rem 0; border-color: #e2e8f0; }
+
+    [data-testid="stCaptionContainer"], .stCaption { color: #667085 !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ----------------------------------------------------------------------------
 # Parsing / categorização de colunas (igual ao app.py)
 # ----------------------------------------------------------------------------
 
@@ -379,13 +445,15 @@ SIGNAL_ROWS = [
 ]
 DIRECTIONS = ["Vertical", "AP", "ML"]
 
-PERSON_COLORS = {"A": "#1f77b4", "B": "#d62728"}  # A = azul, B = vermelho
+PERSON_COLORS = {"A": "#2563eb", "B": "#dc2626"}  # A = azul, B = vermelho (tons elegantes)
 REGION_DASH = {"L5": "solid", "Joelho": "dash"}
 
 H_SPACING = 0.06
 V_SPACING = 0.10
 CELL_PX = 260
 MARGIN = dict(l=10, r=10, t=50, b=10)
+
+ELEGANT_FONT = "Inter, -apple-system, 'Segoe UI', sans-serif"
 
 
 def square_fig_size(rows, cols):
@@ -396,6 +464,22 @@ def square_fig_size(rows, cols):
     width = int(round(plot_w)) + MARGIN["l"] + MARGIN["r"]
     height = int(round(plot_h)) + MARGIN["t"] + MARGIN["b"]
     return width, height
+
+
+def _elegant_layout(fig_obj):
+    """Aplica um visual consistente e elegante (fonte, cores, grid, legenda) a
+    qualquer figura Plotly da análise — pensado pra ficar bom em prints/slides."""
+    fig_obj.update_layout(
+        font=dict(family=ELEGANT_FONT, size=13, color="#2c3440"),
+        paper_bgcolor="white",
+        plot_bgcolor="#fafbfc",
+        title=dict(font=dict(size=16, family=ELEGANT_FONT, color="#14213d")),
+        legend=dict(font=dict(size=12, family=ELEGANT_FONT), bgcolor="rgba(255,255,255,0)"),
+        hoverlabel=dict(font=dict(family=ELEGANT_FONT, size=12)),
+    )
+    fig_obj.update_xaxes(gridcolor="#e9edf2", zerolinecolor="#d7dde4", linecolor="#d7dde4", title_font=dict(size=12.5))
+    fig_obj.update_yaxes(gridcolor="#e9edf2", zerolinecolor="#d7dde4", linecolor="#d7dde4", title_font=dict(size=12.5))
+    return fig_obj
 
 
 # ----------------------------------------------------------------------------
@@ -594,6 +678,7 @@ for col_i, ctx in enumerate(PERSON_CTXS, start=1):
         fig_check.add_vrect(x0=v, x1=e, fillcolor=SUBIDA_COLOR, line_width=0, layer="below", row=1, col=col_i)
 fig_check.update_xaxes(title_text="Tempo (s)")
 fig_check.update_layout(height=280, margin=dict(l=10, r=10, t=40, b=10), plot_bgcolor="white")
+_elegant_layout(fig_check)
 st.plotly_chart(fig_check, use_container_width=True)
 
 if ctx_a["n_trials"] == 0 or ctx_b["n_trials"] == 0:
@@ -801,6 +886,7 @@ fig.update_layout(
     width=w, height=h, margin=MARGIN, plot_bgcolor="white",
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
 )
+_elegant_layout(fig)
 
 col_chart, col_amp = st.columns([3, 2])
 with col_chart:
@@ -1057,6 +1143,7 @@ def build_tilt_combo_figure(plane, y_title, chart_title):
         margin=dict(l=55, r=20, t=48, b=90), plot_bgcolor="white",
         legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5),
     )
+    _elegant_layout(fig_t)
     return fig_t
 
 

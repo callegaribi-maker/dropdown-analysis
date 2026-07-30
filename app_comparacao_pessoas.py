@@ -577,6 +577,62 @@ def kinem_vs_imu_concordance(df_raw, catalog, imu_axis_label, direction, fs, sha
     }
 
 
+def trial_peak_correlation(sheets_raw, region, direction, trial_bounds_fn, n_trials):
+    """Correlação entre os PICOS de aceleração (valor absoluto máximo) da cinemática
+    e do celular, um valor por CICLO/repetição — em vez de amostra a amostra. Isso
+    responde uma pergunta diferente do r principal: será que a variação de
+    intensidade do movimento entre repetições é parecida nos dois sistemas, mesmo
+    que a forma fina da curva (r amostra-a-amostra) seja só moderada? Como usa o
+    valor absoluto do pico, não depende de detectar/corrigir inversão de eixo (o
+    pico é o mesmo independente do sinal).
+
+    ATENÇÃO: n aqui é o número de CICLOS detectados (tipicamente poucos, ex.: 5),
+    não o número de amostras — com n tão pequeno, essa correlação é
+    estatisticamente frágil (IC 95% muito largo) mesmo quando o valor parece alto.
+    Retorna None se não der pra calcular (poucos ciclos válidos ou colunas
+    ausentes)."""
+    df_raw = sheets_raw[region]
+    catalog = build_catalog(df_raw)
+    imu_axis_label = get_imu_axis_label(region)
+    kin_axis = next((ax for ax in AXES if KINEM_AXIS_LABEL[ax] == direction), None)
+    imu_axis = next((ax for ax in AXES if imu_axis_label[ax] == direction), None)
+    if kin_axis is None or imu_axis is None:
+        return None
+    kin_col = catalog.get("Cinemática - Aceleração", {}).get(kin_axis)
+    imu_col = catalog.get("IMU - Acelerômetro", {}).get(imu_axis)
+    if kin_col is None or imu_col is None:
+        return None
+    t = df_raw[time_column(df_raw)].to_numpy(dtype=float)
+    kin_full = detrend(df_raw[kin_col].to_numpy(dtype=float) / 100.0)
+    imu_full = detrend(df_raw[imu_col].to_numpy(dtype=float))
+
+    kin_peaks, imu_peaks = [], []
+    for trial_idx in range(1, n_trials + 1):
+        cycle_start, _d_start, _v_trial, cycle_end = trial_bounds_fn(trial_idx)
+        mask = (t >= cycle_start) & (t <= cycle_end)
+        if mask.sum() < 5:
+            continue
+        kin_peaks.append(float(np.max(np.abs(kin_full[mask]))))
+        imu_peaks.append(float(np.max(np.abs(imu_full[mask]))))
+
+    n = len(kin_peaks)
+    if n < 3:
+        return None
+    kin_peaks_arr, imu_peaks_arr = np.array(kin_peaks), np.array(imu_peaks)
+    if np.std(kin_peaks_arr) == 0 or np.std(imu_peaks_arr) == 0:
+        return None
+    r = float(np.corrcoef(kin_peaks_arr, imu_peaks_arr)[0, 1])
+
+    r_ci_lo = r_ci_hi = float("nan")
+    if n > 3:
+        z = np.arctanh(min(max(r, -0.999999), 0.999999))
+        se_z = 1 / np.sqrt(n - 3)
+        r_ci_lo = float(np.tanh(z - 1.96 * se_z))
+        r_ci_hi = float(np.tanh(z + 1.96 * se_z))
+
+    return {"r": r, "n": n, "r_ci_lo": r_ci_lo, "r_ci_hi": r_ci_hi}
+
+
 # Divisão de fases em tons diferentes de uma mesma cor (navy), do mais claro (platô)
 # ao mais escuro (subida) — visual monocromático, com saltos grandes o bastante pra
 # diferenciar bem as 3 fases mesmo em print.
@@ -1779,6 +1835,60 @@ else:
     st.caption(
         "Não foi possível calcular a concordância — faltam colunas de cinemática e/ou IMU "
         "necessárias em alguma pessoa/região."
+    )
+
+st.divider()
+
+# ----------------------------------------------------------------------------
+# Concordância por repetição — correlação entre picos de aceleração por ciclo
+# ----------------------------------------------------------------------------
+st.subheader("🔁 Concordância por repetição — pico de aceleração por ciclo")
+st.caption(
+    "Pergunta diferente da análise acima: em vez de comparar amostra a amostra, compara "
+    "o PICO de aceleração (valor absoluto máximo) de cada CICLO/repetição entre os dois "
+    "sistemas. Mostra se a variação de intensidade do movimento de um ciclo pro outro "
+    "(ex.: 'esse ciclo foi mais forte que o anterior') é parecida na cinemática e no "
+    "celular — independe de eventual inversão de eixo/sinal, já que usa valor absoluto."
+)
+st.warning(
+    "⚠️ O 'n' aqui é o número de CICLOS detectados por pessoa (tipicamente poucos, ex.: "
+    "5) — não o número de amostras. Com n tão pequeno, a correlação é estatisticamente "
+    "frágil: um único ciclo atípico pode mudar o resultado bastante, e o intervalo de "
+    "confiança (IC 95%) fica muito largo mesmo quando o valor de r parece alto. Reportar "
+    "com essa ressalva explícita."
+)
+
+_trial_rows = []
+for _ctx in PERSON_CTXS:
+    for _region in REGIONS:
+        for _direction in DIRECTIONS:
+            _tres = trial_peak_correlation(
+                _ctx["sheets_raw"], _region, _direction, _ctx["trial_bounds_fn"], _ctx["n_trials"]
+            )
+            if _tres is None:
+                continue
+            _trial_rows.append({
+                "Pessoa": _ctx["label"], "Região": _region, "Direção": _direction,
+                "r (picos por ciclo)": f"{_tres['r']:.2f}",
+                "IC 95% (r)": f"[{_tres['r_ci_lo']:.2f}, {_tres['r_ci_hi']:.2f}]",
+                "n (ciclos)": f"{_tres['n']}",
+            })
+
+if _trial_rows:
+    with st.container(key="quadro_concordancia_ciclo"):
+        _render_slide_table(pd.DataFrame(_trial_rows))
+        _trs = [float(_row["r (picos por ciclo)"]) for _row in _trial_rows]
+        _tr_media = sum(_trs) / len(_trs)
+        st.caption(
+            f"r médio (picos por ciclo) = {_tr_media:.2f}. De novo: com poucos ciclos por "
+            "pessoa, cada linha individual dessa tabela deve ser lida como um indício, não "
+            "como uma estimativa estatisticamente robusta — o intervalo de confiança de "
+            "cada linha mostra isso claramente."
+        )
+else:
+    st.caption(
+        "Não foi possível calcular a correlação por ciclo — faltam ciclos suficientes "
+        "(mínimo 3) em alguma combinação de pessoa/região/direção."
     )
 
 st.divider()

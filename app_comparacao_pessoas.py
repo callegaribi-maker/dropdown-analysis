@@ -57,14 +57,16 @@ st.markdown(
         padding-bottom: 3rem;
     }
 
-    h1, h2, h3, [data-testid="stMarkdownContainer"] h1,
-    [data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3 {
+    h1, h2, h3, h4, h5, [data-testid="stMarkdownContainer"] h1,
+    [data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3,
+    [data-testid="stMarkdownContainer"] h4, [data-testid="stMarkdownContainer"] h5 {
         font-weight: 700 !important;
         color: #14213d !important;
         letter-spacing: -0.01em;
     }
     h1 { font-size: 2rem !important; }
     h3 { font-size: 1.25rem !important; }
+    h5, [data-testid="stMarkdownContainer"] h5 { font-size: 1.2rem !important; }
 
     p, li, span, label { color: #2c3440; }
 
@@ -545,7 +547,7 @@ def _render_slide_table(df):
     thead_cells = "".join(
         f'<th style="background:{NAVY};color:#ffffff;font-weight:700;'
         f'padding:7px 12px;text-align:left;border-bottom:2px solid {NAVY_DARK};'
-        f'white-space:normal;">{c}</th>'
+        f'vertical-align:middle;white-space:normal;">{c}</th>'
         for c in cols
     )
     body_rows = []
@@ -573,12 +575,12 @@ def _render_duracao_table(rows, label_a, label_b):
     azul-marinho, pra combinar com o quadro ao redor."""
     th_top = (
         f'background:{NAVY};color:#ffffff;font-weight:700;padding:7px 12px;'
-        f'border-bottom:1px solid rgba(255,255,255,0.25);'
+        f'border-bottom:1px solid rgba(255,255,255,0.25);vertical-align:middle;'
         f'border-right:1px solid rgba(255,255,255,0.25);white-space:normal;'
     )
     th_sub = (
         f'background:{NAVY};color:#ffffff;font-weight:600;padding:6px 12px;'
-        f'text-align:left;border-bottom:2px solid {NAVY_DARK};'
+        f'text-align:left;border-bottom:2px solid {NAVY_DARK};vertical-align:middle;'
         f'border-right:1px solid rgba(255,255,255,0.25);white-space:normal;'
     )
     header_html = (

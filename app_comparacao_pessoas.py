@@ -450,6 +450,40 @@ def phase_amplitude_stats_axis(df, df_t, colname, trial_bounds_fn, n_trials):
     return out
 
 
+def kinem_vs_imu_concordance(df, catalog, imu_axis_label, direction):
+    """Compara a aceleração da cinemática com a do IMU (celular), na mesma direção
+    anatômica, usando os sinais JÁ FILTRADOS (filter_dataframe aplica detrend em
+    ambos — isso remove o offset de gravidade do acelerômetro bruto, tornando os
+    dois sinais comparáveis em forma/dinâmica, não em valor absoluto).
+
+    Unidade: cinemática vem em cm/s², IMU em m/s² — convertida aqui pra m/s².
+    Retorna None se faltar alguma das duas colunas ou dados insuficientes."""
+    kin_axis = next((ax for ax in AXES if KINEM_AXIS_LABEL[ax] == direction), None)
+    imu_axis = next((ax for ax in AXES if imu_axis_label[ax] == direction), None)
+    if kin_axis is None or imu_axis is None:
+        return None
+    kin_col = catalog.get("Cinemática - Aceleração", {}).get(kin_axis)
+    imu_col = catalog.get("IMU - Acelerômetro", {}).get(imu_axis)
+    if kin_col is None or imu_col is None:
+        return None
+    kin = df[kin_col].to_numpy(dtype=float) / 100.0  # cm/s² -> m/s²
+    imu = df[imu_col].to_numpy(dtype=float)
+    mask = ~(np.isnan(kin) | np.isnan(imu))
+    kin, imu = kin[mask], imu[mask]
+    if len(kin) < 10 or np.std(kin) == 0 or np.std(imu) == 0:
+        return None
+    r = float(np.corrcoef(kin, imu)[0, 1])
+    diff = imu - kin
+    rmse = float(np.sqrt(np.mean(diff ** 2)))
+    bias = float(np.mean(diff))
+    sd_diff = float(np.std(diff))
+    return {
+        "r": r, "rmse": rmse, "bias": bias,
+        "loa_lower": bias - 1.96 * sd_diff, "loa_upper": bias + 1.96 * sd_diff,
+        "n": len(kin),
+    }
+
+
 # Divisão de fases em tons diferentes de uma mesma cor (navy), do mais claro (platô)
 # ao mais escuro (subida) — visual monocromático, com saltos grandes o bastante pra
 # diferenciar bem as 3 fases mesmo em print.
@@ -1579,6 +1613,62 @@ with st.container(key="quadro_resumo_achados"):
         f"- **Síntese geral**: {_A} apresentou um padrão de movimento mais dinâmico, consistente e "
         f"estável, enquanto a {_B} adotou uma estratégia mais lenta e cautelosa, com maior demanda "
         "de estabilização postural e maior variabilidade motora."
+    )
+
+st.divider()
+
+# ----------------------------------------------------------------------------
+# Validação — concordância entre a cinemática e o acelerômetro do celular (IMU)
+# ----------------------------------------------------------------------------
+st.subheader("🔬 Validação — Cinemática × Celular (IMU)")
+st.caption(
+    "Compara a aceleração medida pela cinemática com a do acelerômetro do celular, na "
+    "mesma direção anatômica, pra ver o quanto os dois sistemas concordam. Os dois "
+    "sinais já passam por filtro + remoção de tendência (o que também retira o efeito "
+    "da gravidade do acelerômetro bruto), então a comparação é sobre a forma/dinâmica "
+    "do sinal, não o valor absoluto. **r** = correlação de Pearson (1 = concordância "
+    "perfeita); RMSE e viés em m/s²; limites de concordância = Bland-Altman (±1.96 DP)."
+)
+
+_conc_rows = []
+for _ctx in PERSON_CTXS:
+    for _region in REGIONS:
+        _df_r = _ctx["sheets"][_region]
+        _catalog_r = build_catalog(_df_r)
+        _imu_axis_r = get_imu_axis_label(_region)
+        for _direction in DIRECTIONS:
+            _res = kinem_vs_imu_concordance(_df_r, _catalog_r, _imu_axis_r, _direction)
+            if _res is None:
+                continue
+            _conc_rows.append({
+                "Pessoa": _ctx["label"], "Região": _region, "Direção": _direction,
+                "r (Pearson)": f"{_res['r']:.2f}",
+                "RMSE (m/s²)": f"{_res['rmse']:.2f}",
+                "Viés (m/s²)": f"{_res['bias']:+.2f}",
+                "Limites de concordância": f"{_res['loa_lower']:+.2f} a {_res['loa_upper']:+.2f}",
+            })
+
+if _conc_rows:
+    with st.container(key="quadro_concordancia"):
+        _render_slide_table(pd.DataFrame(_conc_rows))
+        _rs = [float(_row["r (Pearson)"]) for _row in _conc_rows]
+        _r_media = sum(_rs) / len(_rs)
+        _n_boa = sum(1 for _r in _rs if _r >= 0.7)
+        _n_mod = sum(1 for _r in _rs if 0.4 <= _r < 0.7)
+        _n_fraca = sum(1 for _r in _rs if _r < 0.4)
+        _label_geral = "boa" if _r_media >= 0.7 else ("moderada" if _r_media >= 0.4 else "fraca")
+        st.caption(
+            f"Concordância média (r) entre os dois sistemas: {_r_media:.2f} — considerada "
+            f"**{_label_geral}** (referência comum: r ≥ 0.7 = boa, 0.4–0.7 = moderada, < 0.4 = "
+            f"fraca). De {len(_rs)} combinações região/direção/pessoa: {_n_boa} com boa "
+            f"concordância, {_n_mod} moderada e {_n_fraca} fraca. Isso não valida o celular como "
+            "substituto clínico da cinemática — é um indicador de quão parecidos os dois sinais "
+            "se comportam nesse teste específico."
+        )
+else:
+    st.caption(
+        "Não foi possível calcular a concordância — faltam colunas de cinemática e/ou IMU "
+        "necessárias em alguma pessoa/região."
     )
 
 st.divider()

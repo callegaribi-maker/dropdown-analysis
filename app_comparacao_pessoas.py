@@ -467,7 +467,11 @@ def kinem_vs_imu_concordance(df_raw, catalog, imu_axis_label, direction, fs, sha
 
     Unidade: cinemática vem em cm/s², IMU em m/s² — convertida aqui pra m/s².
     "Viés" não é calculado: como os dois sinais são detrend, a diferença média
-    sempre daria ~0 por construção, não é um resultado real.
+    sempre daria ~0 por construção, não é um resultado real. Além de r e RMSE,
+    também calcula CCC (concordância de Lin — penaliza diferença de escala/
+    amplitude, não só se as curvas andam juntas no tempo) e SEM/MDC95 (erro
+    padrão de medida / mínima mudança detectável, a partir do desvio-padrão da
+    diferença ponto-a-ponto entre os dois sinais).
     Retorna None se faltar alguma das duas colunas ou dados insuficientes."""
     kin_axis = next((ax for ax in AXES if KINEM_AXIS_LABEL[ax] == direction), None)
     imu_axis = next((ax for ax in AXES if imu_axis_label[ax] == direction), None)
@@ -522,8 +526,33 @@ def kinem_vs_imu_concordance(df_raw, catalog, imu_axis_label, direction, fs, sha
     if sign_flip:
         b = -b
     rmse = float(np.sqrt(np.mean((a - b) ** 2)))
+
+    # CCC (Lin's concordance correlation coefficient): diferente do r, também
+    # penaliza diferença de ESCALA/amplitude entre os dois sinais (não só se eles
+    # "andam juntos" no tempo) — duas curvas com o mesmo formato mas amplitudes
+    # bem diferentes dão r alto mas CCC mais baixo. A parte de deslocamento médio
+    # (mu_a - mu_b) fica perto de 0 por causa do detrend, então aqui o CCC reflete
+    # sobretudo a concordância de escala entre os dois sistemas.
+    mean_a, mean_b = float(np.mean(a)), float(np.mean(b))
+    var_a, var_b = float(np.var(a)), float(np.var(b))
+    covar = float(np.mean((a - mean_a) * (b - mean_b)))
+    denom = var_a + var_b + (mean_a - mean_b) ** 2
+    ccc = (2 * covar) / denom if denom != 0 else 0.0
+
+    # SEM (erro padrão de medida) e MDC95 (mínima mudança detectável), calculados a
+    # partir do desvio-padrão da diferença ponto-a-ponto entre os dois sinais —
+    # abordagem padrão pra comparação entre dois instrumentos/métodos (em vez de
+    # teste-reteste do mesmo instrumento), tratando os dois sistemas como igualmente
+    # confiáveis (Stratford & Goldsmith). SEM = SD(diferença) / sqrt(2);
+    # MDC95 = 1.96 * sqrt(2) * SEM = 1.96 * SD(diferença). Aqui a "diferença" é
+    # calculada amostra a amostra dentro do sinal (não entre tentativas/pessoas).
+    sd_diff = float(np.std(a - b))
+    sem = sd_diff / np.sqrt(2)
+    mdc95 = 1.96 * np.sqrt(2) * sem
+
     return {
-        "r": abs(best_r), "rmse": rmse, "n": n,
+        "r": abs(best_r), "rmse": rmse, "n": n, "ccc": ccc,
+        "sem": sem, "mdc95": mdc95,
         "lag_s": best_lag / fs, "sign_flip": sign_flip,
     }
 
@@ -1671,13 +1700,18 @@ st.caption(
     "calculada só dentro da própria pessoa/região/direção, comparando os dois sinais "
     "amostra a amostra ao longo de toda a gravação (não é uma comparação entre as duas "
     "pessoas — 'n' é o número de pontos no tempo usados, não o número de sujeitos). Pra "
-    "ser uma comparação justa: os dois sinais usam o MESMO corte de filtro (em vez dos "
-    "cortes diferentes da barra lateral), a melhor defasagem temporal entre os dois "
-    "sistemas é buscada automaticamente (± 0.5 s — corrige pequenos erros de sincronismo "
-    "sem alterar o sinal em si) e uma possível inversão de eixo/sinal entre os sistemas é "
-    "detectada e reportada (coluna 'Eixo invertido'). **r** = correlação de Pearson (1 = "
-    "concordância perfeita); RMSE = erro médio quadrático em m/s². 'Viés' não é mostrado: "
-    "como os dois sinais são detrend, a diferença média sempre daria ~0 por construção."
+    "ser uma comparação justa, por trás dos panos: os dois sinais usam o MESMO corte de "
+    "filtro (em vez dos cortes diferentes da barra lateral), a melhor defasagem temporal "
+    "entre os dois sistemas é buscada e corrigida automaticamente, e uma possível inversão "
+    "de eixo/sinal entre os sistemas é detectada e corrigida. **r** = correlação de Pearson "
+    "(1 = concordância perfeita, mas só mede se as curvas andam juntas, não se têm a mesma "
+    "amplitude); **CCC** = concordância de Lin, mais rigorosa — também penaliza diferença "
+    "de escala/amplitude entre os dois sinais; **RMSE** = erro médio quadrático (m/s²); "
+    "**SEM** = erro padrão de medida (m/s²), a partir do desvio-padrão da diferença ponto-a-"
+    "ponto entre os dois sinais; **MDC95** = mínima mudança detectável (m/s²) — abaixo desse "
+    "valor, uma diferença entre os dois sistemas pode ser apenas ruído de medição, não uma "
+    "mudança real. 'Viés' não é mostrado: como os dois sinais são detrend, a diferença média "
+    "sempre daria ~0 por construção."
 )
 
 _shared_cutoff = min(kinem_cutoff, imu_cutoff)
@@ -1699,9 +1733,10 @@ for _ctx in PERSON_CTXS:
             _conc_rows.append({
                 "Pessoa": _ctx["label"], "Região": _region, "Direção": _direction,
                 "r (Pearson)": f"{_res['r']:.2f}",
+                "CCC (Lin)": f"{_res['ccc']:.2f}",
                 "RMSE (m/s²)": f"{_res['rmse']:.2f}",
-                "Lag (s)": f"{_res['lag_s']:+.2f}",
-                "Eixo invertido": "Sim" if _res["sign_flip"] else "Não",
+                "SEM (m/s²)": f"{_res['sem']:.2f}",
+                "MDC95 (m/s²)": f"{_res['mdc95']:.2f}",
                 "n (amostras)": f"{_res['n']}",
             })
 
@@ -1709,18 +1744,20 @@ if _conc_rows:
     with st.container(key="quadro_concordancia"):
         _render_slide_table(pd.DataFrame(_conc_rows))
         _rs = [float(_row["r (Pearson)"]) for _row in _conc_rows]
+        _cccs = [float(_row["CCC (Lin)"]) for _row in _conc_rows]
         _r_media = sum(_rs) / len(_rs)
+        _ccc_media = sum(_cccs) / len(_cccs)
         _n_boa = sum(1 for _r in _rs if _r >= 0.7)
         _n_mod = sum(1 for _r in _rs if 0.4 <= _r < 0.7)
         _n_fraca = sum(1 for _r in _rs if _r < 0.4)
         _label_geral = "boa" if _r_media >= 0.7 else ("moderada" if _r_media >= 0.4 else "fraca")
         st.caption(
-            f"Concordância média (r) entre os dois sistemas: {_r_media:.2f} — considerada "
-            f"**{_label_geral}** (referência comum: r ≥ 0.7 = boa, 0.4–0.7 = moderada, < 0.4 = "
-            f"fraca). De {len(_rs)} combinações região/direção/pessoa: {_n_boa} com boa "
-            f"concordância, {_n_mod} moderada e {_n_fraca} fraca. Isso não valida o celular como "
-            "substituto clínico da cinemática — é um indicador de quão parecidos os dois sinais "
-            "se comportam nesse teste específico."
+            f"Concordância média entre os dois sistemas: r = {_r_media:.2f}, CCC = "
+            f"{_ccc_media:.2f} — considerada **{_label_geral}** (referência comum: ≥ 0.7 = boa, "
+            f"0.4–0.7 = moderada, < 0.4 = fraca). De {len(_rs)} combinações região/direção/pessoa: "
+            f"{_n_boa} com boa concordância (r), {_n_mod} moderada e {_n_fraca} fraca. Isso não "
+            "valida o celular como substituto clínico da cinemática — é um indicador de quão "
+            "parecidos os dois sinais se comportam nesse teste específico."
         )
 else:
     st.caption(

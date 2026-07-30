@@ -110,10 +110,14 @@ st.markdown(
         word-wrap: break-word;
         overflow-wrap: break-word;
     }
+    /* esconde a coluna de índice em branco (pandas gera <th> nas linhas do corpo) */
+    [data-testid="stTable"] tbody th, [data-testid="stTable"] thead th:first-child {
+        display: none;
+    }
     [data-testid="stTable"] thead th {
-        background-color: #1f2937;
-        color: #ffffff;
-        font-weight: 700;
+        background-color: #1f2937 !important;
+        color: #ffffff !important;
+        font-weight: 700 !important;
         padding: 0.45rem 0.6rem;
         text-align: left;
         border-bottom: 2px solid #111827;
@@ -121,7 +125,7 @@ st.markdown(
     [data-testid="stTable"] tbody td {
         padding: 0.4rem 0.6rem;
         border-bottom: 1px solid #e5e7eb;
-        color: #1a2332;
+        color: #1a2332 !important;
         background-color: #ffffff;
     }
     [data-testid="stTable"] tbody tr:last-child td { border-bottom: none; }
@@ -841,6 +845,18 @@ with st.container(key="quadro_duracao"):
     ])
     _dur_df.index = [""] * len(_dur_df)
     st.table(_dur_df)
+
+with st.container(key="quadro_profundidade"):
+    st.markdown("##### 📏 Deslocamento vertical líquido na descida")
+    st.caption("Confira se a unidade da coluna de Kinemática no seu sistema de captura é cm ou m.")
+    _depth_df = pd.DataFrame([
+        {"Região": d["region"], f"{ctx_a['label']}": f"{d['a_mean']:.3f} (±{d['a_std']:.3f})",
+         f"{ctx_b['label']}": f"{d['b_mean']:.3f} (±{d['b_std']:.3f})", "Conclusão": d["conclusao"]}
+        for d in _depth_rows
+    ]) if _depth_rows else None
+    if _depth_df is not None:
+        _depth_df.index = [""] * len(_depth_df)
+        st.table(_depth_df)
     st.caption("_Interpretação automática, calculada a partir dos ciclos detectados — não substitui avaliação clínica._")
 
 st.divider()

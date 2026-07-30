@@ -490,10 +490,10 @@ DIRECTIONS = ["Vertical", "AP", "ML"]
 PERSON_COLORS = {"A": "#2563eb", "B": "#dc2626"}  # A = azul, B = vermelho (tons elegantes)
 REGION_DASH = {"L5": "solid", "Joelho": "dash"}
 
-H_SPACING = 0.06
-V_SPACING = 0.10
+H_SPACING = 0.10
+V_SPACING = 0.14
 CELL_PX = 260
-MARGIN = dict(l=10, r=10, t=50, b=10)
+MARGIN = dict(l=10, r=10, t=90, b=10)
 
 ELEGANT_FONT = "Inter, -apple-system, 'Segoe UI', sans-serif"
 
@@ -556,10 +556,14 @@ def _render_slide_table(df, highlights=None):
     body_rows = []
     for i, (_, row) in enumerate(df.iterrows()):
         bg_row = "#ffffff" if i % 2 == 0 else "#eaf0fc"
-        target_col = highlights[i] if highlights else None
+        target = highlights[i] if highlights else None
+        if isinstance(target, tuple):
+            target_col, target_bg = target
+        else:
+            target_col, target_bg = target, "#ffe066"
         cells = "".join(
             f'<td style="padding:6px 12px;border-bottom:1px solid #dbe6fb;'
-            f'color:#1a2332;background:{"#ffe066" if c == target_col else bg_row};'
+            f'color:#1a2332;background:{target_bg if c == target_col else bg_row};'
             f'white-space:normal;">{row[c]}</td>'
             for c in cols
         )
@@ -1026,7 +1030,7 @@ fig.update_yaxes(showgrid=False)
 w, h = square_fig_size(len(SIGNAL_ROWS), len(DIRECTIONS))
 fig.update_layout(
     width=w, height=h, margin=MARGIN, plot_bgcolor="white",
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    legend=dict(orientation="h", yanchor="bottom", y=1.035, xanchor="left", x=0),
 )
 _elegant_layout(fig)
 
@@ -1160,15 +1164,16 @@ for region in REGIONS:
                 "Menos consistente": "n/d (deslocamento ≈ 0)",
             })
 
-st.markdown("##### 🔄 Consistência entre repetições (CV)")
-st.caption(
-    "CV = quanto o deslocamento líquido varia de um ciclo pro outro (quanto maior, menos "
-    "consistente/controlado). Quando o deslocamento é perto de zero o CV% não é confiável — "
-    "nesses casos mostramos o DP absoluto e marcamos como 'n/d'."
-)
-if _cv_rows:
-    st.dataframe(pd.DataFrame(_cv_rows), use_container_width=True, hide_index=True)
-st.caption("⚠️ = diferença de pelo menos 30% entre as pessoas nesse ponto.")
+with st.container(key="quadro_cv"):
+    st.markdown("##### 🔄 Consistência entre repetições (CV)")
+    st.caption(
+        "CV = quanto o deslocamento líquido varia de um ciclo pro outro (quanto maior, menos "
+        "consistente/controlado). Quando o deslocamento é perto de zero o CV% não é confiável — "
+        "nesses casos mostramos o DP absoluto e marcamos como 'n/d'."
+    )
+    if _cv_rows:
+        _render_slide_table(pd.DataFrame(_cv_rows))
+    st.caption("⚠️ = diferença de pelo menos 30% entre as pessoas nesse ponto.")
 
 st.divider()
 
@@ -1268,18 +1273,18 @@ def build_tilt_combo_figure(plane, y_title, chart_title):
         fig_t.add_vline(x=ctx["d_frac"], line_dash="dot", line_color=ctx["color"], opacity=0.6)
         fig_t.add_vline(x=ctx["v_frac"], line_dash="dot", line_color=ctx["color"], opacity=0.6)
     fig_t.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
-    fig_t.update_yaxes(showgrid=False, title_text=y_title)
+    fig_t.update_yaxes(showgrid=False, title_text=y_title, title_standoff=10)
     fig_t.update_layout(
-        title=dict(text=chart_title, y=0.98, yanchor="top"),
+        title=dict(text=chart_title, y=0.99, yanchor="top", x=0.5, xanchor="center"),
         width=TILT_SQUARE_PX, height=TILT_SQUARE_PX,
-        margin=dict(l=55, r=20, t=48, b=90), plot_bgcolor="white",
-        legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5),
+        margin=dict(l=70, r=20, t=72, b=100), plot_bgcolor="white",
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5),
     )
     _elegant_layout(fig_t)
     return fig_t
 
 
-TILT_SQUARE_PX = 420
+TILT_SQUARE_PX = 540
 
 
 st.subheader("📐 Inclinação (frontal / sagital) — Pessoa A × Pessoa B, L5 × Joelho")
@@ -1327,11 +1332,10 @@ _sagital_has_data = False
 
 col_frontal, col_sagital = st.columns(2)
 with col_frontal:
-    fig_frontal = build_tilt_combo_figure(
-        "frontal", "Δ ângulo (°) — positivo = lateral, negativo = medial", "Inclinação frontal (ML)"
-    )
+    fig_frontal = build_tilt_combo_figure("frontal", "Δ ângulo (°)", "Inclinação frontal (ML)")
     if fig_frontal is not None:
         st.plotly_chart(fig_frontal, use_container_width=False, key="tilt_frontal")
+        st.caption("Positivo = lateral, negativo = medial.")
         _peaks_f = _tilt_peak_summary("frontal")
         if ("A", "Joelho") in _peaks_f and ("B", "Joelho") in _peaks_f:
             pa, pb = _peaks_f[("A", "Joelho")], _peaks_f[("B", "Joelho")]
@@ -1357,7 +1361,7 @@ with col_frontal:
                         "Maior valgo": "⚠️ sim" if quem_mais_valgo == ctx_b["label"] else "",
                     },
                 ]
-                st.dataframe(pd.DataFrame(_valgo_rows), use_container_width=True, hide_index=True)
+                _render_slide_table(pd.DataFrame(_valgo_rows))
                 st.caption(
                     f"**{quem_mais_valgo}** tem o pico de inclinação medial maior — indicador de mais "
                     "valgo dinâmico do joelho. Proxy por 1 sensor — não substitui avaliação clínica."
@@ -1366,11 +1370,10 @@ with col_frontal:
         st.caption("Não foi possível calcular a inclinação frontal — faltam colunas de ACC/GYR necessárias.")
 
 with col_sagital:
-    fig_sagital = build_tilt_combo_figure(
-        "sagital", "Δ ângulo (°) — positivo = anterior, negativo = posterior", "Inclinação sagital (AP)"
-    )
+    fig_sagital = build_tilt_combo_figure("sagital", "Δ ângulo (°)", "Inclinação sagital (AP)")
     if fig_sagital is not None:
         st.plotly_chart(fig_sagital, use_container_width=False, key="tilt_sagital")
+        st.caption("Positivo = anterior, negativo = posterior.")
         _div_rows = []
         for ctx in PERSON_CTXS:
             res_l5 = compute_tilt_curve(ctx["sheets_raw"], ctx["sheets"], "L5", ctx["trial_bounds_fn"], ctx["n_trials"], "sagital")
@@ -1388,7 +1391,7 @@ with col_sagital:
             _sagital_has_data = True
             with st.container(key="quadro_sagital"):
                 st.markdown("**↕️ Divergência L5 × Joelho** (plano sagital)")
-                st.dataframe(pd.DataFrame(_div_rows), use_container_width=True, hide_index=True)
+                _render_slide_table(pd.DataFrame(_div_rows))
                 st.caption(
                     "O quanto o joelho se inclina diferente do tronco/pelve — esperado ser grande, já "
                     "que o joelho flexiona bem mais que o tronco numa descida. Divergência parecida "
@@ -1434,31 +1437,25 @@ if FINDINGS:
     _findings_df = pd.DataFrame(FINDINGS)[
         ["Categoria", "Região", "Detalhe", "Quem é maior", "Interpretação fisiológica"]
     ]
-
-    def _highlight_person(row):
-        styles = pd.Series("", index=row.index)
-        color = ctx_a["color"] if row["Quem é maior"] == ctx_a["label"] else (
-            ctx_b["color"] if row["Quem é maior"] == ctx_b["label"] else None
+    _findings_highlights = []
+    for _f in FINDINGS:
+        _color = ctx_a["color"] if _f["Quem é maior"] == ctx_a["label"] else (
+            ctx_b["color"] if _f["Quem é maior"] == ctx_b["label"] else None
         )
-        if color:
-            styles["Quem é maior"] = f"background-color: {hex_to_rgba(color, 0.25)}; font-weight: 600"
-        return styles
+        _findings_highlights.append(("Quem é maior", hex_to_rgba(_color, 0.30)) if _color else None)
 
-    try:
-        _findings_styled = _findings_df.style.apply(_highlight_person, axis=1).hide(axis="index")
-        st.dataframe(_findings_styled, use_container_width=True, height=min(60 + 40 * len(_findings_df), 600))
-    except Exception:
-        st.dataframe(_findings_df, use_container_width=True, hide_index=True, height=min(60 + 40 * len(_findings_df), 600))
+    with st.container(key="quadro_resumo"):
+        _render_slide_table(_findings_df, highlights=_findings_highlights)
 
-    _count_a = sum(1 for f in FINDINGS if f["Quem é maior"] == ctx_a["label"])
-    _count_b = sum(1 for f in FINDINGS if f["Quem é maior"] == ctx_b["label"])
-    st.caption(
-        f"{ctx_a['label']} aparece como \"maior\" em {_count_a} achado(s); "
-        f"{ctx_b['label']} aparece em {_count_b} achado(s). Isso NÃO é uma pontuação de "
-        "\"quem é melhor/pior\" — cada achado tem um significado fisiológico próprio "
-        "(ex.: descida mais longa pode ser controle motor melhor OU falta de força; "
-        "leia a interpretação de cada linha, não só a contagem)."
-    )
+        _count_a = sum(1 for f in FINDINGS if f["Quem é maior"] == ctx_a["label"])
+        _count_b = sum(1 for f in FINDINGS if f["Quem é maior"] == ctx_b["label"])
+        st.caption(
+            f"{ctx_a['label']} aparece como \"maior\" em {_count_a} achado(s); "
+            f"{ctx_b['label']} aparece em {_count_b} achado(s). Isso NÃO é uma pontuação de "
+            "\"quem é melhor/pior\" — cada achado tem um significado fisiológico próprio "
+            "(ex.: descida mais longa pode ser controle motor melhor OU falta de força; "
+            "leia a interpretação de cada linha, não só a contagem)."
+        )
 else:
     st.info(
         "Nenhuma diferença relevante foi encontrada acima dos limites definidos em cada "

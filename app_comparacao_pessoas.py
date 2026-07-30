@@ -65,7 +65,7 @@ st.markdown(
         letter-spacing: -0.01em;
     }
     h1 { font-size: 2rem !important; }
-    h3 { font-size: 1.25rem !important; }
+    h3 { font-size: 1.55rem !important; }
     h5, [data-testid="stMarkdownContainer"] h5 { font-size: 1.2rem !important; }
 
     p, li, span, label { color: #2c3440; }

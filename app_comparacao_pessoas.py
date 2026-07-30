@@ -545,7 +545,7 @@ def _render_slide_table(df, highlights=None):
     texto em elementos <th>/<td> gerados automaticamente.
 
     `highlights`, se passado, é uma lista (1 por linha) com o nome da coluna a
-    destacar em amarelo naquela linha, ou None se nenhuma."""
+    destacar em azul naquela linha, ou None se nenhuma."""
     cols = list(df.columns)
     thead_cells = "".join(
         f'<th style="background:{NAVY};color:#ffffff;font-weight:700;'
@@ -560,7 +560,7 @@ def _render_slide_table(df, highlights=None):
         if isinstance(target, tuple):
             target_col, target_bg = target
         else:
-            target_col, target_bg = target, "#ffe066"
+            target_col, target_bg = target, "#b3c1f2"
         cells = "".join(
             f'<td style="padding:6px 12px;border-bottom:1px solid #dbe6fb;'
             f'color:#1a2332;background:{target_bg if c == target_col else bg_row};'
@@ -1057,7 +1057,7 @@ st.markdown("##### 📐 Amplitude por fase (pico-a-pico do sinal, média ± DP e
 st.caption(
     "Para cada variável (Deslocamento, Velocidade, Aceleração, ACC, GYR), em cada "
     "direção anatômica (Vertical/AP/ML), separada por platô/descida/subida, uma "
-    f"tabela por região. Em amarelo: diferenças de pelo menos {_AMP_HIGHLIGHT_PCT*100:.0f}% "
+    f"tabela por região. Em azul: diferenças de pelo menos {_AMP_HIGHLIGHT_PCT*100:.0f}% "
     "entre as duas pessoas (a menor delas fica sem destaque)."
 )
 
@@ -1469,164 +1469,102 @@ st.divider()
 # ----------------------------------------------------------------------------
 st.subheader("🩺 Leitura clínica — controle motor comparativo")
 
-_cv_f = [f for f in FINDINGS if f["Categoria"] == "Consistência (CV)"]
-_valgo_f = [f for f in FINDINGS if f["Categoria"] == "Valgo dinâmico"]
-_dur_f = [f for f in FINDINGS if f["Categoria"] == "Duração de fase"]
-_amp_f = [f for f in FINDINGS if f["Categoria"] == "Amplitude por fase"]
-_depth_f = [f for f in FINDINGS if f["Categoria"] == "Profundidade"]
-
-_cv_count_a = sum(1 for f in _cv_f if f["Quem é maior"] == ctx_a["label"])
-_cv_count_b = sum(1 for f in _cv_f if f["Quem é maior"] == ctx_b["label"])
-_valgo_count_a = sum(1 for f in _valgo_f if f["Quem é maior"] == ctx_a["label"])
-_valgo_count_b = sum(1 for f in _valgo_f if f["Quem é maior"] == ctx_b["label"])
-
 _A, _B = ctx_a["label"], ctx_b["label"]
 
-# ---- Ritmo do movimento -----------------------------------------------------
-if _dur_f:
-    _dur_bits = []
-    for f in _dur_f:
-        _fase = f["Detalhe"]
-        _mais_longa = f["Quem é maior"]
-        _mais_curta = _B if _mais_longa == _A else _A
-        _dur_bits.append(f"{_fase} ({_mais_longa} demora mais, {_mais_curta} é mais rápida)")
-    _ritmo_txt = (
-        "no **ritmo do movimento**, houve diferença de pelo menos 20% na duração de "
-        + "; ".join(_dur_bits) + " — fase de descida mais longa costuma indicar controle "
-        "excêntrico mais cauteloso, enquanto uma fase mais curta pode indicar mais "
-        "confiança/força ou, inversamente, um movimento mais 'largado', com menos controle"
-    )
-else:
-    _ritmo_txt = "no **ritmo do movimento**, as durações de fase ficaram parecidas entre as duas pessoas"
-
-# ---- Consistência do movimento (CV) ----------------------------------------
-if _cv_f:
-    if _cv_count_a == _cv_count_b:
-        _cv_txt = (
-            f"quanto à **consistência do movimento** — o proxy mais direto de controle motor "
-            f"aqui, por medir o quanto o padrão se repete ciclo a ciclo — {_A} e {_B} tiveram "
-            f"número parecido de combinações região/direção com CV mais alto ({_cv_count_a} vs "
-            f"{_cv_count_b}), sem um padrão claro de quem repete o movimento de forma mais "
-            "controlada"
-        )
-    else:
-        _menos_consistente = _A if _cv_count_a > _cv_count_b else _B
-        _mais_consistente = _B if _menos_consistente == _A else _A
-        _cv_txt = (
-            f"quanto à **consistência do movimento** — o proxy mais direto de controle motor "
-            f"aqui — {_menos_consistente} teve CV mais alto em mais combinações região/direção "
-            f"({max(_cv_count_a, _cv_count_b)} vs {min(_cv_count_a, _cv_count_b)}), sugerindo "
-            f"repetições um pouco menos uniformes que {_mais_consistente}, o que pode refletir "
-            "controle motor, fadiga acumulada ao longo das tentativas ou menor familiaridade "
-            "com o movimento"
-        )
-else:
-    _cv_txt = (
-        "quanto à **consistência do movimento**, não houve diferença relevante de CV entre as "
-        "duas pessoas — ambas repetiram o movimento de forma parecida ciclo a ciclo"
-    )
-
-# ---- Controle frontal do joelho (valgo dinâmico) ---------------------------
-if _valgo_f:
-    _quem_valgo = _valgo_f[0]["Quem é maior"]
-    _valgo_txt = (
-        f"em relação ao **controle frontal do joelho**, {_quem_valgo} apresentou pico de "
-        "inclinação medial (valgo dinâmico) maior, o que costuma estar associado a menor "
-        "controle de quadril/joelho nesse plano durante a descida (ex.: fraqueza de glúteo "
-        "médio/rotadores externos de quadril) — vale confirmar com avaliação funcional "
-        "presencial, já que aqui é uma estimativa por 1 sensor, não o ângulo articular real"
-    )
-else:
-    _valgo_txt = (
-        "em relação ao **controle frontal do joelho**, o pico de inclinação medial ficou "
-        "parecido entre as duas pessoas, sem sinal de valgo dinâmico assimétrico relevante"
-    )
-
-# ---- Profundidade do movimento ---------------------------------------------
-if _depth_f:
-    _regioes_prof = ", ".join(sorted({f["Região"] for f in _depth_f}))
-    _prof_txt = (
-        f"e, na profundidade do movimento, houve diferença real (acima da variação normal "
-        f"entre ciclos) na região {_regioes_prof} — descer menos pode indicar limitação de "
-        "mobilidade ou estratégia de proteção, e descer mais pode indicar maior "
-        "mobilidade/confiança"
-    )
-else:
-    _prof_txt = "e a profundidade do movimento ficou equivalente entre as duas pessoas"
-
-# ---- Fechamento -------------------------------------------------------------
-if not FINDINGS:
-    _fechamento = (
-        f"No geral, {_A} e {_B} tiveram um padrão de movimento bastante parecido em todas as "
-        "medidas analisadas — não há, nesse teste, sinal de diferença relevante de controle "
-        "motor entre as duas pessoas."
-    )
-else:
-    _eixo_principal = (
-        "a consistência do movimento e o controle frontal do joelho" if (_cv_f or _valgo_f)
-        else "o ritmo e a amplitude do movimento"
-    )
-    _fechamento = (
-        f"No geral, o achado mais relevante para controle motor entre {_A} e {_B} é "
-        f"{_eixo_principal} — os demais achados (ritmo, amplitude, profundidade) tendem a "
-        "refletir mais estratégia/técnica de movimento do que controle motor propriamente "
-        "dito. Essa síntese é gerada automaticamente a partir dos limiares definidos no app e "
-        "não substitui avaliação clínica presencial."
-    )
-
-_texto_unico = (
-    f"Juntando duração de fase, profundidade, amplitude por direção, consistência entre "
-    f"repetições (CV) e inclinação frontal/sagital medidas acima, dá pra montar uma leitura "
-    f"comparativa de controle motor entre {_A} e {_B} — como hipótese de trabalho, não como "
-    f"diagnóstico fechado: {_ritmo_txt}; {_cv_txt}; {_valgo_txt}; {_prof_txt}. {_fechamento}"
-)
-
-_paragrafos = [_texto_unico]
-_ESTRATEGIA_MOTORA_TXT = (
+_LEITURA_CLINICA_TXT = (
     f"A comparação entre os participantes revelou estratégias motoras distintas ao longo das "
-    f"três fases do teste. Na análise temporal, a {_B} apresentou maior duração tanto na fase "
-    f"de descida quanto na fase de subida, indicando uma execução mais lenta do movimento. Esse "
-    "padrão pode refletir uma estratégia mais cautelosa, com maior tempo para controle postural "
-    "e estabilização durante as transições entre as fases do teste.\n\n"
-    f"Durante a fase de preparação (platô), a {_A} apresentou amplitudes maiores na maior parte "
-    "das variáveis analisadas, especialmente em aceleração linear, velocidade e velocidade "
-    "angular do segmento L5, além de maiores deslocamentos e velocidades no joelho. Esse "
-    "comportamento sugere uma preparação mais dinâmica do movimento, com maior mobilização "
-    "corporal antes do início da descida.\n\n"
-    f"Na fase de descida (fase excêntrica), observou-se um padrão diferente entre os segmentos. "
-    f"No tronco (L5), a {_B} apresentou maiores deslocamentos, velocidades e acelerações "
-    "principalmente no eixo médio-lateral, indicando maior oscilação e necessidade de ajustes "
-    f"de equilíbrio durante a flexão. Em contraste, a {_A} apresentou maiores amplitudes "
-    "principalmente nos componentes anteroposteriores e nas acelerações lineares, sugerindo uma "
-    "estratégia de movimento mais direcionada ao plano sagital e potencialmente mais eficiente "
-    "mecanicamente.\n\n"
-    f"Durante a fase de subida (fase concêntrica), a {_A} voltou a apresentar predominância em "
-    "diversas variáveis relacionadas ao tronco, incluindo velocidade vertical, aceleração linear "
-    "e velocidade angular, caracterizando uma extensão mais vigorosa e rápida. Entretanto, a "
-    f"{_B} manteve maiores amplitudes de deslocamento, velocidade e aceleração no eixo "
-    "médio-lateral do L5, sugerindo que ainda necessitou de maiores ajustes posturais para "
-    "recuperar a posição ortostática.\n\n"
-    f"A análise do joelho mostrou um comportamento predominantemente favorável à {_A} durante "
-    "praticamente todas as fases do movimento. Foram observadas maiores amplitudes de "
-    "deslocamento, velocidade e aceleração durante a preparação, descida e subida, indicando "
-    f"maior mobilidade articular e execução mais ativa do movimento. Em contrapartida, a {_B} "
-    "apresentou maiores acelerações lineares e velocidades angulares em algumas variáveis "
-    "específicas, além de maior inclinação frontal do joelho (valgo dinâmico), sugerindo maior "
-    "demanda de estabilização no plano frontal durante a tarefa.\n\n"
-    f"A análise da consistência do movimento reforça essas diferenças. A {_B} apresentou maior "
-    "coeficiente de variação (CV) nos três eixos do joelho (vertical, anteroposterior e "
-    "médio-lateral), indicando maior variabilidade entre as repetições e menor repetibilidade "
-    f"do padrão motor. Em conjunto, esses resultados sugerem que, embora a {_B} execute o "
-    "movimento de forma mais lenta, ela apresenta maior oscilação corporal, maior variabilidade "
-    f"e maior tendência ao valgo dinâmico. Por outro lado, a {_A} demonstra uma estratégia "
-    "caracterizada por preparação mais ativa, maior produção de movimento nos segmentos "
-    "analisados e maior consistência entre as repetições, compatível com um controle motor mais "
-    "estável e eficiente durante todas as fases do teste."
+    f"três fases do teste (preparação, descida e subida), evidenciando diferenças tanto na "
+    f"execução do movimento quanto em indicadores relacionados ao controle motor. De forma "
+    f"geral, a {_A} apresentou um padrão de movimento mais dinâmico, consistente e "
+    f"predominantemente orientado ao plano sagital, enquanto a {_B} executou a tarefa de forma "
+    f"mais lenta, com maior oscilação no plano frontal e maior variabilidade entre as "
+    f"repetições.\n\n"
+    f"Na análise temporal, a {_B} apresentou duração superior nas fases de descida e de subida, "
+    f"com diferenças superiores a 20% em relação à {_A}. A fase de descida mais prolongada pode "
+    f"representar uma estratégia de controle excêntrico mais cautelosa, com maior tempo "
+    f"destinado à estabilização postural durante a flexão. Em contrapartida, a execução mais "
+    f"rápida da {_A} pode refletir maior confiança, capacidade de geração de força ou uma "
+    f"estratégia de movimento mais eficiente. Entretanto, isoladamente, a menor duração não deve "
+    f"ser interpretada como melhor controle motor, pois também pode representar uma execução "
+    f"menos controlada. Nesse contexto, a interpretação deve ser feita em conjunto com as demais "
+    f"variáveis.\n\n"
+    f"Durante a fase de preparação, a {_A} apresentou maiores amplitudes na maioria das "
+    f"variáveis analisadas, especialmente aceleração linear, velocidade e velocidade angular do "
+    f"segmento L5, além de maiores deslocamentos, velocidades e acelerações do joelho. Esses "
+    f"resultados sugerem uma preparação mais ativa e uma maior mobilização corporal antes do "
+    f"início da descida.\n\n"
+    f"Na fase de descida, observou-se um comportamento distinto entre os participantes. A {_B} "
+    f"apresentou maiores deslocamentos, velocidades e acelerações do tronco principalmente no "
+    f"eixo médio-lateral, indicando maior oscilação corporal e maior necessidade de ajustes de "
+    f"equilíbrio durante o movimento excêntrico. Em contraste, a {_A} apresentou maiores "
+    f"amplitudes principalmente nas componentes anteroposteriores e nas acelerações lineares, "
+    f"caracterizando um movimento predominantemente direcionado ao plano sagital, potencialmente "
+    f"mais eficiente do ponto de vista mecânico.\n\n"
+    f"Esse padrão foi mantido durante a fase de subida. A {_A} apresentou maiores velocidades "
+    f"verticais, acelerações lineares e velocidades angulares do tronco, indicando uma extensão "
+    f"mais vigorosa e rápida. Por outro lado, a {_B} continuou apresentando maiores amplitudes "
+    f"de deslocamento e velocidade no eixo médio-lateral do L5, sugerindo que necessitou de "
+    f"ajustes posturais adicionais para recuperar a posição ortostática.\n\n"
+    f"A análise dos membros inferiores reforçou essas diferenças. Em praticamente todas as "
+    f"fases do movimento, a {_A} apresentou maiores deslocamentos, velocidades e acelerações do "
+    f"joelho, indicando uma execução mais ativa e maior mobilidade articular. Em contrapartida, "
+    f"a {_B} apresentou maiores acelerações lineares e velocidades angulares em algumas "
+    f"variáveis específicas, além de maior inclinação medial do joelho durante o movimento, "
+    f"compatível com maior valgo dinâmico. Esse comportamento costuma estar associado a menor "
+    f"controle no plano frontal, podendo refletir maior demanda dos estabilizadores do quadril e "
+    f"do joelho, como o glúteo médio e os rotadores externos do quadril. Entretanto, essa "
+    f"interpretação deve ser considerada uma hipótese funcional, uma vez que a estimativa foi "
+    f"obtida a partir de um sensor inercial e não corresponde à mensuração direta do ângulo "
+    f"articular.\n\n"
+    f"Por outro lado, a profundidade do movimento foi semelhante entre os participantes, "
+    f"indicando que ambos atingiram amplitudes funcionais equivalentes. Assim, as diferenças "
+    f"observadas não decorreram da execução de um agachamento mais profundo ou mais superficial, "
+    f"mas da forma como cada participante organizou o movimento para atingir essa mesma "
+    f"profundidade.\n\n"
+    f"O indicador que melhor refletiu diferenças relacionadas ao controle motor foi a "
+    f"**consistência do movimento**. A {_B} apresentou coeficiente de variação (CV) mais "
+    f"elevado em maior número de combinações entre segmentos e direções (4 versus 0), além de "
+    f"maior variabilidade nos três eixos do joelho (vertical, anteroposterior e médio-lateral). "
+    f"Esse resultado indica menor repetibilidade entre as tentativas, sugerindo um padrão motor "
+    f"menos consistente, que pode estar relacionado a menor controle motor, fadiga ao longo das "
+    f"repetições ou menor familiaridade com a tarefa. Em contraste, a {_A} apresentou maior "
+    f"uniformidade entre as execuções, indicando uma estratégia motora mais estável e "
+    f"reprodutível.\n\n"
+    f"Em conjunto, os resultados sugerem que a {_A} executa o movimento com maior dinamismo, "
+    f"maior participação do plano sagital e maior **consistência entre as repetições**, "
+    f"enquanto a {_B} adota uma estratégia mais cautelosa, com maior tempo de execução, maior "
+    f"oscilação médio-lateral, maior variabilidade do movimento e maior tendência ao valgo "
+    f"dinâmico do joelho. É importante destacar que diferenças relacionadas ao **ritmo de "
+    f"execução**, amplitudes de movimento e velocidades refletem principalmente estratégias "
+    f"motoras individuais, enquanto os achados mais diretamente associados ao controle motor "
+    f"foram a **consistência entre as repetições** e o **controle frontal do joelho**. Por fim, "
+    f"essa interpretação representa uma hipótese baseada nos limiares definidos pelo aplicativo "
+    f"e não substitui uma avaliação clínica presencial nem uma análise biomecânica "
+    f"tridimensional completa."
 )
-_paragrafos.append(f"**🎯 Resumo da estratégia de controle motor**\n\n{_ESTRATEGIA_MOTORA_TXT}")
+st.markdown(_LEITURA_CLINICA_TXT)
 
-for _p in _paragrafos:
-    st.markdown(_p)
+st.markdown("**Resumo dos principais achados**")
+st.markdown(
+    f"- **Tempo de execução**: {_B} apresentou fases de descida e subida mais longas (>20%), "
+    "sugerindo uma estratégia mais cautelosa.\n"
+    f"- **Preparação**: {_A} demonstrou maior ativação inicial, com maiores velocidades, "
+    "acelerações e amplitudes de movimento.\n"
+    f"- **Fase de descida**: {_B} apresentou maior oscilação médio-lateral do tronco; {_A} "
+    "executou um movimento mais direcionado ao plano sagital.\n"
+    f"- **Fase de subida**: {_A} realizou uma extensão mais rápida e vigorosa; {_B} manteve "
+    "maior necessidade de ajustes posturais.\n"
+    f"- **Joelho**: {_A} apresentou maior mobilidade global; {_B} mostrou maior tendência ao "
+    "valgo dinâmico.\n"
+    "- **Profundidade do movimento**: Sem diferenças relevantes entre os participantes.\n"
+    f"- **Consistência entre repetições**: {_B} apresentou maior coeficiente de variação (CV), "
+    "indicando menor repetibilidade do padrão motor.\n"
+    "- **Principal diferença relacionada ao controle motor**: Maior variabilidade entre as "
+    f"repetições e maior **controle frontal deficiente do joelho** na {_B}.\n"
+    f"- **Síntese geral**: {_A} apresentou um padrão de movimento mais dinâmico, consistente e "
+    f"estável, enquanto a {_B} adotou uma estratégia mais lenta e cautelosa, com maior demanda "
+    "de estabilização postural e maior variabilidade motora."
+)
 
 st.divider()
 st.caption(

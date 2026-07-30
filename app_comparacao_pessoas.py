@@ -469,11 +469,12 @@ def kinem_vs_imu_concordance(df_raw, catalog, imu_axis_label, direction, fs, sha
     "Viés" não é calculado: como os dois sinais são detrend, a diferença média
     sempre daria ~0 por construção, não é um resultado real. Além de r e RMSE,
     também calcula CCC (concordância de Lin — penaliza diferença de escala/
-    amplitude, não só se as curvas andam juntas no tempo), SEM/MDC95 (erro
-    padrão de medida / mínima mudança detectável, a partir do desvio-padrão da
-    diferença ponto-a-ponto entre os dois sinais) e um fator de escala (razão
-    entre o desvio-padrão do celular e o da cinemática, pra deixar explícito o
-    tamanho de qualquer discrepância de amplitude por trás de um CCC baixo).
+    amplitude, não só se as curvas andam juntas no tempo), um fator de escala
+    (razão entre o desvio-padrão do celular e o da cinemática, pra deixar
+    explícito o tamanho de qualquer discrepância de amplitude) e SEM/MDC95
+    calibrados pela escala: sigma_maior * sqrt(1 - r²) — o resíduo esperado
+    depois de ajustar a melhor escala/deslocamento linear entre os dois sinais,
+    pra refletir o r em vez de ficar dominado pela amplitude bruta do sinal maior.
     Retorna None se faltar alguma das duas colunas ou dados insuficientes."""
     kin_axis = next((ax for ax in AXES if KINEM_AXIS_LABEL[ax] == direction), None)
     imu_axis = next((ax for ax in AXES if imu_axis_label[ax] == direction), None)
@@ -549,15 +550,19 @@ def kinem_vs_imu_concordance(df_raw, catalog, imu_axis_label, direction, fs, sha
     # de conteúdo do sinal, não só de unidade/ganho).
     scale_factor = float(np.std(b) / np.std(a)) if np.std(a) != 0 else float("nan")
 
-    # SEM (erro padrão de medida) e MDC95 (mínima mudança detectável), calculados a
-    # partir do desvio-padrão da diferença ponto-a-ponto entre os dois sinais —
-    # abordagem padrão pra comparação entre dois instrumentos/métodos (em vez de
-    # teste-reteste do mesmo instrumento), tratando os dois sistemas como igualmente
-    # confiáveis (Stratford & Goldsmith). SEM = SD(diferença) / sqrt(2);
-    # MDC95 = 1.96 * sqrt(2) * SEM = 1.96 * SD(diferença). Aqui a "diferença" é
-    # calculada amostra a amostra dentro do sinal (não entre tentativas/pessoas).
-    sd_diff = float(np.std(a - b))
-    sem = sd_diff / np.sqrt(2)
+    # SEM (erro padrão de medida) e MDC95 (mínima mudança detectável) — calculados
+    # de forma CALIBRADA pela escala, não pela diferença bruta ponto-a-ponto. A
+    # diferença bruta (a - b) fica dominada pela amplitude do sinal maior (o
+    # celular, ~100-2000x maior que a cinemática aqui), então um SEM/MDC baseado
+    # nela não reflete o r moderado — reflete quase só o tamanho do sinal maior.
+    # Em vez disso, usa-se o resultado padrão de regressão linear: o desvio-padrão
+    # do resíduo, depois de ajustar a MELHOR escala/deslocamento linear entre os
+    # dois sinais, é sigma_maior * sqrt(1 - r²). Isso corrige a diferença de escala
+    # (que já vimos que é grande e inconsistente) e sobra só o que o r já indicava:
+    # o quanto as curvas realmente divergem no padrão, não no tamanho.
+    sigma_ref = float(np.sqrt(var_b))  # desvio-padrão do sinal de maior amplitude (celular)
+    r_for_sem = abs(best_r)
+    sem = sigma_ref * float(np.sqrt(max(0.0, 1 - r_for_sem ** 2)))
     mdc95 = 1.96 * np.sqrt(2) * sem
 
     return {
@@ -1717,14 +1722,16 @@ st.caption(
     "(1 = concordância perfeita, mas só mede se as curvas andam juntas, não se têm a mesma "
     "amplitude); **CCC** = concordância de Lin, mais rigorosa — também penaliza diferença "
     "de escala/amplitude entre os dois sinais; **RMSE** = erro médio quadrático (m/s²); "
-    "**SEM** = erro padrão de medida (m/s²), a partir do desvio-padrão da diferença ponto-a-"
-    "ponto entre os dois sinais; **MDC95** = mínima mudança detectável (m/s²) — abaixo desse "
-    "valor, uma diferença entre os dois sistemas pode ser apenas ruído de medição, não uma "
-    "mudança real; **Fator de escala** = quantas vezes a amplitude do celular é maior que a "
-    "da cinemática (razão de desvio-padrão) — ajuda a entender um CCC baixo: se esse fator "
-    "for muito diferente de 1, o problema não é o padrão temporal (isso o r já mostra), é que "
-    "os dois sistemas simplesmente medem em escalas bem diferentes. 'Viés' não é mostrado: "
-    "como os dois sinais são detrend, a diferença média sempre daria ~0 por construção."
+    "**Fator de escala** = quantas vezes a amplitude do celular é maior que a da cinemática "
+    "(razão de desvio-padrão) — ajuda a entender um CCC baixo: se esse fator for muito "
+    "diferente de 1, parte do problema é que os dois sistemas simplesmente medem em escalas "
+    "bem diferentes, não que o padrão temporal diverge. **SEM** e **MDC95** (m/s²) já saem "
+    "calibrados por essa escala (fórmula: desvio-padrão do sinal maior × √(1 − r²), o resíduo "
+    "esperado depois de ajustar a melhor escala/deslocamento entre os dois sinais) — refletem "
+    "o r moderado, em vez de ficarem inflados só pela diferença de amplitude bruta. MDC95 = "
+    "abaixo desse valor, uma diferença entre os dois sistemas pode ser apenas ruído, não uma "
+    "mudança real. 'Viés' não é mostrado: como os dois sinais são detrend, a diferença média "
+    "sempre daria ~0 por construção."
 )
 
 _shared_cutoff = min(kinem_cutoff, imu_cutoff)

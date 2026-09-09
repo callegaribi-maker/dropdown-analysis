@@ -694,6 +694,44 @@ def knee_angle_direction_note(plane: str) -> str:
     return ""
 
 
+def fit_scale_gain(reference: np.ndarray | None, target: np.ndarray | None,
+                    x_axis: np.ndarray, window_start: float, window_end: float,
+                    clip: tuple = (0.1, 10.0)) -> float | None:
+    """
+    Fator de escala (ganho) que aproxima a amplitude de 'target' da de
+    'reference' dentro de uma janela de tempo (em segundos relativos ao
+    pico): gain = (faixa de reference) / (faixa de target), onde faixa =
+    máximo - mínimo no trecho.
+
+    Usa a amplitude pico-a-pico (não mínimos quadrados amostra-a-amostra)
+    porque o sinal do celular costuma "derivar" fora do pico do movimento
+    (deriva de integração do giroscópio); um ajuste ponto-a-ponto seria
+    puxado por essa deriva. Focar na amplitude captura melhor o que
+    realmente queremos corrigir: o quanto o celular subestima o movimento.
+
+    Usado para calibrar a amplitude do ângulo do celular contra o Kinem
+    (corrige desalinhamento de montagem / artefato de tecido mole, que
+    tipicamente atenuam o sinal do celular por um fator ~constante).
+    Retorna None se não houver dados suficientes na janela.
+    """
+    if reference is None or target is None:
+        return None
+    n = min(len(reference), len(target), len(x_axis))
+    mask = (x_axis[:n] >= window_start) & (x_axis[:n] <= window_end)
+    ref = reference[:n][mask]
+    tgt = target[:n][mask]
+    ref = ref[~np.isnan(ref)]
+    tgt = tgt[~np.isnan(tgt)]
+    if len(tgt) < 5 or len(ref) < 5:
+        return None
+    ref_range = np.nanmax(ref) - np.nanmin(ref)
+    tgt_range = np.nanmax(tgt) - np.nanmin(tgt)
+    if tgt_range <= 1e-6:
+        return None
+    gain = float(ref_range / tgt_range)
+    return float(np.clip(gain, clip[0], clip[1]))
+
+
 def zero_reference_angle(series: np.ndarray | None, x_axis: np.ndarray,
                          baseline_start: float, baseline_end: float) -> np.ndarray | None:
     """

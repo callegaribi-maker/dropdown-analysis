@@ -29,6 +29,7 @@ from signal_utils import (
     detect_time_axis,
     find_highest_peak,
     find_sync_xcorr,
+    fit_scale_gain,
     get_aligned_data,
     is_xyz_col,
     kinem_cols_for_body,
@@ -681,6 +682,59 @@ if st.session_state.proc_data and st.session_state.synced:
         angle_kinem_transverse = zero_reference_angle(angle_kinem_transverse, x_axis, baseline_start, baseline_end)
         angle_phone_frontal = zero_reference_angle(angle_phone_frontal, x_axis, baseline_start, baseline_end)
         angle_phone_transverse = zero_reference_angle(angle_phone_transverse, x_axis, baseline_start, baseline_end)
+
+    # ── Calibração de amplitude do celular (corrige desalinhamento de
+    # montagem / artefato de tecido mole, que tende a atenuar o sinal do
+    # celular por um fator ~constante em relação ao Kinem) ──
+    # Janela padrão: ±1s ao redor do pico de flexão do Kinem, pra evitar que
+    # a deriva de giroscópio fora do movimento principal distorça o cálculo.
+    default_cal_start, default_cal_end = view_start, view_end
+    if angle_kinem_sagital is not None:
+        n_k = min(len(angle_kinem_sagital), len(x_axis))
+        mask_view = (x_axis[:n_k] >= view_start) & (x_axis[:n_k] <= view_end)
+        if np.any(mask_view):
+            peak_idx = np.nanargmax(angle_kinem_sagital[:n_k][mask_view])
+            peak_time = x_axis[:n_k][mask_view][peak_idx]
+            default_cal_start = max(view_start, float(peak_time) - 1.0)
+            default_cal_end = min(view_end, float(peak_time) + 1.0)
+
+    cc1, cc2, cc3 = st.columns([1.4, 1, 1])
+    with cc1:
+        calibrate_amplitude = st.checkbox(
+            "Calibrar amplitude do celular pra bater com o Kinem", value=True, key="calibrate_amplitude",
+            help="Ajusta a escala do sinal do celular (sagital e frontal) por um fator fixo, calculado comparando a amplitude do movimento nessa janela. Não muda o formato da curva, só o quanto ela sobe/desce.",
+        )
+    with cc2:
+        cal_start = st.number_input(
+            "Calibrar usando de (s)", value=float(default_cal_start), step=0.1, key="cal_start",
+            disabled=not calibrate_amplitude,
+        )
+    with cc3:
+        cal_end = st.number_input(
+            "Calibrar usando até (s)", value=float(default_cal_end), step=0.1, key="cal_end",
+            disabled=not calibrate_amplitude,
+        )
+
+    gain_sagital = gain_frontal = None
+    if calibrate_amplitude:
+        gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start, cal_end)
+        if gain_sagital is not None and angle_phone_sagital is not None:
+            angle_phone_sagital = angle_phone_sagital * gain_sagital
+
+        if show_planes_extra:
+            gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start, cal_end)
+            if gain_frontal is not None and angle_phone_frontal is not None:
+                angle_phone_frontal = angle_phone_frontal * gain_frontal
+
+        gain_msgs = []
+        if gain_sagital is not None:
+            gain_msgs.append(f"sagital ×{gain_sagital:.2f}")
+        if gain_frontal is not None:
+            gain_msgs.append(f"frontal ×{gain_frontal:.2f}")
+        if gain_msgs:
+            st.caption(f"📐 Calibração aplicada ao celular: {', '.join(gain_msgs)} (não mexe no Kinem, nem no transverso do celular — a deriva não é um problema de escala).")
+        else:
+            st.caption("⚠️ Não deu pra calibrar — confira se há dados de ambas as fontes nessa janela.")
 
     if angle_phone_sagital is None and angle_kinem_sagital is None:
         st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")

@@ -694,6 +694,54 @@ def knee_angle_direction_note(plane: str) -> str:
     return ""
 
 
+def estimate_time_lag_from_peaks(reference: np.ndarray | None, target: np.ndarray | None,
+                                 x_axis: np.ndarray, window_start: float, window_end: float,
+                                 signed: bool = False) -> float | None:
+    """
+    Atraso (segundos) do pico de 'target' em relação ao pico de 'reference',
+    dentro de uma janela de tempo — compara o instante em que cada sinal
+    atinge seu valor máximo (ou máximo absoluto, se signed=True) na janela.
+    Positivo = o pico de target ocorre DEPOIS do de reference (target está
+    atrasado). Usado pra alinhar no tempo o ângulo do celular contra o
+    Kinem, em planos onde o sensor sofre atraso mecânico (ex.: tecido mole).
+    """
+    if reference is None or target is None:
+        return None
+    n = min(len(reference), len(target), len(x_axis))
+    mask = (x_axis[:n] >= window_start) & (x_axis[:n] <= window_end)
+    x_w = x_axis[:n][mask]
+    ref_w = reference[:n][mask]
+    tgt_w = target[:n][mask]
+    if signed:
+        ref_w, tgt_w = np.abs(ref_w), np.abs(tgt_w)
+    if len(x_w) < 3 or not np.any(~np.isnan(ref_w)) or not np.any(~np.isnan(tgt_w)):
+        return None
+    ref_peak_t = float(x_w[np.nanargmax(ref_w)])
+    tgt_peak_t = float(x_w[np.nanargmax(tgt_w)])
+    return tgt_peak_t - ref_peak_t
+
+
+def apply_time_shift(series: np.ndarray | None, fs: float, lag_seconds: float | None) -> np.ndarray | None:
+    """
+    Desloca 'series' no tempo por -lag_seconds (compensa um atraso: se
+    lag_seconds > 0, a série é adiantada). O deslocamento é em amostras
+    inteiras (arredondado); as bordas que ficam sem dado viram NaN.
+    """
+    if series is None or lag_seconds is None or abs(lag_seconds) < 1e-6:
+        return series
+    shift_samples = int(round(lag_seconds * fs))
+    n = len(series)
+    shifted = np.full(n, np.nan)
+    if shift_samples > 0:
+        if shift_samples < n:
+            shifted[: n - shift_samples] = series[shift_samples:]
+    else:
+        s = -shift_samples
+        if s < n:
+            shifted[s:] = series[: n - s]
+    return shifted
+
+
 def auto_calibration_window(reference: np.ndarray | None, x_axis: np.ndarray,
                             x_min: float, x_max: float, signed: bool = False,
                             half_width: float = 1.0) -> tuple:
@@ -752,6 +800,60 @@ def fit_scale_gain(reference: np.ndarray | None, target: np.ndarray | None,
         return None
     gain = float(ref_range / tgt_range)
     return float(np.clip(gain, clip[0], clip[1]))
+
+
+def detect_trial_windows(reference: np.ndarray | None, x_axis: np.ndarray,
+                         min_distance_seconds: float = 2.0,
+                         prominence_frac: float = 0.3) -> list:
+    """
+    Detecta janelas de repetição (trials) a partir dos picos de um sinal de
+    referência (tipicamente o ângulo sagital do Kinem, já zerado — cada pico
+    de flexão = uma repetição). Cada janela vai do ponto médio entre um pico
+    e o anterior até o ponto médio com o próximo (bordas da gravação para o
+    primeiro/último pico).
+
+    Retorna lista de tuplas (start_seconds, end_seconds), uma por trial
+    detectado. Lista vazia se não achar pelo menos 1 pico.
+    """
+    if reference is None or len(reference) == 0:
+        return []
+    n = min(len(reference), len(x_axis))
+    seg = reference[:n]
+    valid = ~np.isnan(seg)
+    if not np.any(valid):
+        return []
+    max_val = np.nanmax(seg)
+    if max_val <= 0:
+        return []
+    fs = 1.0 / np.median(np.diff(x_axis[:n])) if n > 1 else 100.0
+    distance_samples = max(1, int(min_distance_seconds * fs))
+    peaks, _ = sp_signal.find_peaks(
+        np.nan_to_num(seg), distance=distance_samples, prominence=max_val * prominence_frac,
+    )
+    if len(peaks) == 0:
+        return []
+
+    peak_times = x_axis[:n][peaks]
+    windows = []
+    for i, pt in enumerate(peak_times):
+        start = x_axis[:n][0] if i == 0 else (peak_times[i - 1] + pt) / 2
+        end = x_axis[:n][-1] if i == len(peak_times) - 1 else (pt + peak_times[i + 1]) / 2
+        windows.append((float(start), float(end)))
+    return windows
+
+
+def compute_rom(series: np.ndarray | None, x_axis: np.ndarray,
+                window_start: float, window_end: float) -> float | None:
+    """ADM (amplitude de movimento) = máximo − mínimo de 'series' dentro de uma janela de tempo."""
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    mask = (x_axis[:n] >= window_start) & (x_axis[:n] <= window_end)
+    seg = series[:n][mask]
+    seg = seg[~np.isnan(seg)]
+    if len(seg) == 0:
+        return None
+    return float(np.nanmax(seg) - np.nanmin(seg))
 
 
 def zero_reference_angle(series: np.ndarray | None, x_axis: np.ndarray,

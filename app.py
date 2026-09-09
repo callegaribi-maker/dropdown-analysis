@@ -20,11 +20,15 @@ from plotly.subplots import make_subplots
 
 from signal_utils import (
     NONE_LABEL,
+    apply_time_shift,
     auto_calibration_window,
     best_match,
     build_export_sheet,
     col_default,
+    compute_rom,
     detect_time_axis,
+    detect_trial_windows,
+    estimate_time_lag_from_peaks,
     find_highest_peak,
     find_sync_xcorr,
     fit_scale_gain,
@@ -552,6 +556,34 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         angle_phone_frontal = zero_reference_angle(angle_phone_frontal, x_axis, baseline_start, baseline_end)
         angle_phone_transverse = zero_reference_angle(angle_phone_transverse, x_axis, baseline_start, baseline_end)
 
+    # ── Correção de atraso no tempo do celular (corrige atraso mecânico —
+    # ex.: o sensor preso por faixa sobre tecido mole responde um instante
+    # depois do movimento real do osso, medido pelo Kinem) ──
+    # Detecta o atraso usando uma janela mais larga (±1.6s) que a de
+    # calibração de amplitude, pra não cortar o pico do celular fora da
+    # busca se o atraso for grande.
+    lag_win_sag = auto_calibration_window(angle_kinem_sagital, x_axis, x_min_data, x_max_data, half_width=1.6)
+    lag_win_front = auto_calibration_window(angle_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
+    lag_win_trans = auto_calibration_window(angle_kinem_transverse, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
+
+    lag_sagital = estimate_time_lag_from_peaks(angle_kinem_sagital, angle_phone_sagital, x_axis, *lag_win_sag)
+    lag_frontal = estimate_time_lag_from_peaks(angle_kinem_frontal, angle_phone_frontal, x_axis, *lag_win_front, signed=True)
+    lag_transverse = estimate_time_lag_from_peaks(angle_kinem_transverse, angle_phone_transverse, x_axis, *lag_win_trans, signed=True)
+
+    angle_phone_sagital = apply_time_shift(angle_phone_sagital, pfs, lag_sagital)
+    angle_phone_frontal = apply_time_shift(angle_phone_frontal, pfs, lag_frontal)
+    angle_phone_transverse = apply_time_shift(angle_phone_transverse, pfs, lag_transverse)
+
+    lag_msgs = []
+    if lag_sagital is not None:
+        lag_msgs.append(f"sagital {lag_sagital:+.2f}s")
+    if lag_frontal is not None:
+        lag_msgs.append(f"frontal {lag_frontal:+.2f}s")
+    if lag_transverse is not None:
+        lag_msgs.append(f"transverso {lag_transverse:+.2f}s")
+    if lag_msgs:
+        st.caption(f"⏱️ Atraso do celular corrigido (adiantado no tempo): {', '.join(lag_msgs)} — positivo = celular estava atrasado em relação ao Kinem.")
+
     # ── Calibração de amplitude do celular (corrige desalinhamento de
     # montagem / artefato de tecido mole, que tende a atenuar o sinal do
     # celular por um fator ~constante em relação ao Kinem) ──
@@ -566,8 +598,9 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
     st.caption(
         "A amplitude do celular é sempre calibrada automaticamente pra bater com o Kinem "
-        "(±1s ao redor do pico de cada plano, calibrado separadamente). Corrige desalinhamento "
-        "de montagem/tecido mole **dessa gravação específica** — não é uma calibração permanente do sensor."
+        "(±1s ao redor do pico de cada plano, calibrado separadamente, já com o atraso corrigido). "
+        "Corrige desalinhamento de montagem/tecido mole **dessa gravação específica** — não é uma "
+        "calibração permanente do sensor."
     )
 
     gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start_sag, cal_end_sag)
@@ -658,6 +691,37 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             )
             st.plotly_chart(fig_trans, use_container_width=True)
             st.caption("ℹ️ " + knee_angle_direction_note("transverse"))
+
+        # --- ADM (Amplitude de Movimento) por trial ---
+        st.markdown("#### 📏 ADM por trial — Sagital e Frontal")
+        trials = detect_trial_windows(angle_kinem_sagital, x_axis)
+        if not trials:
+            st.info("Não consegui detectar repetições individuais automaticamente (poucos picos claros no sinal do Kinem).")
+        else:
+            rom_rows = []
+            for i, (t_start, t_end) in enumerate(trials, start=1):
+                rom_rows.append({
+                    "Trial": str(i),
+                    "Kinem — Sagital": compute_rom(angle_kinem_sagital, x_axis, t_start, t_end),
+                    "Celular — Sagital": compute_rom(angle_phone_sagital, x_axis, t_start, t_end),
+                    "Kinem — Frontal": compute_rom(angle_kinem_frontal, x_axis, t_start, t_end),
+                    "Celular — Frontal": compute_rom(angle_phone_frontal, x_axis, t_start, t_end),
+                })
+            rom_df = pd.DataFrame(rom_rows)
+
+            resultante = {"Trial": "Resultante (média)"}
+            for col in rom_df.columns:
+                if col == "Trial":
+                    continue
+                resultante[col] = rom_df[col].mean()
+            rom_df = pd.concat([rom_df, pd.DataFrame([resultante])], ignore_index=True)
+
+            with st.container(border=True):
+                st.dataframe(
+                    rom_df.style.format({c: "{:.1f}°" for c in rom_df.columns if c != "Trial"}),
+                    hide_index=True, use_container_width=True,
+                )
+            st.caption(f"{len(trials)} repetições detectadas automaticamente pelos picos do Kinem sagital. ADM = máximo − mínimo do ângulo dentro de cada trial.")
 
     st.divider()
 

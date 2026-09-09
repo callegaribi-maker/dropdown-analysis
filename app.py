@@ -472,11 +472,11 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     wc1, wc2 = st.columns(2)
     with wc1:
         view_start = st.number_input(
-            "Início (s) relativo ao pico", value=float(max(x_min_data, -2.0)), step=0.5, key="view_start",
+            "Início (s) relativo ao pico", value=float(x_min_data), step=0.5, key="view_start",
         )
     with wc2:
         view_end = st.number_input(
-            "Fim (s) relativo ao pico", value=float(min(x_max_data, 8.0)), step=0.5, key="view_end",
+            "Fim (s) relativo ao pico", value=float(x_max_data), step=0.5, key="view_end",
         )
 
     st.divider()
@@ -519,44 +519,28 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         kdf_raw, *kinem_angle_kw, plane="sagittal",
     ) if not kdf_raw.empty else None
 
-    show_planes_extra = st.checkbox(
-        "Mostrar também Frontal (valgo/varo) e Transverso (rotação) — celular e Kinem",
-        value=False, key="show_planes_extra",
-        help="Frontal e transverso tendem a ser mais ruidosos: a coxa/perna ficam quase alinhadas com o eixo vertical, então a pequena parcela horizontal usada nesses planos é mais sensível a ruído. O transverso do celular também sofre deriva (sem correção do acelerômetro).",
-    )
+    st.caption("Mostrando os 3 planos anatômicos: sagital, frontal (valgo/varo) e transverso (rotação) — celular e Kinem.")
     angle_kinem_3d = angle_kinem_frontal = angle_kinem_transverse = None
     angle_phone_frontal = angle_phone_transverse = None
-    if show_planes_extra:
-        if not kdf_raw.empty:
-            angle_kinem_3d = knee_angle_from_kinem(kdf_raw, *kinem_angle_kw)
-            angle_kinem_frontal = knee_angle_from_kinem_plane(kdf_raw, *kinem_angle_kw, plane="frontal", signed=True)
-            angle_kinem_transverse = knee_angle_from_kinem_plane(kdf_raw, *kinem_angle_kw, plane="transverse", signed=True)
-        if phone_ready:
-            angle_phone_frontal = knee_angle_from_phone_plane(
-                aligned_raw[pf_coxa["acc"]], aligned_raw[pf_coxa["gyr"]],
-                aligned_raw[pf_torn["acc"]], aligned_raw[pf_torn["gyr"]],
-                pfs, plane="frontal", alpha=cf_alpha,
-            )
-            angle_phone_transverse = knee_rotation_from_phone(
-                aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs,
-            )
+    if not kdf_raw.empty:
+        angle_kinem_3d = knee_angle_from_kinem(kdf_raw, *kinem_angle_kw)
+        angle_kinem_frontal = knee_angle_from_kinem_plane(kdf_raw, *kinem_angle_kw, plane="frontal", signed=True)
+        angle_kinem_transverse = knee_angle_from_kinem_plane(kdf_raw, *kinem_angle_kw, plane="transverse", signed=True)
+    if phone_ready:
+        angle_phone_frontal = knee_angle_from_phone_plane(
+            aligned_raw[pf_coxa["acc"]], aligned_raw[pf_coxa["gyr"]],
+            aligned_raw[pf_torn["acc"]], aligned_raw[pf_torn["gyr"]],
+            pfs, plane="frontal", alpha=cf_alpha,
+        )
+        angle_phone_transverse = knee_rotation_from_phone(
+            aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs,
+        )
 
-    zc1, zc2, zc3 = st.columns([1.4, 1, 1])
-    with zc1:
-        zero_baseline = st.checkbox(
-            "Zerar no início (0° = extensão completa)", value=True, key="zero_baseline",
-            help="Usa a média numa janela no início do movimento como referência de 0° — o resto do sinal passa a mostrar o quanto flexionou/desviou a partir dessa postura.",
-        )
-    with zc2:
-        baseline_start = st.number_input(
-            "Referência de 0° — de (s)", value=float(view_start), step=0.1, key="baseline_start",
-            disabled=not zero_baseline,
-        )
-    with zc3:
-        baseline_end = st.number_input(
-            "Referência de 0° — até (s)", value=float(view_start) + 0.5, step=0.1, key="baseline_end",
-            disabled=not zero_baseline,
-        )
+    zero_baseline = st.checkbox(
+        "Zerar no início (0° = extensão completa)", value=True, key="zero_baseline",
+        help="Usa a média nos primeiros 0.5s da gravação como referência de 0° — o resto do sinal passa a mostrar o quanto flexionou/desviou a partir dessa postura.",
+    )
+    baseline_start, baseline_end = x_min_data, x_min_data + 0.5
 
     if zero_baseline:
         angle_kinem_sagital = zero_reference_angle(angle_kinem_sagital, x_axis, baseline_start, baseline_end)
@@ -570,30 +554,22 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # ── Calibração de amplitude do celular (corrige desalinhamento de
     # montagem / artefato de tecido mole, que tende a atenuar o sinal do
     # celular por um fator ~constante em relação ao Kinem) ──
-    # Janela padrão: ±1s ao redor do pico de flexão do Kinem, pra evitar que
-    # a deriva de giroscópio fora do movimento principal distorça o cálculo.
-    default_cal_start, default_cal_end = view_start, view_end
+    # Janela automática: ±1s ao redor do pico de flexão do Kinem em toda a
+    # gravação, pra evitar que a deriva de giroscópio fora do movimento
+    # principal distorça o cálculo.
+    cal_start, cal_end = x_min_data, x_max_data
     if angle_kinem_sagital is not None:
         n_k = min(len(angle_kinem_sagital), len(x_axis))
-        mask_view = (x_axis[:n_k] >= view_start) & (x_axis[:n_k] <= view_end)
-        if np.any(mask_view):
-            peak_idx = np.nanargmax(angle_kinem_sagital[:n_k][mask_view])
-            peak_time = x_axis[:n_k][mask_view][peak_idx]
-            default_cal_start = max(view_start, float(peak_time) - 1.0)
-            default_cal_end = min(view_end, float(peak_time) + 1.0)
+        valid = ~np.isnan(angle_kinem_sagital[:n_k])
+        if np.any(valid):
+            peak_idx = np.nanargmax(angle_kinem_sagital[:n_k])
+            peak_time = x_axis[:n_k][peak_idx]
+            cal_start = max(x_min_data, float(peak_time) - 1.0)
+            cal_end = min(x_max_data, float(peak_time) + 1.0)
 
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        cal_start = st.number_input(
-            "Calibrar usando de (s)", value=float(default_cal_start), step=0.1, key="cal_start",
-        )
-    with cc2:
-        cal_end = st.number_input(
-            "Calibrar usando até (s)", value=float(default_cal_end), step=0.1, key="cal_end",
-        )
     st.caption(
-        "A amplitude do celular é sempre calibrada pra bater com o Kinem, usando a janela acima "
-        "(ajuste se o fator parecer estranho). Isso corrige desalinhamento de montagem/tecido mole "
+        "A amplitude do celular é sempre calibrada automaticamente pra bater com o Kinem "
+        "(±1s ao redor do pico de flexão). Corrige desalinhamento de montagem/tecido mole "
         "**dessa gravação específica** — não é uma calibração permanente do sensor."
     )
 
@@ -601,19 +577,23 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     if gain_sagital is not None and angle_phone_sagital is not None:
         angle_phone_sagital = angle_phone_sagital * gain_sagital
 
-    gain_frontal = None
-    if show_planes_extra:
-        gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start, cal_end)
-        if gain_frontal is not None and angle_phone_frontal is not None:
-            angle_phone_frontal = angle_phone_frontal * gain_frontal
+    gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start, cal_end)
+    if gain_frontal is not None and angle_phone_frontal is not None:
+        angle_phone_frontal = angle_phone_frontal * gain_frontal
+
+    gain_transverse = fit_scale_gain(angle_kinem_transverse, angle_phone_transverse, x_axis, cal_start, cal_end)
+    if gain_transverse is not None and angle_phone_transverse is not None:
+        angle_phone_transverse = angle_phone_transverse * gain_transverse
 
     gain_msgs = []
     if gain_sagital is not None:
         gain_msgs.append(f"sagital ×{gain_sagital:.2f}")
     if gain_frontal is not None:
         gain_msgs.append(f"frontal ×{gain_frontal:.2f}")
+    if gain_transverse is not None:
+        gain_msgs.append(f"transverso ×{gain_transverse:.2f}")
     if gain_msgs:
-        st.caption(f"📐 Fator de calibração aplicado ao celular: {', '.join(gain_msgs)} (não mexe no Kinem, nem no transverso do celular — a deriva não é um problema de escala).")
+        st.caption(f"📐 Fator de calibração aplicado ao celular: {', '.join(gain_msgs)} (não mexe no Kinem). O transverso continua sujeito a deriva — calibrar a amplitude não corrige isso.")
     else:
         st.caption("⚠️ Não deu pra calibrar — confira se há dados de ambas as fontes nessa janela.")
 
@@ -638,8 +618,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         fig_sag = go.Figure()
         add_angle_trace(fig_sag, angle_kinem_sagital, "blue", "Kinem — sagital")
         add_angle_trace(fig_sag, angle_phone_sagital, "red", "Celular — sagital")
-        if show_planes_extra:
-            add_angle_trace(fig_sag, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
+        add_angle_trace(fig_sag, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
         fig_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
         fig_sag.update_layout(
             xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[view_start, view_end]),
@@ -653,8 +632,8 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         if angle_phone_sagital is None:
             st.caption("⚠️ Ângulo do celular não calculado — selecione ACC e GYR de Coxa e Tornozelo na barra lateral.")
 
-        # --- Planos frontal e transverso (opcionais) ---
-        if show_planes_extra:
+        # --- Planos frontal e transverso ---
+        if True:
             st.markdown("**Frontal — valgo (↑ ou ↓, ver nota) / varo (sentido oposto)**")
             fig_front = go.Figure()
             add_angle_trace(fig_front, angle_kinem_frontal, "green", "Kinem — frontal")

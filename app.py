@@ -20,6 +20,7 @@ from plotly.subplots import make_subplots
 
 from signal_utils import (
     NONE_LABEL,
+    auto_calibration_window,
     best_match,
     build_export_sheet,
     col_default,
@@ -554,34 +555,30 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # ── Calibração de amplitude do celular (corrige desalinhamento de
     # montagem / artefato de tecido mole, que tende a atenuar o sinal do
     # celular por um fator ~constante em relação ao Kinem) ──
-    # Janela automática: ±1s ao redor do pico de flexão do Kinem em toda a
-    # gravação, pra evitar que a deriva de giroscópio fora do movimento
-    # principal distorça o cálculo.
-    cal_start, cal_end = x_min_data, x_max_data
-    if angle_kinem_sagital is not None:
-        n_k = min(len(angle_kinem_sagital), len(x_axis))
-        valid = ~np.isnan(angle_kinem_sagital[:n_k])
-        if np.any(valid):
-            peak_idx = np.nanargmax(angle_kinem_sagital[:n_k])
-            peak_time = x_axis[:n_k][peak_idx]
-            cal_start = max(x_min_data, float(peak_time) - 1.0)
-            cal_end = min(x_max_data, float(peak_time) + 1.0)
+    # Cada plano usa sua PRÓPRIA janela automática (±1s ao redor do pico
+    # daquele plano específico no Kinem), não uma janela única baseada no
+    # sagital — frontal e transverso podem ter o pico em outro instante
+    # (ex.: atraso mecânico do sensor no tecido mole), então ancorar todos
+    # no pico sagital sub-otimizaria a calibração dos outros planos.
+    cal_start_sag, cal_end_sag = auto_calibration_window(angle_kinem_sagital, x_axis, x_min_data, x_max_data)
+    cal_start_front, cal_end_front = auto_calibration_window(angle_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True)
+    cal_start_trans, cal_end_trans = auto_calibration_window(angle_kinem_transverse, x_axis, x_min_data, x_max_data, signed=True)
 
     st.caption(
         "A amplitude do celular é sempre calibrada automaticamente pra bater com o Kinem "
-        "(±1s ao redor do pico de flexão). Corrige desalinhamento de montagem/tecido mole "
-        "**dessa gravação específica** — não é uma calibração permanente do sensor."
+        "(±1s ao redor do pico de cada plano, calibrado separadamente). Corrige desalinhamento "
+        "de montagem/tecido mole **dessa gravação específica** — não é uma calibração permanente do sensor."
     )
 
-    gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start, cal_end)
+    gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start_sag, cal_end_sag)
     if gain_sagital is not None and angle_phone_sagital is not None:
         angle_phone_sagital = angle_phone_sagital * gain_sagital
 
-    gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start, cal_end)
+    gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start_front, cal_end_front)
     if gain_frontal is not None and angle_phone_frontal is not None:
         angle_phone_frontal = angle_phone_frontal * gain_frontal
 
-    gain_transverse = fit_scale_gain(angle_kinem_transverse, angle_phone_transverse, x_axis, cal_start, cal_end)
+    gain_transverse = fit_scale_gain(angle_kinem_transverse, angle_phone_transverse, x_axis, cal_start_trans, cal_end_trans)
     if gain_transverse is not None and angle_phone_transverse is not None:
         angle_phone_transverse = angle_phone_transverse * gain_transverse
 

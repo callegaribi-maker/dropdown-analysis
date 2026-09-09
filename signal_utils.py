@@ -694,6 +694,28 @@ def knee_angle_direction_note(plane: str) -> str:
     return ""
 
 
+def auto_calibration_window(reference: np.ndarray | None, x_axis: np.ndarray,
+                            x_min: float, x_max: float, signed: bool = False,
+                            half_width: float = 1.0) -> tuple:
+    """
+    Janela de calibração (início, fim) em segundos, ancorada ±half_width em
+    torno do pico do sinal de referência — usada para calibrar a amplitude
+    do celular contra o Kinem num trecho representativo do movimento
+    (evitando a deriva de giroscópio fora do pico). signed=True usa o pico
+    de magnitude absoluta (útil para frontal/transverso, que têm sinal).
+    """
+    if reference is None:
+        return x_min, x_max
+    n = min(len(reference), len(x_axis))
+    seg = reference[:n]
+    seg = np.abs(seg) if signed else seg
+    if not np.any(~np.isnan(seg)):
+        return x_min, x_max
+    peak_idx = np.nanargmax(seg)
+    peak_time = float(x_axis[:n][peak_idx])
+    return max(x_min, peak_time - half_width), min(x_max, peak_time + half_width)
+
+
 def fit_scale_gain(reference: np.ndarray | None, target: np.ndarray | None,
                     x_axis: np.ndarray, window_start: float, window_end: float,
                     clip: tuple = (0.1, 10.0)) -> float | None:

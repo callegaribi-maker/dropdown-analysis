@@ -555,6 +555,26 @@ def knee_angle_from_kinem(df: pd.DataFrame, hip_keywords: tuple, knee_keywords: 
     return np.degrees(np.arccos(cos_angle))
 
 
+def zero_reference_angle(series: np.ndarray | None, x_axis: np.ndarray,
+                         baseline_start: float, baseline_end: float) -> np.ndarray | None:
+    """
+    Ajusta um sinal de ângulo para que a média numa janela de referência
+    (em segundos relativos ao pico) vire 0° — útil pra fazer 0° = extensão
+    completa (postura inicial, antes do movimento) e o resto do sinal subir
+    conforme a flexão aumenta.
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    mask = (x_axis[:n] >= baseline_start) & (x_axis[:n] <= baseline_end)
+    if not np.any(mask):
+        return series
+    baseline = np.nanmean(series[:n][mask])
+    if np.isnan(baseline):
+        return series
+    return series - baseline
+
+
 # ──────────────────────────────────────────────
 # Exportação
 # ──────────────────────────────────────────────

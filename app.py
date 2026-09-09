@@ -38,6 +38,7 @@ from signal_utils import (
     numeric_cols,
     resample_to_regular,
     try_numeric,
+    zero_reference_angle,
 )
 
 st.set_page_config(page_title="Visualizador de Sinais", layout="wide")
@@ -596,7 +597,8 @@ if st.session_state.proc_data and st.session_state.synced:
     st.caption(
         "Celular: fusão ACC+GYR (filtro complementar) entre Coxa e Tornozelo — ângulo relativo, "
         "não calibrado clinicamente. Kinem: ângulo ótico real entre os vetores Trocânter→Côndilo e "
-        "Côndilo→Tornozelo (0° = perna estendida)."
+        "Côndilo→Tornozelo (0° = perna estendida na geometria bruta). Use a opção abaixo para zerar "
+        "ambos os sinais numa janela do início do movimento."
     )
 
     # O ângulo é calculado a partir dos dados BRUTOS alinhados (reamostrados,
@@ -622,6 +624,27 @@ if st.session_state.proc_data and st.session_state.synced:
     angle_kinem = knee_angle_from_kinem(
         kdf_raw, GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"],
     ) if not kdf_raw.empty else None
+
+    zc1, zc2, zc3 = st.columns([1.4, 1, 1])
+    with zc1:
+        zero_baseline = st.checkbox(
+            "Zerar no início (0° = extensão completa)", value=True, key="zero_baseline",
+            help="Usa a média numa janela no início do movimento como referência de 0° — o resto do sinal passa a mostrar o quanto flexionou a partir dessa postura.",
+        )
+    with zc2:
+        baseline_start = st.number_input(
+            "Referência de 0° — de (s)", value=float(view_start), step=0.1, key="baseline_start",
+            disabled=not zero_baseline,
+        )
+    with zc3:
+        baseline_end = st.number_input(
+            "Referência de 0° — até (s)", value=float(view_start) + 0.5, step=0.1, key="baseline_end",
+            disabled=not zero_baseline,
+        )
+
+    if zero_baseline:
+        angle_kinem = zero_reference_angle(angle_kinem, x_axis, baseline_start, baseline_end)
+        angle_phone = zero_reference_angle(angle_phone, x_axis, baseline_start, baseline_end)
 
     if angle_phone is None and angle_kinem is None:
         st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")

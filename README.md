@@ -1,43 +1,38 @@
-# Dropdown Analysis — Visualizador de Sinais Sincronizados
+# 📊 Visualizador de Sinais — Y-Balance & Step-Down
 
-App Streamlit para visualizar sinais de cinemática (posição/velocidade/aceleração
-por eixo X/Y/Z) e IMU (acelerômetro e giroscópio) de joelho/tornozelo, a partir
-de um arquivo `.xlsx` com uma aba por região do corpo.
+App em Streamlit para sincronizar e analisar sinais de Kinem (câmera) com
+acelerômetro/giroscópio de celular posicionados em três segmentos — **L5**,
+**Coxa** e **Tornozelo** — durante testes de Y-Balance e Step-Down.
 
-## O que o app faz
+## Funcionalidades
 
-- Lê qualquer `.xlsx` com abas no formato: `Tempo (s)`, `<segmento> X/Y/Z`,
-  `<segmento> v(X/Y/Z)`, `<segmento> a(X/Y/Z)`, `ACC_X/Y/Z`, `GYR_X/Y/Z`.
-- Dropdowns para escolher: região do corpo (aba), dispositivo/tipo de sinal
-  (Cinemática - Posição/Velocidade/Aceleração, IMU - Acelerômetro/Giroscópio) e eixo.
-- Segmenta os ciclos de teste (repetições) a partir de uma coluna de referência
-  configurável (padrão: coluna D da aba `L5`), com 3 métodos: picos, vales ou
-  cruzamento por zero. O número de ciclos é detectado automaticamente (não é fixo).
-- Exporta todos os gráficos (todas as combinações de região × dispositivo × eixo)
-  como um `.zip` de PNGs.
+- Upload de múltiplos arquivos CSV/TXT (Kinem + ACC/GYR de cada segmento)
+- Sincronização automática por detecção de pico + correlação cruzada
+- Pré-processamento: detrend e filtro passa-baixa (Butterworth)
+- Visualização de todos os eixos X, Y, Z sincronizados
+- Checagem de qualidade (Kinem vs. celular, sobreposto em z-score)
+- **Ângulo do joelho**: estimado pelo celular (filtro complementar ACC+GYR
+  entre Coxa e Tornozelo) comparado ao ângulo ótico real do Kinem
+  (geometria 3D Trocânter→Côndilo→Tornozelo)
+- Exportação da janela selecionada para Excel (.xlsx)
 
-## Rodar localmente
+## Rodando localmente
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Abra o link local (normalmente `http://localhost:8501`) e envie o arquivo `.xlsx`.
+## Deploy (Streamlit Community Cloud)
 
-## Deploy no Streamlit Community Cloud
-
-1. Suba este repositório para o GitHub.
-2. Em https://share.streamlit.io, clique em "New app", selecione o repositório,
-   branch `main` e o arquivo `app.py`.
-3. Depois de publicado, envie o `.xlsx` diretamente pela interface web — os
-   dados não ficam salvos no repositório, apenas processados em memória na sessão.
+1. Suba este repositório no GitHub (repositório: `dropdown-analysis`).
+2. Acesse [share.streamlit.io](https://share.streamlit.io) e faça login com sua conta GitHub.
+3. Clique em **"New app"**, selecione o repositório `callegaribi-maker/dropdown-analysis`, branch `main` e arquivo principal `app.py`.
+4. Clique em **Deploy** — em alguns minutos você terá um link público tipo
+   `https://seu-app.streamlit.app`.
 
 ## Estrutura
 
-```
-dropdown-analysis/
-├── app.py            # app Streamlit
-├── requirements.txt  # dependências
-└── README.md
-```
+- `app.py` — interface Streamlit (upload, sincronização, gráficos, exportação)
+- `signal_utils.py` — funções puras de processamento de sinal (sem dependência do Streamlit)
+- `requirements.txt` — dependências Python

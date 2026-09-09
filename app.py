@@ -1,1226 +1,789 @@
 """
-Dropdown Analysis - Visualizador de sinais sincronizados (cinemática + IMU)
-============================================================================
-App Streamlit para explorar arquivos .xlsx com sinais de cinemática
-(posição/velocidade/aceleração por eixo) e IMU (acelerômetro/giroscópio),
-segmentados em ciclos de teste a partir de uma coluna de referência.
+app.py
+──────
+Visualizador de Sinais — Y-Balance & Step-Down
 
-Como rodar localmente:
-    pip install -r requirements.txt
-    streamlit run app.py
-
-Deploy no Streamlit Community Cloud: aponte para este repositório / app.py.
+Carrega arquivos de Kinem (câmera) e de celulares (ACC/GYR) posicionados na
+L5, na coxa e no tornozelo, sincroniza-os pelo pico de impacto do salto/step,
+permite pré-processamento (detrend + filtro passa-baixa), visualização
+automática de todos os eixos X/Y/Z, checagem de qualidade, estimativa do
+ângulo do joelho (celular vs. Kinem) e exportação de uma janela selecionada
+para Excel.
 """
 
 import io
-import os
-import re
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
-from scipy.signal import butter, detrend, filtfilt, find_peaks
 
-st.set_page_config(page_title="Dropdown Analysis - Sinais Sincronizados", layout="wide")
+from signal_utils import (
+    NONE_LABEL,
+    apply_detrend,
+    apply_lowpass,
+    best_match,
+    build_export_sheet,
+    col_default,
+    detect_time_axis,
+    find_highest_peak,
+    find_sync_xcorr,
+    get_aligned_data,
+    is_xyz_col,
+    kinem_cols_for_body,
+    knee_angle_from_kinem,
+    knee_angle_from_phone,
+    load_file,
+    numeric_cols,
+    resample_to_regular,
+    try_numeric,
+)
 
-# ----------------------------------------------------------------------------
-# Parsing / categorização de colunas
-# ----------------------------------------------------------------------------
+st.set_page_config(page_title="Visualizador de Sinais", layout="wide")
+st.title("📊 Visualizador de Sinais — Y-Balance & Step-Down")
 
-IMU_MAP = {
-    "ACC_X": ("IMU - Acelerômetro", "X"),
-    "ACC_Y": ("IMU - Acelerômetro", "Y"),
-    "ACC_Z": ("IMU - Acelerômetro", "Z"),
-    "GYR_X": ("IMU - Giroscópio", "X"),
-    "GYR_Y": ("IMU - Giroscópio", "Y"),
-    "GYR_Z": ("IMU - Giroscópio", "Z"),
+NONE = NONE_LABEL
+
+# Definição dos 3 grupos anatômicos: (chave, rótulo, cor, keywords p/ auto-match
+# de arquivo de celular, keywords p/ colunas do Kinem)
+GROUPS = {
+    "l5": dict(label="L5", emoji="🟢", kinem_kw=("l5", "l 5"),
+               file_kw=(("acel", "l5"), ("acc", "l5"))),
+    "coxa": dict(label="Coxa", emoji="🟠", kinem_kw=("trocanter",),
+                 file_kw=(("acel", "coxa"), ("acc", "coxa"), ("acel", "quadril"), ("acc", "quadril"))),
+    "tornozelo": dict(label="Tornozelo", emoji="🔵", kinem_kw=("torn",),
+                      file_kw=(("acel", "tornozelo"), ("acc", "tornozelo"), ("acel", "ankle"), ("acc", "ankle"))),
+}
+GYR_FILE_KW = {
+    "l5": (("gyro", "l5"), ("gyr", "l5")),
+    "coxa": (("gyro", "coxa"), ("gyr", "coxa"), ("gyro", "quadril"), ("gyr", "quadril")),
+    "tornozelo": (("gyro", "tornozelo"), ("gyr", "tornozelo"), ("gyro", "ankle"), ("gyr", "ankle")),
 }
 
+DEFAULT_SESSION_STATE = {
+    "files_data": {},
+    "raw_synced": {},
+    "proc_data": {},
+    "proc_data_nofilter": {},
+    "offsets": {},
+    "peak_ref": None,
+    "target_fs": 100,
+    "fs_info": {},
+    "show_preview": False,
+    "synced": False,
+    "synced_kinem_cols": {},
+}
+for key, default in DEFAULT_SESSION_STATE.items():
+    st.session_state.setdefault(key, default)
 
-def categorize_column(col_name: str):
-    """Classifica uma coluna em (grupo, eixo).
 
-    Grupos possíveis:
-      - IMU - Acelerômetro / IMU - Giroscópio
-      - Cinemática - Posição / Velocidade / Aceleração
+# ══════════════════════════════════════════════
+# 1 · Upload de arquivos
+# ══════════════════════════════════════════════
+with st.sidebar:
+    st.header("1 · Carregar Arquivos")
+    uploaded = st.file_uploader(
+        "CSV ou TXT (até 7 arquivos: Kinem + ACC/GYR de L5, Coxa e Tornozelo)",
+        type=["csv", "txt"], accept_multiple_files=True,
+    )
+    if uploaded:
+        loaded, errors = {}, []
+        for f in uploaded:
+            df = load_file(f)
+            if df is not None:
+                loaded[f.name] = df
+            else:
+                errors.append(f.name)
+
+        if set(loaded.keys()) != set(st.session_state.files_data.keys()):
+            st.session_state.files_data = loaded
+            st.session_state.proc_data = {}
+            st.session_state.offsets = {}
+            st.session_state.fs_info = {}
+
+        if errors:
+            st.error(f"Não carregou: {', '.join(errors)}")
+        st.success(f"{len(loaded)} arquivo(s) ✔")
+
+files_data = st.session_state.files_data
+if not files_data:
+    st.info("👈 Carregue os arquivos na barra lateral para começar.")
+    st.stop()
+
+file_names = list(files_data.keys())
+
+
+# ══════════════════════════════════════════════
+# 2 · Kinem (referência)
+# ══════════════════════════════════════════════
+with st.sidebar:
+    st.header("2 · Kinem (referência)")
+    kinem_idx = next((i for i, n in enumerate(file_names) if "kinem" in n.lower()), 0)
+    kinem_ref = st.selectbox("Arquivo Kinem", file_names, index=kinem_idx)
+    kinem_num = numeric_cols(files_data[kinem_ref])
+
+    st.caption("As três colunas vêm do mesmo arquivo — cada pico ocorre na mesma amostra do Kinem.")
+    st.caption("⚠️ No Kinem: Vertical = Z, AP = Y, ML = X. Selecione a coluna Z (a) vertical de cada marcador.")
+
+    kinem_sync_cols = {}
+    kinem_sync_cols["l5"] = st.selectbox(
+        "Coluna L5 vertical (referência sync)", kinem_num,
+        index=col_default(kinem_num, ["l 5 a(z)", "l5 a(z)", "l5a(z)", "l 5 z", "l5_az", "l5"]),
+        key="kinem_col_l5",
+    )
+    kinem_sync_cols["coxa"] = st.selectbox(
+        "Coluna Coxa (Trocânter) vertical (referência sync)", kinem_num,
+        index=col_default(kinem_num, [
+            "trocanter maior dir. a(z)", "trocanter a(z)", "trocanter dir. a(z)",
+            "trocanter maior dir.", "trocanter",
+        ]),
+        key="kinem_col_coxa",
+    )
+    kinem_sync_cols["tornozelo"] = st.selectbox(
+        "Coluna Tornozelo vertical (referência sync)", kinem_num,
+        index=col_default(kinem_num, [
+            "osso externo do torn. dir. a(z)", "osso externo do torn. a(z)",
+            "torn. dir. a(z)", "osso externo do torn.", "tornozelo", "torn",
+        ]),
+        key="kinem_col_tornozelo",
+    )
+
+others = [n for n in file_names if n != kinem_ref]
+
+# ══════════════════════════════════════════════
+# 3/4/5 · Grupos de celular (L5, Coxa, Tornozelo)
+# ══════════════════════════════════════════════
+phone_files = {}   # group_key -> {"acc": fname|NONE, "acc_col": colname|None, "gyr": fname|NONE}
+section_titles = {"l5": "3 · Grupo L5 (celular)", "coxa": "4 · Grupo Coxa (celular)",
+                   "tornozelo": "5 · Grupo Tornozelo (celular)"}
+
+with st.sidebar:
+    for gkey, gdef in GROUPS.items():
+        st.header(section_titles[gkey])
+        if gkey == "l5":
+            st.caption("ACC e GYR já saem sincronizados entre si pelo celular.")
+
+        acc = st.selectbox(
+            f"ACC {gdef['label']}", [NONE] + others,
+            index=best_match(others, *gdef["file_kw"]), key=f"{gkey}_acc",
+        )
+        acc_col = None
+        if acc != NONE:
+            num = numeric_cols(files_data[acc])
+            acc_col = st.selectbox(
+                f"Coluna Y do ACC {gdef['label']}", num,
+                index=col_default(num, ["y"]), key=f"{gkey}_acc_col",
+            )
+        gyr = st.selectbox(
+            f"GYR {gdef['label']}  ← offset = ACC", [NONE] + others,
+            index=best_match(others, *GYR_FILE_KW[gkey]), key=f"{gkey}_gyr",
+        )
+        phone_files[gkey] = {"acc": acc, "acc_col": acc_col, "gyr": gyr}
+
+# ══════════════════════════════════════════════
+# Configurações avançadas de sincronização
+# ══════════════════════════════════════════════
+with st.sidebar:
+    with st.expander("⚙️ Configurações avançadas de sincronização", expanded=False):
+        fs_target = st.number_input(
+            "Frequência alvo após reamostragem (Hz)",
+            min_value=1, max_value=10000, value=100, step=10,
+            help="Todos os arquivos serão reamostrados para esta frequência comum.",
+        )
+        cf_alpha = st.slider(
+            "Filtro complementar (ângulo do joelho) — peso do giroscópio", 0.80, 0.999,
+            value=0.98, step=0.005,
+            help="Mais próximo de 1 = confia mais no giroscópio (menos deriva do acelerômetro).",
+        )
+
+
+# ══════════════════════════════════════════════
+# Botões: Preview + Sincronizar
+# ══════════════════════════════════════════════
+btn_col1, btn_col2, btn_col3 = st.columns([2, 1, 2])
+
+with btn_col1:
+    if st.button("👁 Preview sinais brutos", use_container_width=True):
+        st.session_state.show_preview = not st.session_state.show_preview
+
+with btn_col2:
+    janela_seg = st.number_input(
+        "Pico nos primeiros (s)", min_value=0.1, max_value=300.0, value=16.0, step=0.5,
+        help="Janela de busca do pico de sincronização.",
+    )
+
+with btn_col3:
+    sincronizar = st.button("🔗 Sincronizar", type="primary", use_container_width=True)
+
+
+def _sync_phone_group(kinem_col, peak_kinem, acc_file, acc_col, gyr_file,
+                       raw_synced, fs, janela_samp, none_label=NONE):
+    """Sincroniza um par ACC/GYR de celular contra uma coluna vertical do Kinem.
+
+    Retorna (offsets_parciais, mensagem|None) — GYR herda o offset do ACC.
     """
-    if col_name in IMU_MAP:
-        return IMU_MAP[col_name]
+    offsets = {}
+    if acc_file == none_label or not acc_col:
+        return offsets, None
+    if acc_col not in raw_synced.get(acc_file, pd.DataFrame()).columns:
+        return offsets, None
 
-    m = re.match(r"^(.*?)\s+v\(([XYZ])\)$", col_name)
-    if m:
-        return ("Cinemática - Velocidade", m.group(2))
-
-    m = re.match(r"^(.*?)\s+a\(([XYZ])\)$", col_name)
-    if m:
-        return ("Cinemática - Aceleração", m.group(2))
-
-    m = re.match(r"^(.*?)\s+([XYZ])$", col_name)
-    if m:
-        return ("Cinemática - Posição", m.group(2))
-
-    return (None, None)
+    p = find_sync_xcorr(raw_synced[kinem_ref][kinem_col], raw_synced[acc_file][acc_col],
+                         peak_kinem, janela_samp, fs)
+    offsets[acc_file] = peak_kinem - p
+    msg = f"pico @ {p} ({p/fs:.2f} s) → offset {peak_kinem-p:+d}"
+    if gyr_file != none_label:
+        offsets[gyr_file] = peak_kinem - p
+    return offsets, msg
 
 
-@st.cache_data(show_spinner=False)
-def load_workbook(file_bytes: bytes):
-    xls = pd.ExcelFile(io.BytesIO(file_bytes))
-    sheets = {}
-    for name in xls.sheet_names:
-        df = xls.parse(name)
-        sheets[name] = df
-    return sheets
+def _find_secondary_peak(raw_synced, kinem_col, peak_l5, fs, win_seconds=1.0):
+    """Pico do Kinem de um grupo secundário (coxa/tornozelo), buscado numa
+    janela de ±win_seconds ao redor do pico de referência do L5."""
+    win = int(win_seconds * fs)
+    s = try_numeric(raw_synced[kinem_ref][kinem_col])
+    k_start, k_end = max(0, peak_l5 - win), min(len(s), peak_l5 + win)
+    return find_highest_peak(s.iloc[k_start:k_end].reset_index(drop=True), k_end - k_start, fs) + k_start
 
 
-def build_catalog(df: pd.DataFrame):
-    """Retorna dict {grupo: {eixo: nome_da_coluna}} para um dataframe."""
-    catalog = {}
-    for col in df.columns[1:]:  # pula a coluna de tempo
-        grupo, eixo = categorize_column(str(col))
-        if grupo is None:
-            continue
-        catalog.setdefault(grupo, {})[eixo] = col
-    return catalog
+if sincronizar:
+    with st.spinner("Reamostrando e detectando pico…"):
+        raw_synced, fs_info, msgs_pre = {}, {}, []
+        for fname, df in files_data.items():
+            r, fs_orig, desc = resample_to_regular(df, fs_target)
+            raw_synced[fname] = r
+            fs_info[fname] = fs_orig
+            msgs_pre.append(f"**{fname[:35]}**: {desc}")
 
+        st.session_state.raw_synced = raw_synced
+        st.session_state.target_fs = fs_target
+        st.session_state.fs_info = fs_info
+        st.session_state.proc_data = {}
+        st.session_state.proc_data_nofilter = {}
 
-def time_column(df: pd.DataFrame) -> str:
-    return df.columns[0]
+        janela_samp = int(janela_seg * fs_target)
+        offsets = {kinem_ref: 0}
+        msgs_sync = []
 
+        peak_l5 = find_highest_peak(
+            try_numeric(raw_synced[kinem_ref][kinem_sync_cols["l5"]]), janela_samp, fs_target,
+        )
+        st.session_state.peak_ref = peak_l5
+        st.session_state.synced = True
+        st.session_state.show_preview = False
+        msgs_sync.append(f"**Kinem L5** — pico @ {peak_l5} ({peak_l5/fs_target:.2f} s) → x=0")
 
-def _butter_lowpass(cutoff_hz: float, fs: float, order: int):
-    nyq = fs / 2.0
-    wn = min(max(cutoff_hz / nyq, 1e-4), 0.99)
-    return butter(order, wn, btype="low")
-
-
-def filter_dataframe(df: pd.DataFrame, kinem_cutoff_hz: float, imu_cutoff_hz: float, order: int) -> pd.DataFrame:
-    """Detrend + filtro Butterworth passa-baixa (zero-fase, via filtfilt) em todas as
-    colunas de sinal (todas menos a de tempo). Cinemática (posição/velocidade/aceleração)
-    usa um corte próprio (mais baixo), diferente do IMU (ACC/GYR)."""
-    tcol = time_column(df)
-    t_arr = df[tcol].to_numpy(dtype=float)
-    dt = np.median(np.diff(t_arr)) if len(t_arr) > 1 else 0.01
-    fs = 1.0 / dt if dt > 0 else 100.0
-
-    b_kinem, a_kinem = _butter_lowpass(kinem_cutoff_hz, fs, order)
-    b_imu, a_imu = _butter_lowpass(imu_cutoff_hz, fs, order)
-
-    out = df.copy()
-    for col in df.columns[1:]:
-        grupo, _ = categorize_column(str(col))
-        b, a = (b_kinem, a_kinem) if (grupo or "").startswith("Cinemática") else (b_imu, a_imu)
-        min_len = 3 * (max(len(a), len(b)))
-        sig = df[col].to_numpy(dtype=float)
-        sig = detrend(sig)
-        if len(sig) > min_len:
-            sig = filtfilt(b, a, sig)
-        out[col] = sig
-    return out
-
-
-# ----------------------------------------------------------------------------
-# Segmentação de trials (manual, a partir de vales/picos detectados)
-# ----------------------------------------------------------------------------
-
-DESCIDA_COLOR = "rgba(255,127,14,0.18)"
-SUBIDA_COLOR = "rgba(44,160,44,0.18)"
-PLATEAU_COLOR = "rgba(150,150,150,0.25)"
-
-
-def add_trial_shading(fig: go.Figure, sel_starts, sel_ends, valley_times: np.ndarray, t_first: float):
-    """Cada CICLO completo = platô (cinza) + descida (laranja) + subida (verde), nessa
-    ordem, sem nenhum trecho fora dessas 3 fases. O platô do ciclo i é o intervalo entre
-    o fim do ciclo anterior (ou o início da gravação, no ciclo 1) e o início da descida."""
-    n = len(sel_starts)
-    for i in range(n):
-        platform_start = sel_ends[i - 1] if i > 0 else t_first
-        d_start = sel_starts[i]
-        d_end = sel_ends[i]
-        inside = valley_times[(valley_times > d_start) & (valley_times < d_end)]
-        v = inside[0] if len(inside) else (d_start + d_end) / 2
-        if platform_start < d_start:
-            fig.add_vrect(
-                x0=platform_start, x1=d_start, fillcolor=PLATEAU_COLOR, line_width=0, layer="below",
-                annotation_text="platô", annotation_position="top", annotation_font_size=10,
+        group_peaks = {"l5": peak_l5}
+        for gkey in ("coxa", "tornozelo"):
+            pk = _find_secondary_peak(raw_synced, kinem_sync_cols[gkey], peak_l5, fs_target)
+            group_peaks[gkey] = pk
+            msgs_sync.append(
+                f"**Kinem {GROUPS[gkey]['label']}** — pico @ {pk} ({pk/fs_target:.2f} s) "
+                f"→ Δ {(pk-peak_l5)/fs_target:+.3f} s"
             )
-        fig.add_vrect(x0=d_start, x1=v, fillcolor=DESCIDA_COLOR, line_width=0, layer="below")
-        fig.add_vrect(x0=v, x1=d_end, fillcolor=SUBIDA_COLOR, line_width=0, layer="below")
-        fig.add_vline(x=v, line_dash="dot", line_color="orange", opacity=0.8)
-    for s in sel_starts:
-        fig.add_vline(x=s, line_dash="dash", line_color="#1f77b4", opacity=0.6)
-    for e in sel_ends:
-        fig.add_vline(x=e, line_dash="dash", line_color="#2ca02c", opacity=0.6)
+
+        for gkey, gdef in GROUPS.items():
+            pf = phone_files[gkey]
+            g_offs, g_msg = _sync_phone_group(
+                kinem_sync_cols[gkey], group_peaks[gkey], pf["acc"], pf["acc_col"], pf["gyr"],
+                raw_synced, fs_target, janela_samp,
+            )
+            offsets.update(g_offs)
+            if g_msg:
+                msgs_sync.append(f"**{gdef['label']} ACC** — {g_msg}")
+                if pf["gyr"] != NONE and pf["gyr"] in g_offs:
+                    msgs_sync.append(f"**{gdef['label']} GYR** — offset {g_offs[pf['gyr']]:+d} (= ACC {gdef['label']})")
+
+        for fname in file_names:
+            offsets.setdefault(fname, 0)
+        st.session_state.offsets = offsets
+        st.session_state.synced_kinem_cols = dict(kinem_sync_cols)
+
+        with st.expander("📋 Detalhes da sincronização", expanded=False):
+            st.markdown("**Frequências detectadas:**")
+            for m in msgs_pre:
+                st.write(m)
+            st.markdown("**Offsets calculados:**")
+            for m in msgs_sync:
+                st.write(m)
 
 
-def find_plateau_edges(is_flat: np.ndarray, idx: int):
-    """Expande a partir de idx enquanto o sinal estiver 'plano', retornando (esquerda, direita)."""
-    n = len(is_flat)
-    left = right = idx
-    while left > 0 and is_flat[left - 1]:
-        left -= 1
-    while right < n - 1 and is_flat[right + 1]:
-        right += 1
-    return left, right
+# ══════════════════════════════════════════════
+# Auto-resync quando alguma coluna de referência muda
+# ══════════════════════════════════════════════
+if st.session_state.synced and st.session_state.raw_synced and st.session_state.peak_ref is not None:
+    prev_cols = st.session_state.synced_kinem_cols
+    changed = any(prev_cols.get(k) != kinem_sync_cols[k] for k in kinem_sync_cols)
+
+    if changed:
+        raws = st.session_state.raw_synced
+        tfs = st.session_state.target_fs or 100
+        jsamp = int(janela_seg * tfs)
+        offs = dict(st.session_state.offsets)
+
+        if prev_cols.get("l5") != kinem_sync_cols["l5"] and kinem_sync_cols["l5"] in raws.get(kinem_ref, pd.DataFrame()).columns:
+            pk_l5 = find_highest_peak(try_numeric(raws[kinem_ref][kinem_sync_cols["l5"]]), jsamp, tfs)
+            st.session_state.peak_ref = pk_l5
+            offs[kinem_ref] = 0
+            pf = phone_files["l5"]
+            g_offs, _ = _sync_phone_group(
+                kinem_sync_cols["l5"], pk_l5, pf["acc"], pf["acc_col"], pf["gyr"], raws, tfs, jsamp,
+            )
+            offs.update(g_offs)
+
+        pk_l5 = st.session_state.peak_ref
+        for gkey in ("coxa", "tornozelo"):
+            if kinem_sync_cols[gkey] not in raws.get(kinem_ref, pd.DataFrame()).columns:
+                continue
+            pk_g = _find_secondary_peak(raws, kinem_sync_cols[gkey], pk_l5, tfs)
+            pf = phone_files[gkey]
+            g_offs, _ = _sync_phone_group(
+                kinem_sync_cols[gkey], pk_g, pf["acc"], pf["acc_col"], pf["gyr"], raws, tfs, jsamp,
+            )
+            offs.update(g_offs)
+
+        st.session_state.offsets = offs
+        st.session_state.synced_kinem_cols = dict(kinem_sync_cols)
+        st.session_state.proc_data = {}  # força reprocessamento
 
 
-# ----------------------------------------------------------------------------
-# UI
-# ----------------------------------------------------------------------------
+# ══════════════════════════════════════════════
+# Preview bruto
+# ══════════════════════════════════════════════
+if st.session_state.show_preview:
+    st.subheader("👁 Sinais brutos — sem pré-processamento")
 
-st.title("📊 Dropdown Analysis — Sinais Sincronizados")
-st.caption(
-    "Carregue o arquivo .xlsx. No gráfico de referência, todos os vales aparecem marcados "
-    "(▽ laranja) e os pontos no platô do topo (◇/★) podem ser clicados para marcar o início "
-    "e o fim de cada trial. Depois, navegue trial a trial e veja Deslocamento, Velocidade e "
-    "Aceleração (cinemática) e ACC/GYR (IMU) por eixo."
-)
+    sync_cols = [(kinem_ref, kinem_sync_cols["l5"])]
+    for gkey in ("coxa", "tornozelo"):
+        col = kinem_sync_cols[gkey]
+        if col and col != kinem_sync_cols["l5"]:
+            sync_cols.append((kinem_ref, col))
+    for gkey, pf in phone_files.items():
+        if pf["acc"] != NONE and pf["acc_col"]:
+            sync_cols.append((pf["acc"], pf["acc_col"]))
 
-uploaded = st.file_uploader("Arquivo .xlsx de sinais sincronizados", type=["xlsx"])
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        prev_t_start = st.number_input("Ver a partir de (s)", min_value=0.0, value=0.0, step=1.0, key="prev_start")
+    with pc2:
+        prev_t_end = st.number_input("Até (s)  — 0 = fim do sinal", min_value=0.0, value=0.0, step=1.0, key="prev_end")
 
-if uploaded is None:
-    st.info("Envie um arquivo .xlsx para começar (ex: sinais_sincronizados_*.xlsx).")
-    st.stop()
-
-sheets_raw = load_workbook(uploaded.getvalue())
-
-# ---- Correção de calibração conhecida (Joelho) ------------------------------
-# No sensor do Joelho, os canais ACC_X (mapeado como AP) e ACC_Y (mapeado como Vertical)
-# saem com o sinal invertido em relação à cinemática (sistema óptico): mesma forma de
-# onda, sinal trocado. Confirmado em 2 gravações/sujeitos distintos (mesmo padrão nos
-# dois), então é tratado como um erro sistemático de montagem/calibração do sensor nessa
-# região — não de sincronização — e corrigido aqui na entrada, antes de qualquer filtro,
-# gráfico ou cálculo, pra propagar certo em todo o app. ACC_Z (ML) já vem com o sinal
-# correto e não é alterado. GYR não é alterado (a inversão encontrada foi só no ACC).
-JOELHO_ACC_SIGN_FIX = ("ACC_X", "ACC_Y")
-if "Joelho" in sheets_raw:
-    _jo_df = sheets_raw["Joelho"].copy()
-    for _col in JOELHO_ACC_SIGN_FIX:
-        if _col in _jo_df.columns:
-            _jo_df[_col] = -_jo_df[_col]
-    sheets_raw["Joelho"] = _jo_df
-
-# ---- Correção de unidade do giroscópio (rad/s -> °/s) -----------------------
-# O sensor do celular (GYR_X/Y/Z) sai em radianos/segundo (padrão do sensor de giroscópio
-# do Android/iOS), não em graus/segundo — os valores brutos são muito pequenos (ex.: pico
-# de ~2.5 em vez de ~145) pra serem °/s durante um movimento como esse. Convertido aqui na
-# entrada, uma vez, pra todas as abas — assim todo o app (gráficos de ACC/GYR, resultante,
-# e o cálculo do ângulo de inclinação) já trabalha em °/s de verdade.
-GYR_COLS = ("GYR_X", "GYR_Y", "GYR_Z")
-for _name, _df in sheets_raw.items():
-    _df2 = _df.copy()
-    for _col in GYR_COLS:
-        if _col in _df2.columns:
-            _df2[_col] = np.degrees(_df2[_col])
-    sheets_raw[_name] = _df2
-
-sheet_names = list(sheets_raw.keys())
-
-# ---- Sidebar: orientação do sensor (topo — mostra L5 e Joelho juntos) ------
-_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-st.sidebar.header("📱 Orientação do sensor")
-for _region_label, _fname in (("L5 (lombar)", "orientacao_l5.png"), ("Joelho", "orientacao_joelho.png")):
-    _orient_file = os.path.join(_static_dir, _fname)
-    if os.path.exists(_orient_file):
-        st.sidebar.image(_orient_file, caption=f"Celular em {_region_label}", use_container_width=True)
-    else:
-        st.sidebar.caption(f"Imagem de orientação ({_region_label}) não encontrada.")
-st.sidebar.divider()
-
-# ---- Sidebar: segmentação de trials (menus recolhidos para ocupar menos) ---
-with st.sidebar.expander("🔁 Segmentação de trials", expanded=False):
-    # Referência escondida por padrão (raramente muda) — abas/coluna já vêm com um
-    # default sensato (L5, coluna D), então fica num sub-expander recolhido.
-    with st.expander("Referência (avançado)", expanded=False):
-        ref_sheet = st.selectbox(
-            "Aba de referência", sheet_names,
-            index=sheet_names.index("L5") if "L5" in sheet_names else 0,
-        )
-        _ref_cols_raw = list(sheets_raw[ref_sheet].columns[1:])
-        # coluna D = 4ª coluna da planilha original (índice 3) -> índice 2 após remover Tempo
-        _default_ref_idx = 2 if len(_ref_cols_raw) > 2 else 0
-        ref_col = st.selectbox(
-            "Coluna de referência (padrão: coluna D)", _ref_cols_raw, index=_default_ref_idx
-        )
-
-    min_distance = st.slider("Distância mínima entre marcos (amostras)", 5, 300, 50)
-    prominence = st.slider("Proeminência mínima (vales/picos)", 0.0, 2.0, 0.05, step=0.01)
-    plateau_frac = st.slider(
-        "Sensibilidade do platô (menor = platô mais estreito)", 0.01, 0.30, 0.05, step=0.01
+    n_prev = len(sync_cols)
+    fig_p = make_subplots(
+        rows=n_prev, cols=1, shared_xaxes=False,
+        subplot_titles=[f"{fn} · {c}" for fn, c in sync_cols], vertical_spacing=0.06,
     )
+    for row, (fname, col) in enumerate(sync_cols, start=1):
+        t, _ = detect_time_axis(files_data[fname])
+        x = t - t[0] if t is not None else np.arange(len(files_data[fname]))
+        y = try_numeric(files_data[fname][col])
+        mask = x >= prev_t_start
+        if prev_t_end > prev_t_start:
+            mask &= x <= prev_t_end
+        fig_p.add_trace(go.Scatter(x=x[mask], y=y[mask], mode="lines", showlegend=False), row=row, col=1)
 
-# ---- Sidebar: filtro do sinal (menu recolhido) ------------------------------
-with st.sidebar.expander("🧹 Filtro do sinal", expanded=False):
-    use_filter = st.checkbox(
-        "Aplicar filtro passa-baixa (detrend + Butterworth + filtfilt)", value=True
+    fig_p.update_layout(
+        height=240 * n_prev, template="plotly_white",
+        title="Colunas de sync — tempo original de cada arquivo", hovermode="x unified",
     )
-    kinem_cutoff = st.slider("Corte Kinem (Hz)", 0.2, 10.0, 1.0, step=0.1)
-    imu_cutoff = st.slider("Corte ACC/GYR (Hz)", 0.5, 10.0, 1.0, step=0.5)
-    filter_order = st.slider("Ordem do filtro", 2, 8, 4)
+    st.plotly_chart(fig_p, use_container_width=True)
+    st.divider()
 
-if use_filter:
-    sheets = {name: filter_dataframe(df, kinem_cutoff, imu_cutoff, filter_order) for name, df in sheets_raw.items()}
-    st.sidebar.caption(
-        f"Filtro ativo: Kinem {kinem_cutoff:.1f} Hz, ACC/GYR {imu_cutoff:.1f} Hz, ordem {filter_order} "
-        f"(Butterworth passa-baixa, zero-fase)."
-    )
-else:
-    sheets = sheets_raw
-    st.sidebar.caption("Filtro desativado — usando sinal bruto.")
 
-ref_df = sheets[ref_sheet]
-ref_cols = list(ref_df.columns[1:])
+# ══════════════════════════════════════════════
+# Verificação de alinhamento
+# ══════════════════════════════════════════════
+def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, label_p,
+                            vraw, vx, vfs):
+    check = []
+    df_k = vraw.get(kinem_ref, pd.DataFrame())
+    if kinem_col in df_k.columns:
+        check.append((df_k, kinem_col, label_k))
+    if phone_file != NONE and phone_col and phone_file in vraw:
+        df_p = vraw[phone_file]
+        if phone_col in df_p.columns:
+            check.append((df_p, phone_col, label_p))
+    if len(check) < 2:
+        return
 
-t = ref_df[time_column(ref_df)].to_numpy()
-ref_signal = ref_df[ref_col].to_numpy(dtype=float)
-n_samples = len(ref_signal)
+    with st.expander(f"🔍 Verificação — alinhamento {title}", expanded=True):
+        colors_v = ["blue", "red"]
+        series, caps = [], []
+        for df_s, col, lbl in check:
+            s = try_numeric(df_s[col]).fillna(0).values.astype(float)
+            pk = np.nanmax(np.abs(s))
+            series.append((s / pk if pk > 0 else s, lbl))
+            caps.append(f"`{col}`")
 
-valleys_idx, _ = find_peaks(-ref_signal, distance=min_distance, prominence=prominence)
-peaks_idx, _ = find_peaks(ref_signal, distance=min_distance, prominence=prominence)
-valley_times = t[valleys_idx]
-
-# Detecta o platô (região "plana", derivada baixa) em torno de cada pico e nas duas
-# bordas do registro. O platô fica ENTRE o marco de "fim de trial" e o marco de
-# "início do próximo trial" e não entra na análise (não é sombreado nem incluído
-# na janela de um trial).
-deriv = np.gradient(ref_signal, t)
-max_abs_deriv = np.max(np.abs(deriv)) if n_samples else 1.0
-is_flat = np.abs(deriv) < plateau_frac * (max_abs_deriv if max_abs_deriv > 0 else 1.0)
-
-# Platô inicial/final: procura o ponto mais alto na região antes do 1º vale / depois
-# do último vale (em vez de checar só a própria borda, que pode ter ruído) e expande
-# a partir dali — assim o platô do começo/fim da gravação é sempre considerado.
-pre_end = valleys_idx[0] if len(valleys_idx) else n_samples - 1
-pre_peak = int(np.argmax(ref_signal[:pre_end + 1])) if pre_end > 0 else 0
-if is_flat[pre_peak]:
-    _, r0 = find_plateau_edges(is_flat, pre_peak)
-    start0 = t[r0]
-else:
-    start0 = t[pre_peak]
-
-post_start = valleys_idx[-1] if len(valleys_idx) else 0
-post_peak = post_start + int(np.argmax(ref_signal[post_start:]))
-if is_flat[post_peak]:
-    l_last, _ = find_plateau_edges(is_flat, post_peak)
-    end_last = t[l_last]
-else:
-    end_last = t[post_peak]
-
-start_times = [start0]
-end_times = []
-for p in peaks_idx:
-    left, right = find_plateau_edges(is_flat, p)
-    end_times.append(t[left])
-    start_times.append(t[right])
-end_times.append(end_last)
-
-start_times = np.array(start_times)
-end_times = np.array(end_times)
-
-# Reseta a seleção manual sempre que os candidatos mudarem (nova coluna/aba/sensibilidade)
-sig_key = (
-    ref_sheet, ref_col, min_distance, prominence, plateau_frac,
-    use_filter, kinem_cutoff, imu_cutoff, filter_order, len(start_times), len(end_times),
-)
-if st.session_state.get("peaks_sig_key") != sig_key:
-    st.session_state.peaks_sig_key = sig_key
-    st.session_state.start_mask = np.ones(len(start_times), dtype=bool)
-    st.session_state.end_mask = np.ones(len(end_times), dtype=bool)
-    st.session_state.trial_idx = 1
-    st.session_state.last_click_sig = ()
-
-start_mask = st.session_state.start_mask
-end_mask = st.session_state.end_mask
-
-st.sidebar.caption(
-    f"{len(valley_times)} vale(s) · {len(start_times)} marco(s) de início · "
-    f"{len(end_times)} marco(s) de fim"
-)
-col_sa, col_sb = st.sidebar.columns(2)
-with col_sa:
-    if st.button("Marcar todos", use_container_width=True):
-        st.session_state.start_mask = np.ones(len(start_times), dtype=bool)
-        st.session_state.end_mask = np.ones(len(end_times), dtype=bool)
-        st.rerun()
-with col_sb:
-    if st.button("Limpar", use_container_width=True):
-        st.session_state.start_mask = np.zeros(len(start_times), dtype=bool)
-        st.session_state.end_mask = np.zeros(len(end_times), dtype=bool)
-        st.rerun()
-
-# ---- Main: gráfico de referência interativo ---------------------------------
-st.subheader("🔁 Sinal de referência — clique para marcar início/fim do trial")
-st.caption(
-    "O teste tem 3 fases por ciclo: descida (laranja, início→vale), subida (verde, vale→fim) "
-    "e platô (cinza, fase separada, fora da análise). Cada fase tem 2 marcações: descida vai de "
-    "▲ até ▽ (vale), subida vai de ▽ até ■. ▲ azul = início do trial = fim do platô anterior. "
-    "■ verde = fim do trial = início do próximo platô. Clique num marcador (▲/■) para incluir/excluir."
-)
-
-sel_starts = sorted(start_times[start_mask].tolist())
-sel_ends = sorted(end_times[end_mask].tolist())
-trial_pairs = list(zip(sel_starts, sel_ends))
-n_trials = len(trial_pairs)
-
-fig_ref = go.Figure()
-add_trial_shading(fig_ref, sel_starts, sel_ends, valley_times, t[0])
-fig_ref.add_trace(go.Scatter(
-    x=[None], y=[None], mode="markers", marker=dict(size=12, color=PLATEAU_COLOR, symbol="square"),
-    name="platô (fase separada)",
-))
-fig_ref.add_trace(go.Scatter(x=t, y=ref_signal, mode="lines", name=ref_col, line=dict(color="#1f77b4")))
-
-trace_idx = 2  # 0 = legenda do platô (dummy), 1 = linha do sinal
-VALLEY_TRACE_INDEX = None
-if len(valley_times):
-    fig_ref.add_trace(go.Scatter(
-        x=valley_times, y=ref_signal[valleys_idx], mode="markers", name="vales",
-        marker=dict(color="orange", symbol="triangle-down", size=10),
-    ))
-    VALLEY_TRACE_INDEX = trace_idx
-    trace_idx += 1
-
-START_TRACE_INDEX = trace_idx
-start_y = np.interp(start_times, t, ref_signal)
-colors_s = np.where(start_mask, "#1f77b4", "lightgray").tolist()
-sizes_s = np.where(start_mask, 14, 9).tolist()
-fig_ref.add_trace(go.Scatter(
-    x=start_times, y=start_y, mode="markers", name="início do trial (clique p/ alternar)",
-    marker=dict(color=colors_s, symbol="triangle-up", size=sizes_s, line=dict(width=1, color="black")),
-))
-trace_idx += 1
-
-END_TRACE_INDEX = trace_idx
-end_y = np.interp(end_times, t, ref_signal)
-colors_e = np.where(end_mask, "#2ca02c", "lightgray").tolist()
-sizes_e = np.where(end_mask, 14, 9).tolist()
-fig_ref.add_trace(go.Scatter(
-    x=end_times, y=end_y, mode="markers", name="fim do trial (clique p/ alternar)",
-    marker=dict(color=colors_e, symbol="square", size=sizes_e, line=dict(width=1, color="black")),
-))
-
-fig_ref.update_layout(
-    title=f"{ref_sheet} — {ref_col} ({n_trials} trial(s) definido(s))",
-    xaxis_title="Tempo (s)", yaxis_title=ref_col,
-    height=380, margin=dict(l=10, r=10, t=40, b=10),
-)
-
-event = st.plotly_chart(
-    fig_ref, use_container_width=True, on_select="rerun", key="ref_chart",
-    selection_mode=("points",),
-)
-
-if event and event.get("selection", {}).get("points"):
-    pts = event["selection"]["points"]
-    click_sig = tuple(sorted((p.get("curve_number"), p.get("point_index")) for p in pts))
-    if click_sig and click_sig != st.session_state.get("last_click_sig"):
-        for curve_number, idx in click_sig:
-            if curve_number == START_TRACE_INDEX and idx is not None and 0 <= idx < len(st.session_state.start_mask):
-                st.session_state.start_mask[idx] = not st.session_state.start_mask[idx]
-            elif curve_number == END_TRACE_INDEX and idx is not None and 0 <= idx < len(st.session_state.end_mask):
-                st.session_state.end_mask[idx] = not st.session_state.end_mask[idx]
-        st.session_state.last_click_sig = click_sig
-        st.rerun()
-
-# ---- Faixa de ciclos (todos na mesma cor, numerados) ------------------------
-if n_trials:
-    fig_cycles = go.Figure()
-    for i, (s, e) in enumerate(trial_pairs, start=1):
-        fig_cycles.add_shape(
-            type="rect", x0=s, x1=e, y0=0, y1=1,
-            fillcolor="rgba(31,119,180,0.45)", line=dict(width=1, color="#1f77b4"),
+        cap = "  |  ".join(
+            f"{'🔵' if i == 0 else '🔴'} **{series[i][1]}**: {caps[i]}" for i in range(len(series))
         )
-        fig_cycles.add_annotation(
-            x=(s + e) / 2, y=0.5, text=f"Ciclo {i}", showarrow=False,
-            font=dict(color="white", size=12),
+        st.caption(cap + f"  ·  reamostrado a {vfs:.0f} Hz  ·  normalizado pelo pico  ·  sem filtro passa-baixa")
+
+        mask_2 = (vx >= -2) & (vx <= 2)
+        all_vals = np.concatenate([s[mask_2] for s, _ in series if len(s) == len(vx)])
+        all_vals = all_vals[~np.isnan(all_vals)]
+        y_lo, y_hi = (float(np.nanmin(all_vals)) - 0.5, float(np.nanmax(all_vals)) + 0.5) if len(all_vals) else (-1.5, 1.5)
+
+        fig_v = go.Figure()
+        for i, (s_n, lbl) in enumerate(series):
+            fig_v.add_trace(go.Scatter(
+                x=vx, y=s_n, mode="lines", line=dict(color=colors_v[i], width=2), name=lbl, opacity=0.85,
+            ))
+        if len(series) == 2:
+            diff = series[0][0] - series[1][0]
+            fig_v.add_trace(go.Scatter(
+                x=vx, y=diff, mode="lines", line=dict(color="gray", width=1, dash="dot"), name="Diferença",
+            ))
+        fig_v.add_vline(x=0, line_dash="dash", line_color="black",
+                         annotation_text="salto", annotation_position="top right")
+        fig_v.update_layout(
+            title=f"{title} — normalizado pelo pico (sem filtro)",
+            xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[-2, 2]),
+            yaxis=dict(title="Amplitude norm.", range=[y_lo, y_hi]),
+            hovermode="x unified", template="plotly_white", height=400,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            margin=dict(t=50, b=50, l=60, r=20),
         )
-    fig_cycles.update_xaxes(range=[t[0], t[-1]], title="Tempo (s)")
-    fig_cycles.update_yaxes(visible=False, range=[0, 1])
-    fig_cycles.update_layout(
-        height=90, margin=dict(l=10, r=10, t=10, b=30), showlegend=False, plot_bgcolor="white",
+        st.plotly_chart(fig_v, use_container_width=True, key=f"verif_{title}_{kinem_col}_{phone_col}")
+
+
+if st.session_state.synced and st.session_state.raw_synced and st.session_state.peak_ref is not None:
+    vfs = st.session_state.target_fs or 100
+    vraw, vx_samp, _ = get_aligned_data(
+        st.session_state.raw_synced, st.session_state.offsets, st.session_state.peak_ref, ref_file=kinem_ref,
     )
-    st.plotly_chart(fig_cycles, use_container_width=True)
+    if vraw is None:
+        vraw = {f: df.copy() for f, df in st.session_state.raw_synced.items()}
+        vx_samp = np.arange(max(len(d) for d in vraw.values())) - st.session_state.peak_ref
+    vx = vx_samp / vfs
 
-st.divider()
+    for gkey, gdef in GROUPS.items():
+        pf = phone_files[gkey]
+        render_alignment_check(
+            gdef["label"], kinem_sync_cols[gkey], pf["acc"], pf["acc_col"],
+            f"Kinem {gdef['label']}", f"ACC {gdef['label']}", vraw, vx, vfs,
+        )
 
-# ---- Região do corpo (único dropdown desta seção) ---------------------------
-st.subheader("⚙️ Região")
-body_sheet = st.selectbox("Região do corpo / aba", sheet_names, key="body_sheet")
+    # ══════════════════════════════════════════
+    # Processamento inline
+    # ══════════════════════════════════════════
+    st.divider()
+    proc_done = bool(st.session_state.proc_data)
+    with st.expander(
+        "⚙️ Processamento  ✔ Aplicado" if proc_done else "⚙️ Processamento  ← Configure e processe aqui",
+        expanded=not proc_done,
+    ):
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            do_detrend = st.checkbox("Detrend (remover tendência linear)", value=True, key="do_detrend")
+        with pc2:
+            do_lowpass = st.checkbox("Filtro passa-baixa (Butterworth)", value=True, key="do_lowpass")
 
-st.caption(
-    "ℹ️ Correção aplicada em todas as abas: o giroscópio (GYR_X/Y/Z) do celular sai em "
-    "radianos/segundo (padrão do sensor do Android/iOS) e foi convertido pra graus/segundo "
-    "(°/s) — os valores brutos eram pequenos demais (pico de ~2,5 em vez de ~145) pra serem "
-    "°/s durante um movimento como esse. Todos os gráficos e cálculos abaixo já usam °/s."
-)
+        if do_lowpass:
+            fl1, fl2 = st.columns(2)
+            with fl1:
+                cutoff_hz = st.number_input(
+                    "Frequência de corte (Hz)", min_value=0.1, max_value=float(fs_target // 2),
+                    value=min(20.0, float(fs_target // 2 - 1)), step=0.5, key="cutoff_hz",
+                )
+            with fl2:
+                filt_order = st.selectbox("Ordem do filtro", [2, 4, 6, 8], index=1, key="filt_order")
+        else:
+            cutoff_hz, filt_order = 20.0, 4
 
-if body_sheet == "Joelho":
+        if st.button("🔧 Processar", type="primary", use_container_width=True, key="btn_processar"):
+            raw = st.session_state.raw_synced
+            proc, proc_nofilter = {}, {}
+            for fname, df in raw.items():
+                r = df.copy()
+                if do_detrend:
+                    r = apply_detrend(r)
+                proc_nofilter[fname] = r.copy()
+                if do_lowpass:
+                    r = apply_lowpass(r, fs_target, cutoff_hz, filt_order)
+                proc[fname] = r
+            st.session_state.proc_data = proc
+            st.session_state.proc_data_nofilter = proc_nofilter
+            st.rerun()
+
+
+# ══════════════════════════════════════════════
+# Auto-visualização — todos os eixos X, Y, Z
+# ══════════════════════════════════════════════
+if st.session_state.proc_data and st.session_state.synced:
+    pfs = st.session_state.target_fs or 100
+
+    aligned_data, x_samp, align_msg = get_aligned_data(
+        st.session_state.proc_data, st.session_state.offsets, st.session_state.peak_ref, ref_file=kinem_ref,
+    )
+    if aligned_data is None:
+        st.error(align_msg)
+        st.stop()
+
+    x_axis = x_samp / pfs
+    x_min_data, x_max_data = float(x_axis.min()), float(x_axis.max())
+
+    kdf = aligned_data.get(kinem_ref, pd.DataFrame())
+
+    def get_phone_xyz(fname):
+        if fname == NONE or fname not in aligned_data:
+            return []
+        return [c for c in aligned_data[fname].columns if is_xyz_col(c)]
+
+    def make_auto_traces(gkey):
+        gdef = GROUPS[gkey]
+        pf = phone_files[gkey]
+        k_cols = kinem_cols_for_body(kdf, *gdef["kinem_kw"])
+        traces = [(kinem_ref, c, try_numeric(kdf[c])) for c in k_cols if c in kdf.columns]
+        if pf["acc"] != NONE and pf["acc"] in aligned_data:
+            for c in get_phone_xyz(pf["acc"]):
+                traces.append((pf["acc"], c, try_numeric(aligned_data[pf["acc"]][c])))
+        if pf["gyr"] != NONE and pf["gyr"] in aligned_data:
+            for c in get_phone_xyz(pf["gyr"]):
+                traces.append((pf["gyr"], c, try_numeric(aligned_data[pf["gyr"]][c])))
+        return traces
+
+    group_traces = {gkey: make_auto_traces(gkey) for gkey in GROUPS}
+
+    st.divider()
+    st.subheader("📊 Sinais sincronizados — todos os eixos X, Y, Z")
+    st.caption(align_msg)
+
+    def render_auto_charts(traces):
+        for fname, col, y in traces:
+            fig_i = go.Figure()
+            fig_i.add_trace(go.Scatter(x=x_axis, y=y, mode="lines", line=dict(width=1.5), showlegend=False))
+            fig_i.add_vline(x=0, line_dash="dash", line_color="gray",
+                             annotation_text="salto", annotation_position="top right")
+            fig_i.update_layout(
+                title=dict(text=f"<b>{fname[:26]}</b> · {col}", font_size=12),
+                xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[x_min_data, x_max_data]),
+                yaxis_title="", height=220,
+                margin=dict(t=42, b=38, l=55, r=10), hovermode="x", template="plotly_white",
+            )
+            st.plotly_chart(fig_i, use_container_width=True)
+
+    auto_cols = st.columns(3)
+    for auto_col, gkey in zip(auto_cols, GROUPS):
+        with auto_col:
+            st.markdown(f"#### {GROUPS[gkey]['emoji']} {GROUPS[gkey]['label']}")
+            render_auto_charts(group_traces[gkey])
+
+    st.divider()
+
+    # ══════════════════════════════════════════
+    # Seleção de janela
+    # ══════════════════════════════════════════
+    st.subheader("🪟 Seleção de janela")
+    wc1, wc2 = st.columns(2)
+    with wc1:
+        view_start = st.number_input(
+            "Início (s) relativo ao pico", value=float(max(x_min_data, -2.0)), step=0.5, key="view_start",
+        )
+    with wc2:
+        view_end = st.number_input(
+            "Fim (s) relativo ao pico", value=float(min(x_max_data, 8.0)), step=0.5, key="view_end",
+        )
+
+    st.divider()
+
+    # ══════════════════════════════════════════
+    # Ângulo do joelho (celular vs. Kinem)
+    # ══════════════════════════════════════════
+    st.subheader("🦵 Ângulo do joelho")
     st.caption(
-        "ℹ️ Correção aplicada: ACC_X (AP) e ACC_Y (Vertical) do Joelho tiveram o sinal "
-        "invertido antes de qualquer gráfico/cálculo — validado como erro sistemático de "
-        "montagem/calibração em 2 gravações distintas (mesma forma de onda, sinal trocado "
-        "em relação à cinemática). ACC_Z (ML) não foi alterado."
+        "Celular: fusão ACC+GYR (filtro complementar) entre Coxa e Tornozelo — ângulo relativo, "
+        "não calibrado clinicamente. Kinem: ângulo ótico real entre os vetores Trocânter→Côndilo e "
+        "Côndilo→Tornozelo (0° = perna estendida)."
     )
 
-# Cinemática: sempre as 3 (Posição/Deslocamento, Velocidade, Aceleração), sem dropdown.
-KINEM_GROUP_MAP = {
-    "Posição": "Cinemática - Posição",
-    "Velocidade": "Cinemática - Velocidade",
-    "Aceleração": "Cinemática - Aceleração",
-}
-KINEM_ORDER = ["Posição", "Velocidade", "Aceleração"]
-
-# Nomes e unidades para exibição (cinemática em cm, IMU com nomes físicos)
-KINEM_LABEL_MAP = {"Posição": "Deslocamento", "Velocidade": "Velocidade", "Aceleração": "Aceleração"}
-KINEM_UNIT_MAP = {"Posição": "cm", "Velocidade": "cm/s", "Aceleração": "cm/s²"}
-
-IMU_LABELS = {
-    "IMU - Acelerômetro": ("Aceleração Linear", "m/s²"),
-    "IMU - Giroscópio": ("Velocidade Angular", "°/s"),
-}
-# Mapeamento anatômico dos eixos — diferente entre Kinem (sistema óptico) e o
-# celular (ACC/GYR), e no celular o mapeamento do ACC/GYR também muda conforme a
-# região (Joelho vs L5), porque a orientação do celular no corpo é diferente:
-#   Kinem:        Z = Vertical, Y = Anteroposterior (AP), X = Mediolateral (ML)
-#   ACC/GYR Joelho: Y = Vertical, Z = Mediolateral (ML),   X = Anteroposterior (AP)
-#   ACC/GYR L5:     Y = Vertical, Z = Anteroposterior (AP), X = Mediolateral (ML)
-KINEM_AXIS_LABEL = {"X": "ML", "Y": "AP", "Z": "Vertical"}
-IMU_AXIS_LABEL_JOELHO = {"X": "AP", "Y": "Vertical", "Z": "ML"}
-IMU_AXIS_LABEL_L5 = {"X": "ML", "Y": "Vertical", "Z": "AP"}
-
-
-def get_imu_axis_label(region_name):
-    return IMU_AXIS_LABEL_L5 if "l5" in region_name.lower() else IMU_AXIS_LABEL_JOELHO
-
-
-IMU_AXIS_LABEL = get_imu_axis_label(body_sheet)
-
-# Cor por DIREÇÃO anatômica (não pelo eixo bruto) — assim Vertical é sempre a
-# mesma cor tanto no Kinem (Z) quanto no celular (Y), e o mesmo vale para AP e ML.
-DIR_COLORS = {"Vertical": "#2ca02c", "AP": "#1f77b4", "ML": "#d62728"}
-
-
-def axis_direction(is_kinem, axis):
-    mapping = KINEM_AXIS_LABEL if is_kinem else IMU_AXIS_LABEL
-    return mapping[axis]
-
-
-def axis_color(is_kinem, axis):
-    return DIR_COLORS[axis_direction(is_kinem, axis)]
-
-
-def axis_name(is_kinem, axis):
-    return f"{axis} ({axis_direction(is_kinem, axis)})"
-
-df = sheets[body_sheet]
-catalog = build_catalog(df)
-tcol = time_column(df)
-df_t = df[tcol].to_numpy()
-
-st.divider()
-
-# ---- Helpers de ciclo/fases por trial ---------------------------------------
-if n_trials == 0:
-    st.info("Mantenha pelo menos um par início/fim marcado no gráfico acima para definir um trial.")
-    st.stop()
-
-IMU_ROWS = ["IMU - Acelerômetro", "IMU - Giroscópio"]
-AXES = ["X", "Y", "Z"]
-acc_label, acc_unit = IMU_LABELS["IMU - Acelerômetro"]
-gyr_label, gyr_unit = IMU_LABELS["IMU - Giroscópio"]
-
-
-def trial_bounds(trial_idx):
-    """Ciclo completo = platô (do fim do ciclo anterior, ou início da gravação, até o
-    início da descida) + descida + subida."""
-    cycle_start = sel_ends[trial_idx - 2] if trial_idx > 1 else t[0]
-    d_start = sel_starts[trial_idx - 1]
-    cycle_end = sel_ends[trial_idx - 1]
-    valley_in_cycle = valley_times[(valley_times > d_start) & (valley_times < cycle_end)]
-    v_trial = valley_in_cycle[0] if len(valley_in_cycle) else (d_start + cycle_end) / 2
-    return cycle_start, d_start, v_trial, cycle_end
-
-
-def make_helpers(cycle_start, d_start, v_trial, cycle_end):
-    def norm_t(x):
-        return (x - cycle_start) / (cycle_end - cycle_start) if (cycle_end - cycle_start) != 0 else 0.0
-
-    def add_phase_shading_subplot(fig, row, col):
-        if cycle_start < d_start:
-            fig.add_vrect(x0=norm_t(cycle_start), x1=norm_t(d_start), fillcolor=PLATEAU_COLOR, line_width=0, layer="below", row=row, col=col)
-        fig.add_vrect(x0=norm_t(d_start), x1=norm_t(v_trial), fillcolor=DESCIDA_COLOR, line_width=0, layer="below", row=row, col=col)
-        fig.add_vrect(x0=norm_t(v_trial), x1=norm_t(cycle_end), fillcolor=SUBIDA_COLOR, line_width=0, layer="below", row=row, col=col)
-
-    def add_event_lines_subplot(fig, row, col):
-        fig.add_vline(x=norm_t(d_start), line_dash="dash", line_color="#1f77b4", opacity=0.9, row=row, col=col)
-        fig.add_vline(x=norm_t(v_trial), line_dash="dot", line_color="orange", opacity=0.9, row=row, col=col)
-        fig.add_vline(x=norm_t(cycle_end), line_dash="dash", line_color="#2ca02c", opacity=0.9, row=row, col=col)
-
-    return norm_t, add_phase_shading_subplot, add_event_lines_subplot
-
-
-# Tamanho de figura para células realmente quadradas: o plotly consome uma fração
-# do espaço em "gaps" entre subplots (horizontal_spacing/vertical_spacing), então
-# largura e altura totais precisam compensar isso — não basta usar cell*cols e
-# cell*rows direto, senão o resultado fica mais alto que largo (ou o contrário).
-# Sem limite de largura: célula sempre no mesmo tamanho (300px), e se não couber
-# na tela o Streamlit mostra barra de rolagem horizontal em vez de encolher.
-CELL_PX = 300
-MARGIN = dict(l=10, r=10, t=95, b=10)
-H_SPACING = 0.06
-V_SPACING = 0.12
-# Legenda sempre no topo-ESQUERDA da figura inteira (não no topo-direita, que é o
-# padrão do plotly) — assim ela cai dentro da janela inicialmente visível mesmo em
-# figuras muito largas com rolagem horizontal (senão fica "escondida" lá na direita).
-LEGEND_TOP_LEFT = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-
-
-def square_fig_size(rows, cols):
-    col_frac = (1 - H_SPACING * (cols - 1)) / cols
-    row_frac = (1 - V_SPACING * (rows - 1)) / rows if rows > 1 else 1.0
-    plot_w = CELL_PX / col_frac
-    plot_h = CELL_PX / row_frac
-    width = int(round(plot_w)) + MARGIN["l"] + MARGIN["r"]
-    height = int(round(plot_h)) + MARGIN["t"] + MARGIN["b"]
-    return width, height
-
-
-def render_scrollable(fig, total_width, total_height, visible_width):
-    """Mostra a figura numa janela mais estreita (visible_width) com barra de
-    rolagem horizontal própria, em vez de deixar as colunas extras cortadas ou
-    depender da rolagem da página inteira."""
-    html = fig.to_html(include_plotlyjs="cdn", full_html=False)
-    wrapped = (
-        f'<div style="width:{visible_width}px; overflow-x:auto; overflow-y:hidden; '
-        f'border:1px solid #eee; border-radius:4px;">'
-        f'<div style="width:{total_width}px;">{html}</div></div>'
+    # O ângulo é calculado a partir dos dados BRUTOS alinhados (reamostrados,
+    # sem detrend/filtro): o detrend distorce a posição 3D real do Kinem e
+    # remove o componente de gravidade que o acelerômetro precisa para
+    # estimar a inclinação do segmento.
+    aligned_raw, _, _ = get_aligned_data(
+        st.session_state.raw_synced, st.session_state.offsets, st.session_state.peak_ref, ref_file=kinem_ref,
     )
-    components.html(wrapped, height=total_height + 25, scrolling=False)
+    kdf_raw = aligned_raw.get(kinem_ref, pd.DataFrame()) if aligned_raw else pd.DataFrame()
 
-
-# ---- Seção 1: Cinemática — 1 trial por vez, eixos sempre juntos -------------
-st.subheader(f"📈 {body_sheet} — Cinemática")
-st.caption(
-    "Deslocamento, Velocidade e Aceleração lado a lado, cada um com X, Y, Z juntos no mesmo "
-    "gráfico. Fundo cinza = platô, laranja = descida, verde = subida. No Kinem: "
-    "Z = Vertical, Y = Anteroposterior (AP), X = Mediolateral (ML)."
-)
-
-kinem_trial_idx = st.selectbox(
-    "Trial (só afeta a Cinemática)", list(range(1, n_trials + 1)), key="kinem_trial_idx"
-)
-
-k_cycle_start, k_d_start, k_v_trial, k_cycle_end = trial_bounds(kinem_trial_idx)
-k_norm_t, k_add_phase, k_add_events = make_helpers(k_cycle_start, k_d_start, k_v_trial, k_cycle_end)
-k_trial_mask = (df_t >= k_cycle_start) & (df_t <= k_cycle_end)
-
-fig_kinem = make_subplots(
-    rows=1, cols=3,
-    subplot_titles=[
-        f"{KINEM_LABEL_MAP['Posição']} (X, Y, Z)",
-        f"{KINEM_LABEL_MAP['Velocidade']} (X, Y, Z)",
-        f"{KINEM_LABEL_MAP['Aceleração']} (X, Y, Z)",
-    ],
-    shared_xaxes=True, horizontal_spacing=H_SPACING,
-)
-for col_i, choice in enumerate(KINEM_ORDER, start=1):
-    grp = KINEM_GROUP_MAP[choice]
-    label = KINEM_LABEL_MAP[choice]
-    unit = KINEM_UNIT_MAP[choice]
-    has_trace = False
-    for axis in AXES:
-        colname = catalog.get(grp, {}).get(axis)
-        if colname is None:
-            continue
-        fig_kinem.add_trace(
-            go.Scatter(
-                x=k_norm_t(df_t[k_trial_mask]), y=df[colname].to_numpy()[k_trial_mask],
-                mode="lines", line=dict(color=axis_color(True, axis)), name=axis_name(True, axis),
-                showlegend=(col_i == 1), legendgroup=axis_name(True, axis),
-            ),
-            row=1, col=col_i,
-        )
-        has_trace = True
-    if has_trace:
-        # IMPORTANTE: o traço precisa existir ANTES do add_vrect/add_vline com row/col.
-        k_add_phase(fig_kinem, 1, col_i)
-        k_add_events(fig_kinem, 1, col_i)
-        fig_kinem.update_yaxes(title_text=f"{label} ({unit})", row=1, col=col_i)
-
-fig_kinem.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
-fig_kinem.update_yaxes(showgrid=False)
-_kw, _kh = square_fig_size(1, 3)
-fig_kinem.update_layout(width=_kw, height=_kh, margin=MARGIN, plot_bgcolor="white", legend=LEGEND_TOP_LEFT)
-st.plotly_chart(fig_kinem, use_container_width=False, key="kinem_chart")
-
-# ---- Padrão de deslocamento por trial (fase de descida): direção anatômica ---
-st.subheader(f"📐 {body_sheet} — Padrão de deslocamento na descida (Vertical / AP / ML)")
-st.caption(
-    "Deslocamento líquido (posição no fim da descida − posição no início da descida) em "
-    "cada direção anatômica. Convenção: Vertical negativo = desce, positivo = sobe; AP "
-    "positivo = anterior, negativo = posterior; ML positivo = lateral, negativo = medial. "
-    "Repetido em todos os trials → padrão consistente (não é ruído); CV baixo = repetições "
-    "parecidas entre si."
-)
-
-DISP_DIRECTION_WORDS = {
-    "Vertical": {"pos": "sobe", "neg": "desce"},
-    "AP": {"pos": "anterior", "neg": "posterior"},
-    "ML": {"pos": "lateral", "neg": "medial"},
-}
-
-pos_catalog = catalog.get("Cinemática - Posição", {})
-disp_rows = []
-for trial_idx in range(1, n_trials + 1):
-    _, d_start, v_trial, _ = trial_bounds(trial_idx)
-    mask_desc = (df_t >= d_start) & (df_t <= v_trial)
-    row = {"Trial": trial_idx}
-    for axis in AXES:
-        colname = pos_catalog.get(axis)
-        if colname is None:
-            continue
-        direction = KINEM_AXIS_LABEL[axis]
-        sig = df[colname].to_numpy()[mask_desc]
-        if len(sig) < 2:
-            continue
-        net = float(sig[-1] - sig[0])
-        word = DISP_DIRECTION_WORDS[direction]["pos"] if net >= 0 else DISP_DIRECTION_WORDS[direction]["neg"]
-        row[f"Δ {direction}"] = round(net, 4)
-        row[f"{direction} (direção)"] = word
-    disp_rows.append(row)
-
-if disp_rows:
-    disp_df = pd.DataFrame(disp_rows).set_index("Trial")
-    st.dataframe(disp_df, use_container_width=True)
-
-    summary_rows = []
-    for direction in ["Vertical", "AP", "ML"]:
-        col = f"Δ {direction}"
-        if col not in disp_df.columns:
-            continue
-        vals = disp_df[col].to_numpy(dtype=float)
-        mean_v = vals.mean()
-        std_v = vals.std()
-        cv = (100 * std_v / abs(mean_v)) if mean_v != 0 else float("nan")
-        summary_rows.append({"Direção": direction, "Média": round(mean_v, 4), "Desvio": round(std_v, 4), "CV (%)": round(cv, 1)})
-    st.caption("Consistência entre trials (quanto menor o CV, mais repetido o padrão):")
-    st.dataframe(pd.DataFrame(summary_rows).set_index("Direção"), use_container_width=True)
-
-st.divider()
-
-# ---- Seção 2: ACC/GYR — matriz 2 (ACC, GYR) × N trials, eixos sempre juntos -
-st.subheader(f"📈 {body_sheet} — ACC / GYR — todos os {n_trials} trials")
-_imu_dir_desc = ", ".join(f"{ax} = {IMU_AXIS_LABEL[ax]}" for ax in AXES)
-st.caption(
-    f"Cada coluna é um trial (1 a {n_trials}); linhas: {acc_label} e {gyr_label}, sempre com "
-    f"X, Y, Z juntos no mesmo gráfico. No celular (ACC/GYR) em {body_sheet}: {_imu_dir_desc}."
-)
-
-imu_titles = []
-for grp in IMU_ROWS:
-    for i in range(1, n_trials + 1):
-        imu_titles.append(f"Trial {i}")
-
-fig_imu = make_subplots(
-    rows=2, cols=n_trials, subplot_titles=imu_titles, shared_xaxes=True,
-    horizontal_spacing=H_SPACING, vertical_spacing=V_SPACING,
-)
-
-for row_i, grp in enumerate(IMU_ROWS, start=1):
-    label, unit = IMU_LABELS[grp]
-    for col_j, trial_idx in enumerate(range(1, n_trials + 1), start=1):
-        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
-        norm_t, add_phase, add_events = make_helpers(cycle_start, d_start, v_trial, cycle_end)
-        trial_mask = (df_t >= cycle_start) & (df_t <= cycle_end)
-
-        has_trace = False
-        for axis in AXES:
-            colname = catalog.get(grp, {}).get(axis)
-            if colname is None:
-                continue
-            fig_imu.add_trace(
-                go.Scatter(
-                    x=norm_t(df_t[trial_mask]), y=df[colname].to_numpy()[trial_mask],
-                    mode="lines", line=dict(color=axis_color(False, axis)), name=axis_name(False, axis),
-                    showlegend=(row_i == 1 and col_j == 1), legendgroup=axis_name(False, axis),
-                ),
-                row=row_i, col=col_j,
+    pf_coxa, pf_torn = phone_files["coxa"], phone_files["tornozelo"]
+    angle_phone = None
+    if aligned_raw and all(pf_coxa[k] != NONE for k in ("acc", "gyr")) and all(pf_torn[k] != NONE for k in ("acc", "gyr")):
+        needed = [pf_coxa["acc"], pf_coxa["gyr"], pf_torn["acc"], pf_torn["gyr"]]
+        if all(f in aligned_raw for f in needed):
+            angle_phone = knee_angle_from_phone(
+                aligned_raw[pf_coxa["acc"]], aligned_raw[pf_coxa["gyr"]],
+                aligned_raw[pf_torn["acc"]], aligned_raw[pf_torn["gyr"]],
+                pfs, alpha=cf_alpha,
             )
-            has_trace = True
-        if has_trace:
-            add_phase(fig_imu, row_i, col_j)
-            add_events(fig_imu, row_i, col_j)
-            if col_j == 1:
-                fig_imu.update_yaxes(title_text=f"{label} ({unit})", row=row_i, col=col_j)
 
-fig_imu.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
-fig_imu.update_yaxes(showgrid=False)
-_iw, _ih = square_fig_size(2, n_trials)
-fig_imu.update_layout(width=_iw, height=_ih, margin=MARGIN, plot_bgcolor="white", legend=LEGEND_TOP_LEFT)
-st.caption(f"Mostrando 3 trials por vez ({_kw}px) — arraste a barra de rolagem abaixo do gráfico para ver os demais.")
-render_scrollable(fig_imu, _iw, _ih, visible_width=_kw)
+    angle_kinem = knee_angle_from_kinem(
+        kdf_raw, GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"],
+    ) if not kdf_raw.empty else None
 
-st.divider()
-
-# ---- Seção 3: média de todos os trials, com sombra de desvio padrão --------
-st.subheader(f"📈 {body_sheet} — Média de todos os trials (sombra = ±1 desvio padrão)")
-_kinem_dir_desc = ", ".join(f"{ax} = {KINEM_AXIS_LABEL[ax]}" for ax in AXES)
-st.caption(
-    f"Cada gráfico combina os {n_trials} trials: linha = média, sombra = ±1 desvio padrão, por "
-    "direção anatômica (Vertical/AP/ML — mesma cor em todos os gráficos). Inclui Cinemática "
-    "(Deslocamento, Velocidade, Aceleração) e IMU (ACC, GYR). Tempo normalizado (0–1) por ciclo "
-    f"antes de calcular a média. No Kinem: {_kinem_dir_desc}. No celular (ACC/GYR) em "
-    f"{body_sheet}: {_imu_dir_desc}."
-)
-
-GRID = np.linspace(0.0, 1.0, 101)
-
-
-def hex_to_rgba(hex_color, alpha):
-    hex_color = hex_color.lstrip("#")
-    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
-    return f"rgba({r},{g},{b},{alpha})"
-
-
-def ensemble_mean_std(grp, axis):
-    curves = []
-    for trial_idx in range(1, n_trials + 1):
-        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
-        norm_t, _, _ = make_helpers(cycle_start, d_start, v_trial, cycle_end)
-        trial_mask = (df_t >= cycle_start) & (df_t <= cycle_end)
-        colname = catalog.get(grp, {}).get(axis)
-        if colname is None:
-            continue
-        x_trial = norm_t(df_t[trial_mask])
-        y_trial = df[colname].to_numpy()[trial_mask]
-        if len(x_trial) < 2:
-            continue
-        order = np.argsort(x_trial)
-        curves.append(np.interp(GRID, x_trial[order], y_trial[order]))
-    if not curves:
-        return None, None
-    arr = np.vstack(curves)
-    return arr.mean(axis=0), arr.std(axis=0)
-
-
-# Divisão de fases (platô/descida/subida) para os gráficos de média — como cada
-# trial normaliza o próprio ciclo (0–1) mas a duração de cada fase varia um pouco
-# de trial a trial, usamos a média das frações de cada fase entre os trials para
-# desenhar uma única divisão representativa em todos os gráficos de resultante.
-def average_phase_fracs():
-    d_fracs, v_fracs = [], []
-    for trial_idx in range(1, n_trials + 1):
-        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
-        span = cycle_end - cycle_start
-        if span <= 0:
-            continue
-        d_fracs.append((d_start - cycle_start) / span)
-        v_fracs.append((v_trial - cycle_start) / span)
-    if not d_fracs:
-        return 0.0, 0.5
-    return float(np.mean(d_fracs)), float(np.mean(v_fracs))
-
-
-AVG_D_FRAC, AVG_V_FRAC = average_phase_fracs()
-
-
-def add_avg_phase_shading(fig, row, col):
-    if AVG_D_FRAC > 0:
-        fig.add_vrect(x0=0, x1=AVG_D_FRAC, fillcolor=PLATEAU_COLOR, line_width=0, layer="below", row=row, col=col)
-    fig.add_vrect(x0=AVG_D_FRAC, x1=AVG_V_FRAC, fillcolor=DESCIDA_COLOR, line_width=0, layer="below", row=row, col=col)
-    fig.add_vrect(x0=AVG_V_FRAC, x1=1.0, fillcolor=SUBIDA_COLOR, line_width=0, layer="below", row=row, col=col)
-
-
-def add_avg_event_lines(fig, row, col):
-    fig.add_vline(x=AVG_D_FRAC, line_dash="dash", line_color="#1f77b4", opacity=0.9, row=row, col=col)
-    fig.add_vline(x=AVG_V_FRAC, line_dash="dot", line_color="orange", opacity=0.9, row=row, col=col)
-    fig.add_vline(x=1.0, line_dash="dash", line_color="#2ca02c", opacity=0.9, row=row, col=col)
-
-
-# Layout 2 linhas x 3 colunas: Velocidade Angular (GYR) embaixo de Velocidade,
-# Aceleração Linear (ACC) embaixo de Aceleração. Deslocamento não tem par no IMU.
-AVG_GRID = [
-    [
-        (KINEM_LABEL_MAP["Posição"], KINEM_GROUP_MAP["Posição"], KINEM_UNIT_MAP["Posição"]),
-        (KINEM_LABEL_MAP["Velocidade"], KINEM_GROUP_MAP["Velocidade"], KINEM_UNIT_MAP["Velocidade"]),
-        (KINEM_LABEL_MAP["Aceleração"], KINEM_GROUP_MAP["Aceleração"], KINEM_UNIT_MAP["Aceleração"]),
-    ],
-    [
-        None,
-        (gyr_label, "IMU - Giroscópio", gyr_unit),
-        (acc_label, "IMU - Acelerômetro", acc_unit),
-    ],
-]
-AVG_ROWS, AVG_COLS = len(AVG_GRID), len(AVG_GRID[0])
-
-fig_avg = make_subplots(
-    rows=AVG_ROWS, cols=AVG_COLS,
-    subplot_titles=[
-        (f"{cell[0]} (X, Y, Z)" if cell else "Orientação do sensor")
-        for row in AVG_GRID for cell in row
-    ],
-    shared_xaxes=True, horizontal_spacing=H_SPACING, vertical_spacing=V_SPACING,
-)
-
-for row_i, row in enumerate(AVG_GRID, start=1):
-    for col_i, cell in enumerate(row, start=1):
-        if cell is None:
-            # Espaço livre (Deslocamento não tem par de IMU) — fica em branco; a
-            # imagem de orientação do celular agora está na barra lateral, maior.
-            fig_avg.update_xaxes(visible=False, showgrid=False, row=row_i, col=col_i)
-            fig_avg.update_yaxes(visible=False, showgrid=False, row=row_i, col=col_i)
-            continue
-        label, grp, unit = cell
-        is_kinem = grp.startswith("Cinemática")
-        has_trace = False
-        for axis in AXES:
-            mean_y, std_y = ensemble_mean_std(grp, axis)
-            if mean_y is None:
-                continue
-            color = axis_color(is_kinem, axis)
-            direction = axis_direction(is_kinem, axis)
-            upper = mean_y + std_y
-            lower = mean_y - std_y
-            fig_avg.add_trace(
-                go.Scatter(
-                    x=np.concatenate([GRID, GRID[::-1]]), y=np.concatenate([upper, lower[::-1]]),
-                    fill="toself", fillcolor=hex_to_rgba(color, 0.2),
-                    line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
-                ),
-                row=row_i, col=col_i,
-            )
-            # Cor = direção anatômica (Vertical/AP/ML), consistente entre Kinem e IMU,
-            # então 1 legenda só (pela direção) já vale pro gráfico inteiro.
-            fig_avg.add_trace(
-                go.Scatter(
-                    x=GRID, y=mean_y, mode="lines", line=dict(color=color),
-                    name=direction, showlegend=(row_i == 1 and col_i == 1), legendgroup=direction,
-                ),
-                row=row_i, col=col_i,
-            )
-            has_trace = True
-        if has_trace:
-            # IMPORTANTE: o traço precisa existir ANTES do add_vrect/add_vline com row/col.
-            add_avg_phase_shading(fig_avg, row_i, col_i)
-            add_avg_event_lines(fig_avg, row_i, col_i)
-        fig_avg.update_yaxes(title_text=f"{label} ({unit})", row=row_i, col=col_i)
-
-fig_avg.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
-fig_avg.update_yaxes(showgrid=False)
-_aw, _ah = square_fig_size(AVG_ROWS, AVG_COLS)
-fig_avg.update_layout(width=_aw, height=_ah, margin=MARGIN, plot_bgcolor="white", legend=LEGEND_TOP_LEFT)
-st.plotly_chart(fig_avg, use_container_width=False, key="avg_chart")
-
-st.divider()
-
-ALPHA_COMP = 0.96  # peso do giroscópio no filtro complementar (perto de 1 = confia + no giro)
-_TILT_LIGHT_CUTOFF_HZ = 5.0  # filtro leve (sem detrend) só p/ tirar ruído, preservando a gravidade
-
-
-def _light_lowpass(sig, cutoff_hz, fs, order=2):
-    b, a = _butter_lowpass(cutoff_hz, fs, order)
-    min_len = 3 * max(len(a), len(b))
-    return filtfilt(b, a, sig) if len(sig) > min_len else sig
-
-
-# ---- L5 + Joelho juntos — comparação frontal e sagital ---------------------
-# As duas montagens do celular são perpendiculares entre si (Y = Vertical nas duas, mas
-# X/Z trocam de papel entre AP e ML) — por isso cada região usa o eixo bruto de giroscópio
-# correto pra ela (ver IMU_AXIS_LABEL_L5 / IMU_AXIS_LABEL_JOELHO). Calculamos as duas juntas
-# (independente da região selecionada acima) e sobrepomos nos 2 gráficos, lado a lado e quadrados.
-st.subheader("🔗 L5 + Joelho — inclinação frontal e sagital, comparadas")
-st.caption(
-    "As duas curvas (L5 e Joelho) no mesmo eixo de tempo normalizado, em 2 gráficos lado a "
-    "lado — frontal (tomba pro lado) e sagital (tomba pra frente/trás) — pra ver a relação "
-    "entre o tronco/pelve (L5) e o joelho durante a descida. Não é o ângulo do joelho (isso "
-    "precisaria de 2 sensores no mesmo segmento) — é o quanto cada ponto onde o celular está "
-    "preso tomba em relação à sua posição no início do ciclo, estimado por filtro "
-    "complementar ACC + GYR."
-)
-
-
-def _explicacao_frontal():
-    st.markdown(
-        f"""
-**De qual articulação / movimento é esse ângulo, exatamente:**
-
-Não é um ângulo articular (não é "quanto o joelho dobrou" nem um ângulo entre coxa e perna
-— isso exigiria 2 sensores, um em cada segmento, pra comparar a orientação de um contra o
-outro). É a **inclinação do próprio celular** (e do pedaço de corpo onde ele está preso — L5
-ou coxa/perna, na altura do joelho) **em relação à vertical**, olhando só o plano frontal
-(o plano de "de frente pro corpo", que separa lado direito de esquerdo — por isso "ML":
-Medial/Lateral). Em outras palavras: o quanto aquele ponto do corpo tomba pro lado (pra dentro
-= medial, ou pra fora = lateral) durante o movimento, comparado a como ele estava no começo do
-ciclo. É um proxy de valgo/varo dinâmico **local**, não a medida clínica completa (que usaria
-2 segmentos) — mas segue o mesmo raciocínio: se o ponto perto do joelho está tombando bastante
-pra dentro durante a descida, é sinal de valgo dinâmico ali.
-
-**Por que não dá pra usar só o acelerômetro, nem só o giroscópio:**
-
-- O **acelerômetro** sozinho consegue estimar a inclinação do celular (e do segmento onde ele
-  está preso) em relação à vertical, porque em repouso ele mede o vetor gravidade: se o celular
-  está na vertical, toda a gravidade aparece no eixo Vertical; se ele inclina pro lado, parte
-  dessa gravidade "vaza" pro eixo ML. O ângulo sai de `arctan(ACC_ML / ACC_Vertical)`. O
-  problema: isso só é confiável quando o segmento está **parado ou se movendo devagar** —
-  durante a descida em si (movimento rápido), o acelerômetro também sente a aceleração do
-  próprio movimento, misturada com a gravidade, e o ângulo calculado fica errado (picos falsos).
-- O **giroscópio** sozinho mede velocidade angular (°/s) e dá pra integrar no tempo pra virar
-  ângulo. Isso funciona bem durante o movimento rápido (sem o problema acima), mas tem um defeito
-  conhecido: qualquer pequeno erro de leitura vai se acumulando a cada instante da integração, e
-  o ângulo **desvia (drift)** com o tempo — depois de alguns segundos já não representa mais o
-  ângulo real.
-- O **filtro complementar** combina os dois: usa o giroscópio pra seguir os movimentos rápidos
-  com precisão (sem atraso), e deixa o acelerômetro "puxar de volta" bem devagar qualquer desvio
-  acumulado, funcionando como uma âncora de longo prazo. Fórmula aplicada a cada instante *i*:
-
-  `ângulo[i] = α × (ângulo[i-1] + giro[i] × Δt) + (1 − α) × ângulo_acelerômetro[i]`
-
-  com α perto de 1 (aqui α = {ALPHA_COMP:.2f}) — ou seja, confia quase todo no giroscópio a cada
-  passo, mas puxa levemente pro valor do acelerômetro o suficiente pra não acumular erro.
-- É por isso que o **momento quase parado no fundo do agachamento** é tão útil: é exatamente ali
-  que o acelerômetro sozinho já é confiável (pouca aceleração de movimento, quase só gravidade),
-  então o filtro complementar tem uma "âncora" boa bem no ponto que mais importa clinicamente (o
-  pico de inclinação / valgo).
-- O eixo do giroscópio usado é sempre o que corresponde à rotação em torno do eixo
-  Anteroposterior (AP) do celular naquela região — é essa rotação que mistura Vertical e ML, ou
-  seja, é ela que "sente" o segmento inclinando pro lado. Como a orientação física do celular no
-  corpo muda entre L5 e Joelho (são perpendiculares entre si), esse eixo bruto de giroscópio
-  (X, Y ou Z) também muda — o app escolhe automaticamente o eixo correto pra cada região.
-- O ângulo é sempre calculado **em relação ao início de cada ciclo** (começa em 0°), pra remover
-  qualquer desvio fixo de como o celular foi colocado — o que importa aqui é a **variação** de
-  inclinação durante o movimento, não um ângulo anatômico absoluto calibrado. Positivo = lateral,
-  negativo = medial (mesma convenção do ML).
-- Esse cálculo usa o sinal **bruto** de ACC/GYR (não o filtrado/detrend da barra lateral), porque
-  detrend removeria justamente o componente de gravidade que a estimativa de ângulo precisa.
-- Se o celular exportar **aceleração linear** (gravidade já removida pelo próprio sensor/app,
-  em vez do acelerômetro bruto), não existe componente de gravidade nenhum pra usar como âncora
-  — isso não dá pra corrigir por cálculo depois. Quando o app detecta essa situação (magnitude
-  do vetor ACC muito abaixo do esperado pra gravidade), ele troca sozinho, automaticamente, para
-  uma estimativa só por integração do giroscópio (reiniciada em 0° a cada ciclo). Fica mais
-  sujeita a desvio (drift), mas como cada ciclo dura só alguns segundos, ainda é uma estimativa
-  utilizável — só não tem a correção extra que a gravidade daria.
-
-**Por que esse ângulo tende a ser MENOR que o ângulo articular real:**
-
-- É a inclinação de **1 segmento só** em relação à vertical, não a diferença relativa entre
-  2 segmentos (o que seria o ângulo articular de verdade — ex.: coxa vs perna, ou o
-  quadril-joelho-tornozelo usado na avaliação clínica em vídeo). Quando os dois segmentos se
-  movem em direções diferentes (comum no valgo dinâmico — quadril aduzindo enquanto o pé fica
-  fixo no chão), o ângulo articular total soma as duas contribuições e costuma ficar maior do
-  que a inclinação de qualquer um dos segmentos isolados.
-- O ângulo é zerado no início de cada ciclo — qualquer inclinação que já existisse **antes**
-  da descida (ex.: um pequeno desvio postural de base) não entra na conta. Um goniômetro ou
-  marcador óptico mediria o ângulo total desde uma posição neutra; aqui só medimos a
-  **variação** durante o movimento.
-- Quando falta o componente de gravidade e o app cai no modo só-giroscópio, a integração
-  tende a ficar mais conservadora, e o filtro leve (5 Hz) também atenua picos rápidos —
-  isso pode empurrar a estimativa ainda mais pra baixo.
-- Na prática: trate os valores como um indicador **relativo** (bom pra comparar repetição
-  com repetição, sessão com sessão, ou lado com lado), não como substituto de uma medição
-  goniométrica ou de vídeo 2D calibrada — se o gráfico mostra 5°, o ângulo articular real
-  provavelmente é maior que isso.
-"""
-    )
-
-
-def _explicacao_sagital():
-    st.markdown(
-        f"""
-A lógica é idêntica à da inclinação frontal (ML) — só troca qual eixo entra em cada papel:
-
-- **Acelerômetro:** em vez de `arctan(ACC_ML / ACC_Vertical)`, aqui é
-  `arctan(ACC_AP / ACC_Vertical)` — o quanto a gravidade "vaza" pro eixo Anteroposterior (AP)
-  em vez do Mediolateral (ML).
-- **Giroscópio:** a rotação que inclina o segmento pra frente/trás é em torno do eixo
-  Mediolateral (ML) — é essa rotação que mistura Vertical e AP (o oposto da inclinação
-  frontal, onde a rotação relevante é em torno do AP). O app escolhe automaticamente o eixo
-  bruto certo (X, Y ou Z) pra cada região, do mesmo jeito que faz pra inclinação frontal.
-- O resto é igual: filtro complementar (α = {ALPHA_COMP:.2f}), ângulo relativo ao início de
-  cada ciclo, e troca automática pra giroscópio puro quando falta o componente de gravidade
-  no ACC (mesma checagem de magnitude). A mesma ressalva da inclinação frontal vale aqui: é
-  a inclinação de 1 segmento só, tende a ser **menor** que o ângulo articular real (ex.: o
-  ângulo verdadeiro de flexão/extensão do joelho), e serve melhor como indicador relativo
-  entre repetições/sessões do que como valor anatômico absoluto.
-"""
-    )
-
-
-def compute_tilt_curve_for_region(region_name):
-    if region_name not in sheets or region_name not in sheets_raw:
-        return None
-    _df_r = sheets[region_name]
-    _catalog_r = build_catalog(_df_r)
-    _imu_axis_r = get_imu_axis_label(region_name)
-    _ap_r = next((ax for ax in AXES if _imu_axis_r[ax] == "AP"), None)
-    _ml_r = next((ax for ax in AXES if _imu_axis_r[ax] == "ML"), None)
-    _vert_r = next((ax for ax in AXES if _imu_axis_r[ax] == "Vertical"), None)
-    gyr_ap_c = _catalog_r.get("IMU - Giroscópio", {}).get(_ap_r) if _ap_r else None
-    acc_ml_c = _catalog_r.get("IMU - Acelerômetro", {}).get(_ml_r) if _ml_r else None
-    acc_vert_c = _catalog_r.get("IMU - Acelerômetro", {}).get(_vert_r) if _vert_r else None
-    if not (gyr_ap_c and acc_ml_c and acc_vert_c):
-        return None
-
-    _raw_r = sheets_raw[region_name]
-    _t_r = _df_r[time_column(_df_r)].to_numpy()
-    _dt_r = float(np.median(np.diff(_t_r)))
-    _fs_r = 1.0 / _dt_r if _dt_r > 0 else 100.0
-
-    acc_ml_f = _light_lowpass(_raw_r[acc_ml_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
-    acc_vert_f = _light_lowpass(_raw_r[acc_vert_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
-    gyr_ap_f = _light_lowpass(_raw_r[gyr_ap_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
-    theta_acc_f = np.degrees(np.arctan2(acc_ml_f, acc_vert_f))
-    grav_mag_r = float(np.median(np.sqrt(acc_ml_f**2 + acc_vert_f**2)))
-    use_anchor_r = grav_mag_r >= 3.0
-
-    curves_r = []
-    for trial_idx in range(1, n_trials + 1):
-        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
-        norm_t, _, _ = make_helpers(cycle_start, d_start, v_trial, cycle_end)
-        trial_mask_r = (_t_r >= cycle_start) & (_t_r <= cycle_end)
-        if trial_mask_r.sum() < 3:
-            continue
-        theta_acc = theta_acc_f[trial_mask_r] - theta_acc_f[trial_mask_r][0]
-        gyr_ap = gyr_ap_f[trial_mask_r]
-        theta = np.zeros(len(theta_acc))
-        for i in range(1, len(theta)):
-            theta_gyro = theta[i - 1] + gyr_ap[i] * _dt_r
-            theta[i] = ALPHA_COMP * theta_gyro + (1 - ALPHA_COMP) * theta_acc[i] if use_anchor_r else theta_gyro
-        x_trial = norm_t(_t_r[trial_mask_r])
-        oi = np.argsort(x_trial)
-        curves_r.append(np.interp(GRID, x_trial[oi], theta[oi]))
-
-    if not curves_r:
-        return None
-    arr_r = np.vstack(curves_r)
-    return {
-        "mean": arr_r.mean(axis=0), "std": arr_r.std(axis=0), "n": len(curves_r),
-        "grav_mag": grav_mag_r, "use_anchor": use_anchor_r,
-    }
-
-
-REGION_COMPARE_COLORS = {"L5": "#1f77b4", "Joelho": "#d62728"}
-
-
-def _build_combo_figure(results, y_title, chart_title, no_anchor_note=" (só giro, sem âncora)"):
-    fig = go.Figure()
-    for region, res in results.items():
-        if res is None:
-            continue
-        color = REGION_COMPARE_COLORS.get(region, "#7f7f7f")
-        m, s = res["mean"], res["std"]
-        fig.add_trace(go.Scatter(
-            x=np.concatenate([GRID, GRID[::-1]]), y=np.concatenate([m + s, (m - s)[::-1]]),
-            fill="toself", fillcolor=hex_to_rgba(color, 0.15),
-            line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False,
-        ))
-        anchor_note = "" if res["use_anchor"] else no_anchor_note
-        fig.add_trace(go.Scatter(
-            x=GRID, y=m, mode="lines", line=dict(color=color, width=2.5),
-            name=f"{region}{anchor_note}",
-        ))
-    if AVG_D_FRAC > 0:
-        fig.add_vrect(x0=0, x1=AVG_D_FRAC, fillcolor=PLATEAU_COLOR, line_width=0, layer="below")
-    fig.add_vrect(x0=AVG_D_FRAC, x1=AVG_V_FRAC, fillcolor=DESCIDA_COLOR, line_width=0, layer="below")
-    fig.add_vrect(x0=AVG_V_FRAC, x1=1.0, fillcolor=SUBIDA_COLOR, line_width=0, layer="below")
-    fig.update_xaxes(showgrid=False, range=[0, 1], title_text="Fração do ciclo (0–1)")
-    fig.update_yaxes(showgrid=False, title_text=y_title)
-    fig.update_layout(
-        title=dict(text=chart_title, y=0.98, yanchor="top"),
-        height=420, margin=dict(l=55, r=20, t=48, b=90),
-        plot_bgcolor="white",
-        legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5),
-    )
-    return fig
-
-
-def compute_tilt_curve_for_region_ap(region_name):
-    if region_name not in sheets or region_name not in sheets_raw:
-        return None
-    _df_r = sheets[region_name]
-    _catalog_r = build_catalog(_df_r)
-    _imu_axis_r = get_imu_axis_label(region_name)
-    _ap_r = next((ax for ax in AXES if _imu_axis_r[ax] == "AP"), None)
-    _ml_r = next((ax for ax in AXES if _imu_axis_r[ax] == "ML"), None)
-    _vert_r = next((ax for ax in AXES if _imu_axis_r[ax] == "Vertical"), None)
-    gyr_ml_c = _catalog_r.get("IMU - Giroscópio", {}).get(_ml_r) if _ml_r else None
-    acc_ap_c = _catalog_r.get("IMU - Acelerômetro", {}).get(_ap_r) if _ap_r else None
-    acc_vert_c = _catalog_r.get("IMU - Acelerômetro", {}).get(_vert_r) if _vert_r else None
-    if not (gyr_ml_c and acc_ap_c and acc_vert_c):
-        return None
-
-    _raw_r = sheets_raw[region_name]
-    _t_r = _df_r[time_column(_df_r)].to_numpy()
-    _dt_r = float(np.median(np.diff(_t_r)))
-    _fs_r = 1.0 / _dt_r if _dt_r > 0 else 100.0
-
-    acc_ap_f = _light_lowpass(_raw_r[acc_ap_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
-    acc_vert_f = _light_lowpass(_raw_r[acc_vert_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
-    gyr_ml_f = _light_lowpass(_raw_r[gyr_ml_c].to_numpy(dtype=float), _TILT_LIGHT_CUTOFF_HZ, _fs_r)
-    theta_acc_f = np.degrees(np.arctan2(acc_ap_f, acc_vert_f))
-    grav_mag_r = float(np.median(np.sqrt(acc_ap_f**2 + acc_vert_f**2)))
-    use_anchor_r = grav_mag_r >= 3.0
-
-    curves_r = []
-    for trial_idx in range(1, n_trials + 1):
-        cycle_start, d_start, v_trial, cycle_end = trial_bounds(trial_idx)
-        norm_t, _, _ = make_helpers(cycle_start, d_start, v_trial, cycle_end)
-        trial_mask_r = (_t_r >= cycle_start) & (_t_r <= cycle_end)
-        if trial_mask_r.sum() < 3:
-            continue
-        theta_acc = theta_acc_f[trial_mask_r] - theta_acc_f[trial_mask_r][0]
-        gyr_ml = gyr_ml_f[trial_mask_r]
-        theta = np.zeros(len(theta_acc))
-        for i in range(1, len(theta)):
-            theta_gyro = theta[i - 1] + gyr_ml[i] * _dt_r
-            theta[i] = ALPHA_COMP * theta_gyro + (1 - ALPHA_COMP) * theta_acc[i] if use_anchor_r else theta_gyro
-        x_trial = norm_t(_t_r[trial_mask_r])
-        oi = np.argsort(x_trial)
-        curves_r.append(np.interp(GRID, x_trial[oi], theta[oi]))
-
-    if not curves_r:
-        return None
-    arr_r = np.vstack(curves_r)
-    return {
-        "mean": arr_r.mean(axis=0), "std": arr_r.std(axis=0), "n": len(curves_r),
-        "grav_mag": grav_mag_r, "use_anchor": use_anchor_r,
-    }
-
-
-_combo_results = {region: compute_tilt_curve_for_region(region) for region in ("L5", "Joelho") if region in sheet_names}
-_combo_ap_results = {region: compute_tilt_curve_for_region_ap(region) for region in ("L5", "Joelho") if region in sheet_names}
-
-_TILT_SQUARE_PX = 380  # células quadradas iguais às demais figuras do app
-
-col_frontal, col_sagital = st.columns(2)
-
-with col_frontal:
-    if all(_combo_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
-        fig_combo = _build_combo_figure(
-            _combo_results,
-            "Δ ângulo (°) — positivo = lateral, negativo = medial",
-            "Inclinação frontal (ML)",
-        )
-        fig_combo.update_layout(width=_TILT_SQUARE_PX, height=_TILT_SQUARE_PX)
-        st.plotly_chart(fig_combo, use_container_width=False, key="tilt_combo_chart")
+    if angle_phone is None and angle_kinem is None:
+        st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")
     else:
-        st.caption("Não foi possível calcular a comparação frontal — faltam colunas de ACC/GYR em uma das duas abas.")
-
-with col_sagital:
-    if all(_combo_ap_results.get(r) for r in ("L5", "Joelho") if r in sheet_names):
-        fig_combo_ap = _build_combo_figure(
-            _combo_ap_results,
-            "Δ ângulo (°) — positivo = anterior, negativo = posterior",
-            "Inclinação sagital (AP)",
+        mask_ang = (x_axis >= view_start) & (x_axis <= view_end)
+        fig_ang = go.Figure()
+        if angle_kinem is not None:
+            n = min(len(angle_kinem), len(x_axis))
+            y_k = angle_kinem[:n]
+            m = mask_ang[:n]
+            fig_ang.add_trace(go.Scatter(
+                x=x_axis[:n][m], y=y_k[m], mode="lines",
+                line=dict(color="blue", width=2), name="Kinem (ótico)",
+            ))
+        if angle_phone is not None:
+            n = min(len(angle_phone), len(x_axis))
+            y_p = angle_phone[:n]
+            m = mask_ang[:n]
+            fig_ang.add_trace(go.Scatter(
+                x=x_axis[:n][m], y=y_p[m], mode="lines",
+                line=dict(color="red", width=2), name="Celular (ACC+GYR)",
+            ))
+        fig_ang.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
+        fig_ang.update_layout(
+            xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[view_start, view_end]),
+            yaxis_title="Ângulo (graus)", height=420, template="plotly_white", hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
         )
-        fig_combo_ap.update_layout(width=_TILT_SQUARE_PX, height=_TILT_SQUARE_PX)
-        st.plotly_chart(fig_combo_ap, use_container_width=False, key="tilt_combo_ap_chart")
-    else:
-        st.caption("Não foi possível calcular a comparação sagital — faltam colunas de ACC/GYR em uma das duas abas.")
+        st.plotly_chart(fig_ang, use_container_width=True)
 
-with st.expander("O que é o ângulo frontal (ML), e como ele é calculado? (clique para abrir)", expanded=False):
-    _explicacao_frontal()
+        if angle_kinem is None:
+            st.caption("⚠️ Ângulo do Kinem não calculado — verifique se as colunas de posição X/Y/Z de Trocânter, Côndilo e Tornozelo estão presentes.")
+        if angle_phone is None:
+            st.caption("⚠️ Ângulo do celular não calculado — selecione ACC e GYR de Coxa e Tornozelo na barra lateral.")
 
-with st.expander("E o ângulo sagital (AP) — em que muda? (clique para abrir)", expanded=False):
-    _explicacao_sagital()
+    st.divider()
+
+    # ══════════════════════════════════════════
+    # Check de qualidade
+    # ══════════════════════════════════════════
+    with st.expander("⚙️ Colunas para check de qualidade (1 por fonte)", expanded=False):
+        st.caption("Escolha exatamente qual coluna usar de cada fonte. Os sinais serão plotados sobrepostos (z-score).")
+
+        qa_kinem_keywords = {
+            "l5": ["l 5 d(z)", "l5 d(z)", "l 5 v(z)", "l5 v(z)", "l 5 a(z)", "l5 a(z)", "l 5 z", "l5"],
+            "coxa": ["trocanter maior dir. a(z)", "trocanter a(z)", "trocanter maior dir.", "trocanter"],
+            "tornozelo": ["osso externo do torn. dir. a(z)", "osso externo do torn. a(z)", "osso externo do torn.", "torn"],
+        }
+
+        qa_kinem_cols, qa_phone_cols = {}, {}
+        qa_cols_ui = st.columns(3)
+        for ui_col, gkey in zip(qa_cols_ui, GROUPS):
+            with ui_col:
+                gdef = GROUPS[gkey]
+                qa_kinem_cols[gkey] = st.selectbox(
+                    f"{gdef['emoji']} Kinem — {gdef['label']}", kinem_num, key=f"qa_kinem_{gkey}",
+                    index=col_default(kinem_num, qa_kinem_keywords[gkey]),
+                )
+                pf = phone_files[gkey]
+                acc_num = numeric_cols(aligned_data.get(pf["acc"], pd.DataFrame())) if pf["acc"] != NONE else []
+                gyr_num = numeric_cols(aligned_data.get(pf["gyr"], pd.DataFrame())) if pf["gyr"] != NONE else []
+                qa_phone_cols[gkey] = {
+                    "acc": st.selectbox(
+                        f"{gdef['emoji']} ACC — {gdef['label']}", acc_num if acc_num else ["—"],
+                        key=f"qa_acc_{gkey}", index=col_default(acc_num, ["z", "y", "x"]) if acc_num else 0,
+                    ) if acc_num else None,
+                    "gyr": st.selectbox(
+                        f"{gdef['emoji']} GYR — {gdef['label']}", gyr_num if gyr_num else ["—"],
+                        key=f"qa_gyr_{gkey}", index=col_default(gyr_num, ["z", "y", "x"]) if gyr_num else 0,
+                    ) if gyr_num else None,
+                }
+
+    show_qa = st.checkbox("🔍 Checar qualidade dos dados", value=False)
+    if show_qa:
+        qa_xmin, qa_xmax = view_start, view_end
+        mask_qa = (x_axis >= qa_xmin) & (x_axis <= qa_xmax)
+        x_view = x_axis[mask_qa]
+
+        def get_qa_entry(fname, col_name):
+            df_q = aligned_data.get(fname) if (fname and fname != NONE) else None
+            if df_q is None or col_name is None or col_name not in df_q.columns:
+                return None
+            y = try_numeric(df_q[col_name]).values[mask_qa].astype(float)
+            if np.all(np.isnan(y)):
+                return None
+            return (float(np.nanstd(y)), f"{fname[:20]} · {col_name}", y)
+
+        qa_cols_out = st.columns(3)
+        for ui_col, gkey in zip(qa_cols_out, GROUPS):
+            gdef = GROUPS[gkey]
+            pf = phone_files[gkey]
+            group_entries = [e for e in [
+                get_qa_entry(kinem_ref, qa_kinem_cols[gkey]),
+                get_qa_entry(pf["acc"] if pf["acc"] != NONE else "", qa_phone_cols[gkey]["acc"]),
+                get_qa_entry(pf["gyr"] if pf["gyr"] != NONE else "", qa_phone_cols[gkey]["gyr"]),
+            ] if e]
+            with ui_col:
+                st.markdown(f"#### {gdef['emoji']} {gdef['label']} — Kinem vs Celular")
+                if not group_entries:
+                    st.info("Nenhum sinal classificado neste grupo.")
+                    continue
+                fig_qa = go.Figure()
+                for std_val, lbl, y_raw in group_entries:
+                    mn, sd = np.nanmean(y_raw), np.nanstd(y_raw)
+                    y_norm = (y_raw - mn) / sd if sd > 0 else y_raw - mn
+                    fig_qa.add_trace(go.Scatter(
+                        x=x_view, y=y_norm, mode="lines", name=f"{lbl}  (σ_orig={std_val:.3f})",
+                    ))
+                fig_qa.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
+                fig_qa.update_layout(
+                    xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[qa_xmin, qa_xmax]),
+                    yaxis_title="z-score", height=360, template="plotly_white", hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
+                )
+                st.plotly_chart(fig_qa, use_container_width=True)
+
+    st.divider()
+
+    # ══════════════════════════════════════════
+    # Exportar Excel — apenas janela selecionada
+    # ══════════════════════════════════════════
+    st.subheader("📥 Exportar Excel")
+    st.caption(f"Exporta todos os eixos X, Y, Z + ângulo do joelho • janela: **{view_start:+.1f} s → {view_end:+.1f} s** relativo ao pico")
+
+    if st.button("Gerar arquivo Excel (L5 + Coxa + Tornozelo + Ângulo)", use_container_width=True):
+        mask_exp = (x_axis >= view_start) & (x_axis <= view_end)
+        win_idx = np.where(mask_exp)[0]
+
+        if len(win_idx) == 0:
+            st.error("Janela vazia — ajuste os limites de início/fim.")
+        else:
+            windowed = {fname: df.iloc[win_idx].reset_index(drop=True) for fname, df in aligned_data.items()}
+            t_w = np.arange(len(win_idx)) / pfs
+
+            sheets = {}
+            for gkey, gdef in GROUPS.items():
+                pf = phone_files[gkey]
+                sheets[gdef["label"]] = build_export_sheet(
+                    windowed, kinem_ref, pf["acc"], pf["gyr"], gdef["kinem_kw"], t_w,
+                )
+
+            df_angle = pd.DataFrame({"Tempo (s)": t_w})
+            if angle_kinem is not None:
+                if len(angle_kinem) >= (win_idx.max() + 1):
+                    df_angle["Angulo_Kinem_graus"] = angle_kinem[win_idx]
+                else:
+                    df_angle["Angulo_Kinem_graus"] = np.full(len(win_idx), np.nan)
+            if angle_phone is not None:
+                valid_idx = win_idx[win_idx < len(angle_phone)]
+                y_p = np.full(len(win_idx), np.nan)
+                y_p[:len(valid_idx)] = angle_phone[valid_idx]
+                df_angle["Angulo_Celular_graus"] = y_p
+
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                for sheet_name, df_sheet in sheets.items():
+                    df_sheet.to_excel(writer, sheet_name=sheet_name, index=False)
+                df_angle.to_excel(writer, sheet_name="Angulo_Joelho", index=False)
+            buf.seek(0)
+
+            st.download_button(
+                "⬇ Baixar sinais_sincronizados.xlsx", buf, file_name="sinais_sincronizados.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )

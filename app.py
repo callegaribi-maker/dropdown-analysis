@@ -5,10 +5,9 @@ Visualizador de Sinais — Y-Balance & Step-Down
 
 Carrega arquivos de Kinem (câmera) e de celulares (ACC/GYR) posicionados na
 L5, na coxa e no tornozelo, sincroniza-os pelo pico de impacto do salto/step,
-permite pré-processamento (detrend + filtro passa-baixa), visualização
-automática de todos os eixos X/Y/Z, checagem de qualidade, estimativa do
-ângulo do joelho (celular vs. Kinem) e exportação de uma janela selecionada
-para Excel.
+e calcula o ângulo do joelho (celular vs. Kinem, decomposto por plano
+anatômico) com calibração automática de amplitude, direto a partir dos
+dados sincronizados — sem etapas de processamento manual.
 """
 
 import io
@@ -21,8 +20,6 @@ from plotly.subplots import make_subplots
 
 from signal_utils import (
     NONE_LABEL,
-    apply_detrend,
-    apply_lowpass,
     best_match,
     build_export_sheet,
     col_default,
@@ -31,8 +28,6 @@ from signal_utils import (
     find_sync_xcorr,
     fit_scale_gain,
     get_aligned_data,
-    is_xyz_col,
-    kinem_cols_for_body,
     knee_angle_direction_note,
     knee_angle_from_kinem,
     knee_angle_from_kinem_plane,
@@ -70,8 +65,6 @@ GYR_FILE_KW = {
 DEFAULT_SESSION_STATE = {
     "files_data": {},
     "raw_synced": {},
-    "proc_data": {},
-    "proc_data_nofilter": {},
     "offsets": {},
     "peak_ref": None,
     "target_fs": 100,
@@ -104,7 +97,6 @@ with st.sidebar:
 
         if set(loaded.keys()) != set(st.session_state.files_data.keys()):
             st.session_state.files_data = loaded
-            st.session_state.proc_data = {}
             st.session_state.offsets = {}
             st.session_state.fs_info = {}
 
@@ -265,8 +257,6 @@ if sincronizar:
         st.session_state.raw_synced = raw_synced
         st.session_state.target_fs = fs_target
         st.session_state.fs_info = fs_info
-        st.session_state.proc_data = {}
-        st.session_state.proc_data_nofilter = {}
 
         janela_samp = int(janela_seg * fs_target)
         offsets = {kinem_ref: 0}
@@ -351,7 +341,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
         st.session_state.offsets = offs
         st.session_state.synced_kinem_cols = dict(kinem_sync_cols)
-        st.session_state.proc_data = {}  # força reprocessamento
 
 
 # ══════════════════════════════════════════════
@@ -456,126 +445,23 @@ def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, lab
 
 
 if st.session_state.synced and st.session_state.raw_synced and st.session_state.peak_ref is not None:
-    vfs = st.session_state.target_fs or 100
-    vraw, vx_samp, _ = get_aligned_data(
+    pfs = st.session_state.target_fs or 100
+    aligned_data, x_samp, align_msg = get_aligned_data(
         st.session_state.raw_synced, st.session_state.offsets, st.session_state.peak_ref, ref_file=kinem_ref,
     )
-    if vraw is None:
-        vraw = {f: df.copy() for f, df in st.session_state.raw_synced.items()}
-        vx_samp = np.arange(max(len(d) for d in vraw.values())) - st.session_state.peak_ref
-    vx = vx_samp / vfs
+    if aligned_data is None:
+        st.error(align_msg)
+        st.stop()
+    x_axis = x_samp / pfs
+    x_min_data, x_max_data = float(x_axis.min()), float(x_axis.max())
+    kdf = aligned_data.get(kinem_ref, pd.DataFrame())
 
     for gkey, gdef in GROUPS.items():
         pf = phone_files[gkey]
         render_alignment_check(
             gdef["label"], kinem_sync_cols[gkey], pf["acc"], pf["acc_col"],
-            f"Kinem {gdef['label']}", f"ACC {gdef['label']}", vraw, vx, vfs,
+            f"Kinem {gdef['label']}", f"ACC {gdef['label']}", aligned_data, x_axis, pfs,
         )
-
-    # ══════════════════════════════════════════
-    # Processamento inline
-    # ══════════════════════════════════════════
-    st.divider()
-    proc_done = bool(st.session_state.proc_data)
-    with st.expander(
-        "⚙️ Processamento  ✔ Aplicado" if proc_done else "⚙️ Processamento  ← Configure e processe aqui",
-        expanded=not proc_done,
-    ):
-        pc1, pc2 = st.columns(2)
-        with pc1:
-            do_detrend = st.checkbox("Detrend (remover tendência linear)", value=True, key="do_detrend")
-        with pc2:
-            do_lowpass = st.checkbox("Filtro passa-baixa (Butterworth)", value=True, key="do_lowpass")
-
-        if do_lowpass:
-            fl1, fl2 = st.columns(2)
-            with fl1:
-                cutoff_hz = st.number_input(
-                    "Frequência de corte (Hz)", min_value=0.1, max_value=float(fs_target // 2),
-                    value=min(20.0, float(fs_target // 2 - 1)), step=0.5, key="cutoff_hz",
-                )
-            with fl2:
-                filt_order = st.selectbox("Ordem do filtro", [2, 4, 6, 8], index=1, key="filt_order")
-        else:
-            cutoff_hz, filt_order = 20.0, 4
-
-        if st.button("🔧 Processar", type="primary", use_container_width=True, key="btn_processar"):
-            raw = st.session_state.raw_synced
-            proc, proc_nofilter = {}, {}
-            for fname, df in raw.items():
-                r = df.copy()
-                if do_detrend:
-                    r = apply_detrend(r)
-                proc_nofilter[fname] = r.copy()
-                if do_lowpass:
-                    r = apply_lowpass(r, fs_target, cutoff_hz, filt_order)
-                proc[fname] = r
-            st.session_state.proc_data = proc
-            st.session_state.proc_data_nofilter = proc_nofilter
-            st.rerun()
-
-
-# ══════════════════════════════════════════════
-# Auto-visualização — todos os eixos X, Y, Z
-# ══════════════════════════════════════════════
-if st.session_state.proc_data and st.session_state.synced:
-    pfs = st.session_state.target_fs or 100
-
-    aligned_data, x_samp, align_msg = get_aligned_data(
-        st.session_state.proc_data, st.session_state.offsets, st.session_state.peak_ref, ref_file=kinem_ref,
-    )
-    if aligned_data is None:
-        st.error(align_msg)
-        st.stop()
-
-    x_axis = x_samp / pfs
-    x_min_data, x_max_data = float(x_axis.min()), float(x_axis.max())
-
-    kdf = aligned_data.get(kinem_ref, pd.DataFrame())
-
-    def get_phone_xyz(fname):
-        if fname == NONE or fname not in aligned_data:
-            return []
-        return [c for c in aligned_data[fname].columns if is_xyz_col(c)]
-
-    def make_auto_traces(gkey):
-        gdef = GROUPS[gkey]
-        pf = phone_files[gkey]
-        k_cols = kinem_cols_for_body(kdf, *gdef["kinem_kw"])
-        traces = [(kinem_ref, c, try_numeric(kdf[c])) for c in k_cols if c in kdf.columns]
-        if pf["acc"] != NONE and pf["acc"] in aligned_data:
-            for c in get_phone_xyz(pf["acc"]):
-                traces.append((pf["acc"], c, try_numeric(aligned_data[pf["acc"]][c])))
-        if pf["gyr"] != NONE and pf["gyr"] in aligned_data:
-            for c in get_phone_xyz(pf["gyr"]):
-                traces.append((pf["gyr"], c, try_numeric(aligned_data[pf["gyr"]][c])))
-        return traces
-
-    group_traces = {gkey: make_auto_traces(gkey) for gkey in GROUPS}
-
-    st.divider()
-    st.subheader("📊 Sinais sincronizados — todos os eixos X, Y, Z")
-    st.caption(align_msg)
-
-    def render_auto_charts(traces):
-        for fname, col, y in traces:
-            fig_i = go.Figure()
-            fig_i.add_trace(go.Scatter(x=x_axis, y=y, mode="lines", line=dict(width=1.5), showlegend=False))
-            fig_i.add_vline(x=0, line_dash="dash", line_color="gray",
-                             annotation_text="salto", annotation_position="top right")
-            fig_i.update_layout(
-                title=dict(text=f"<b>{fname[:26]}</b> · {col}", font_size=12),
-                xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[x_min_data, x_max_data]),
-                yaxis_title="", height=220,
-                margin=dict(t=42, b=38, l=55, r=10), hovermode="x", template="plotly_white",
-            )
-            st.plotly_chart(fig_i, use_container_width=True)
-
-    auto_cols = st.columns(3)
-    for auto_col, gkey in zip(auto_cols, GROUPS):
-        with auto_col:
-            st.markdown(f"#### {GROUPS[gkey]['emoji']} {GROUPS[gkey]['label']}")
-            render_auto_charts(group_traces[gkey])
 
     st.divider()
 
@@ -607,14 +493,12 @@ if st.session_state.proc_data and st.session_state.synced:
         "marcadores foram orientados no seu setup — veja a nota abaixo de cada um."
     )
 
-    # O ângulo é calculado a partir dos dados BRUTOS alinhados (reamostrados,
+    # O ângulo é calculado a partir dos dados sincronizados BRUTOS (reamostrados,
     # sem detrend/filtro): o detrend distorce a posição 3D real do Kinem e
     # remove o componente de gravidade que o acelerômetro precisa para
-    # estimar a inclinação do segmento.
-    aligned_raw, _, _ = get_aligned_data(
-        st.session_state.raw_synced, st.session_state.offsets, st.session_state.peak_ref, ref_file=kinem_ref,
-    )
-    kdf_raw = aligned_raw.get(kinem_ref, pd.DataFrame()) if aligned_raw else pd.DataFrame()
+    # estimar a inclinação do segmento. Este app não aplica nenhum outro
+    # processamento além da sincronização.
+    aligned_raw, kdf_raw = aligned_data, kdf
 
     pf_coxa, pf_torn = phone_files["coxa"], phone_files["tornozelo"]
     phone_ready = bool(
@@ -698,43 +582,40 @@ if st.session_state.proc_data and st.session_state.synced:
             default_cal_start = max(view_start, float(peak_time) - 1.0)
             default_cal_end = min(view_end, float(peak_time) + 1.0)
 
-    cc1, cc2, cc3 = st.columns([1.4, 1, 1])
+    cc1, cc2 = st.columns(2)
     with cc1:
-        calibrate_amplitude = st.checkbox(
-            "Calibrar amplitude do celular pra bater com o Kinem", value=True, key="calibrate_amplitude",
-            help="Ajusta a escala do sinal do celular (sagital e frontal) por um fator fixo, calculado comparando a amplitude do movimento nessa janela. Não muda o formato da curva, só o quanto ela sobe/desce.",
-        )
-    with cc2:
         cal_start = st.number_input(
             "Calibrar usando de (s)", value=float(default_cal_start), step=0.1, key="cal_start",
-            disabled=not calibrate_amplitude,
         )
-    with cc3:
+    with cc2:
         cal_end = st.number_input(
             "Calibrar usando até (s)", value=float(default_cal_end), step=0.1, key="cal_end",
-            disabled=not calibrate_amplitude,
         )
+    st.caption(
+        "A amplitude do celular é sempre calibrada pra bater com o Kinem, usando a janela acima "
+        "(ajuste se o fator parecer estranho). Isso corrige desalinhamento de montagem/tecido mole "
+        "**dessa gravação específica** — não é uma calibração permanente do sensor."
+    )
 
-    gain_sagital = gain_frontal = None
-    if calibrate_amplitude:
-        gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start, cal_end)
-        if gain_sagital is not None and angle_phone_sagital is not None:
-            angle_phone_sagital = angle_phone_sagital * gain_sagital
+    gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start, cal_end)
+    if gain_sagital is not None and angle_phone_sagital is not None:
+        angle_phone_sagital = angle_phone_sagital * gain_sagital
 
-        if show_planes_extra:
-            gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start, cal_end)
-            if gain_frontal is not None and angle_phone_frontal is not None:
-                angle_phone_frontal = angle_phone_frontal * gain_frontal
+    gain_frontal = None
+    if show_planes_extra:
+        gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start, cal_end)
+        if gain_frontal is not None and angle_phone_frontal is not None:
+            angle_phone_frontal = angle_phone_frontal * gain_frontal
 
-        gain_msgs = []
-        if gain_sagital is not None:
-            gain_msgs.append(f"sagital ×{gain_sagital:.2f}")
-        if gain_frontal is not None:
-            gain_msgs.append(f"frontal ×{gain_frontal:.2f}")
-        if gain_msgs:
-            st.caption(f"📐 Calibração aplicada ao celular: {', '.join(gain_msgs)} (não mexe no Kinem, nem no transverso do celular — a deriva não é um problema de escala).")
-        else:
-            st.caption("⚠️ Não deu pra calibrar — confira se há dados de ambas as fontes nessa janela.")
+    gain_msgs = []
+    if gain_sagital is not None:
+        gain_msgs.append(f"sagital ×{gain_sagital:.2f}")
+    if gain_frontal is not None:
+        gain_msgs.append(f"frontal ×{gain_frontal:.2f}")
+    if gain_msgs:
+        st.caption(f"📐 Fator de calibração aplicado ao celular: {', '.join(gain_msgs)} (não mexe no Kinem, nem no transverso do celular — a deriva não é um problema de escala).")
+    else:
+        st.caption("⚠️ Não deu pra calibrar — confira se há dados de ambas as fontes nessa janela.")
 
     if angle_phone_sagital is None and angle_kinem_sagital is None:
         st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")

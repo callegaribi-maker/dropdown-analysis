@@ -426,6 +426,18 @@ PHONE_AXIS_ROLES = {
     "limb": {"x": "AP", "y": "Vertical", "z": "ML"},
 }
 
+# Para cada plano anatômico: quais dois eixos do acelerômetro formam o plano
+# (referência de gravidade) e qual eixo do giroscópio gira nesse plano.
+# Sagital (flexão/extensão) gira em torno do eixo ML; frontal (valgo/varo)
+# gira em torno do eixo AP. O plano transverso (rotação interna/externa) NÃO
+# tem componente de gravidade própria — o acelerômetro não enxerga rotação em
+# torno do eixo vertical — por isso não entra nesse esquema (ver
+# knee_rotation_from_phone, que usa só giroscópio, sem correção).
+_PHONE_PLANE_CONFIG = {
+    "sagittal": {"accel_a": "AP", "accel_b": "Vertical", "gyro_axis": "ML"},
+    "frontal": {"accel_a": "ML", "accel_b": "Vertical", "gyro_axis": "AP"},
+}
+
 
 def phone_axis_col(df: pd.DataFrame, role: str, target_label: str) -> str | None:
     """
@@ -443,34 +455,39 @@ def phone_axis_col(df: pd.DataFrame, role: str, target_label: str) -> str | None
 
 
 def complementary_angle(acc_df: pd.DataFrame, gyro_df: pd.DataFrame, fs: float,
-                         role: str = "limb", alpha: float = 0.98) -> np.ndarray | None:
+                         role: str = "limb", plane: str = "sagittal",
+                         alpha: float = 0.98) -> np.ndarray | None:
     """
-    Ângulo de inclinação sagital de um segmento (coxa ou tornozelo) via filtro
-    complementar: fusão do ângulo estimado pelo acelerômetro (atan2 entre o
-    componente AP e o Vertical, referência de gravidade) com a integração do
-    giroscópio no eixo mediolateral (ML — eixo de flexão/extensão).
+    Ângulo de inclinação de um segmento (coxa ou tornozelo) via filtro
+    complementar: fusão do ângulo estimado pelo acelerômetro (atan2 entre os
+    dois componentes do plano escolhido, referência de gravidade) com a
+    integração do giroscópio no eixo perpendicular a esse plano.
+
+    plane: 'sagittal' (flexão/extensão, eixo de giro ML) ou
+    'frontal' (valgo/varo do segmento, eixo de giro AP).
 
     Retorna array de ângulo em graus, ou None se as colunas necessárias não
     forem encontradas. É um ângulo relativo (não calibrado clinicamente),
     útil para comparar o formato do movimento entre coxa e tornozelo.
     """
-    ap_col = phone_axis_col(acc_df, role, "AP")
-    vert_col = phone_axis_col(acc_df, role, "Vertical")
-    ml_col = phone_axis_col(gyro_df, role, "ML")
-    if ap_col is None or vert_col is None or ml_col is None:
+    cfg = _PHONE_PLANE_CONFIG[plane]
+    a_col = phone_axis_col(acc_df, role, cfg["accel_a"])
+    b_col = phone_axis_col(acc_df, role, cfg["accel_b"])
+    gyro_col = phone_axis_col(gyro_df, role, cfg["gyro_axis"])
+    if a_col is None or b_col is None or gyro_col is None:
         return None
 
-    ap = try_numeric(acc_df[ap_col]).fillna(0).values.astype(float)
-    vert = try_numeric(acc_df[vert_col]).fillna(0).values.astype(float)
-    gyro_ml = try_numeric(gyro_df[ml_col]).fillna(0).values.astype(float)
+    a = try_numeric(acc_df[a_col]).fillna(0).values.astype(float)
+    b = try_numeric(acc_df[b_col]).fillna(0).values.astype(float)
+    gyro = try_numeric(gyro_df[gyro_col]).fillna(0).values.astype(float)
 
-    n = min(len(ap), len(vert), len(gyro_ml))
+    n = min(len(a), len(b), len(gyro))
     if n == 0:
         return None
-    ap, vert, gyro_ml = ap[:n], vert[:n], gyro_ml[:n]
+    a, b, gyro = a[:n], b[:n], gyro[:n]
 
-    angle_acc = np.degrees(np.arctan2(ap, vert))
-    gyro_dps = np.degrees(gyro_ml)  # assume giroscópio em rad/s (padrão de smartphones)
+    angle_acc = np.degrees(np.arctan2(a, b))
+    gyro_dps = np.degrees(gyro)  # assume giroscópio em rad/s (padrão de smartphones)
 
     dt = 1.0 / fs
     theta = np.empty(n)
@@ -485,16 +502,58 @@ def knee_angle_from_phone(thigh_acc: pd.DataFrame, thigh_gyro: pd.DataFrame,
                           shank_acc: pd.DataFrame, shank_gyro: pd.DataFrame,
                           fs: float, alpha: float = 0.98) -> np.ndarray | None:
     """
-    Ângulo relativo do joelho estimado pelos celulares: diferença entre o
-    ângulo sagital da coxa e o do tornozelo, cada um calculado por filtro
-    complementar (fusão acelerômetro + giroscópio).
+    Ângulo relativo do joelho estimado pelos celulares no plano sagital
+    (flexão/extensão): diferença entre o ângulo da coxa e o do tornozelo,
+    cada um calculado por filtro complementar (fusão acelerômetro + giroscópio).
     """
-    thigh_angle = complementary_angle(thigh_acc, thigh_gyro, fs, role="limb", alpha=alpha)
-    shank_angle = complementary_angle(shank_acc, shank_gyro, fs, role="limb", alpha=alpha)
+    return knee_angle_from_phone_plane(thigh_acc, thigh_gyro, shank_acc, shank_gyro, fs,
+                                       plane="sagittal", alpha=alpha)
+
+
+def knee_angle_from_phone_plane(thigh_acc: pd.DataFrame, thigh_gyro: pd.DataFrame,
+                                shank_acc: pd.DataFrame, shank_gyro: pd.DataFrame,
+                                fs: float, plane: str = "sagittal",
+                                alpha: float = 0.98) -> np.ndarray | None:
+    """
+    Ângulo relativo do joelho estimado pelos celulares num plano específico
+    ('sagittal' ou 'frontal'): diferença entre o ângulo da coxa e o do
+    tornozelo nesse plano, cada um via filtro complementar. Sinal preservado
+    (pode ficar negativo) — ver knee_angle_direction_note() para orientação
+    de qual lado é qual.
+    """
+    thigh_angle = complementary_angle(thigh_acc, thigh_gyro, fs, role="limb", plane=plane, alpha=alpha)
+    shank_angle = complementary_angle(shank_acc, shank_gyro, fs, role="limb", plane=plane, alpha=alpha)
     if thigh_angle is None or shank_angle is None:
         return None
     n = min(len(thigh_angle), len(shank_angle))
     return thigh_angle[:n] - shank_angle[:n]
+
+
+def knee_rotation_from_phone(thigh_gyro: pd.DataFrame, shank_gyro: pd.DataFrame,
+                             fs: float, role: str = "limb") -> np.ndarray | None:
+    """
+    Estimativa (pouco confiável) da rotação interna/externa do joelho pelos
+    celulares: integração pura do giroscópio no eixo vertical de cada
+    segmento, sem nenhuma correção do acelerômetro (a gravidade não muda com
+    rotação em torno do eixo vertical, então não há como corrigir a deriva).
+    Tende a "escorregar" cada vez mais quanto mais longo o trecho analisado —
+    use com cautela, principalmente fora de uma janela curta ao redor do pico.
+    """
+    thigh_col = phone_axis_col(thigh_gyro, role, "Vertical")
+    shank_col = phone_axis_col(shank_gyro, role, "Vertical")
+    if thigh_col is None or shank_col is None:
+        return None
+
+    thigh_gyro_vals = try_numeric(thigh_gyro[thigh_col]).fillna(0).values.astype(float)
+    shank_gyro_vals = try_numeric(shank_gyro[shank_col]).fillna(0).values.astype(float)
+    n = min(len(thigh_gyro_vals), len(shank_gyro_vals))
+    if n == 0:
+        return None
+
+    dt = 1.0 / fs
+    thigh_yaw = np.cumsum(np.degrees(thigh_gyro_vals[:n])) * dt
+    shank_yaw = np.cumsum(np.degrees(shank_gyro_vals[:n])) * dt
+    return thigh_yaw - shank_yaw
 
 
 _POS_COL_EXCLUDE = ("v(", "a(", "length", "#2d")
@@ -525,34 +584,114 @@ def position_xyz_cols(df: pd.DataFrame, *body_keywords: str) -> dict:
 def knee_angle_from_kinem(df: pd.DataFrame, hip_keywords: tuple, knee_keywords: tuple,
                           ankle_keywords: tuple) -> np.ndarray | None:
     """
-    Ângulo de flexão do joelho "ótico", calculado a partir das posições 3D do
-    Kinem: vetor coxa (quadril→joelho) e vetor perna (joelho→tornozelo).
-    0° = perna estendida (vetores colineares); aumenta com a flexão.
+    Ângulo de flexão do joelho "ótico" (3D completo), calculado a partir das
+    posições 3D do Kinem: vetor coxa (quadril→joelho) e vetor perna
+    (joelho→tornozelo). 0° = perna estendida (vetores colineares); aumenta
+    com a flexão. Mistura qualquer componente fora do plano sagital (valgo/
+    varo, rotação) — para isolar só a flexão/extensão, use
+    knee_angle_from_kinem_plane(..., plane="sagittal").
     """
+    thigh_vec, shank_vec = _kinem_segment_vectors(df, hip_keywords, knee_keywords, ankle_keywords)
+    if thigh_vec is None:
+        return None
+    return _vector_angle_deg(thigh_vec, shank_vec)
+
+
+# No Kinem: X = Mediolateral, Y = Anteroposterior, Z = Vertical (ver axis_label).
+# Cada plano anatômico usa duas dessas componentes, ignorando a terceira.
+_KINEM_PLANE_AXES = {
+    "sagittal": (1, 2),    # AP × Vertical — flexão/extensão (o que o celular mede)
+    "frontal": (0, 2),     # ML × Vertical — valgo/varo
+    "transverse": (0, 1),  # ML × AP — rotação interna/externa
+}
+
+
+def _kinem_segment_vectors(df: pd.DataFrame, hip_keywords: tuple, knee_keywords: tuple,
+                           ankle_keywords: tuple):
+    """Vetores 3D coxa (quadril→joelho) e perna (joelho→tornozelo) a partir do Kinem."""
     hip = position_xyz_cols(df, *hip_keywords)
     knee = position_xyz_cols(df, *knee_keywords)
     ankle = position_xyz_cols(df, *ankle_keywords)
     if not all(k in hip for k in "XYZ") or not all(k in knee for k in "XYZ") or not all(k in ankle for k in "XYZ"):
-        return None
+        return None, None
 
     hip_pos = np.column_stack([try_numeric(df[hip[a]]).values for a in "XYZ"]).astype(float)
     knee_pos = np.column_stack([try_numeric(df[knee[a]]).values for a in "XYZ"]).astype(float)
     ankle_pos = np.column_stack([try_numeric(df[ankle[a]]).values for a in "XYZ"]).astype(float)
 
-    thigh_vec = knee_pos - hip_pos
-    shank_vec = ankle_pos - knee_pos
+    return knee_pos - hip_pos, ankle_pos - knee_pos
 
-    dot = np.sum(thigh_vec * shank_vec, axis=1)
-    norm_t = np.linalg.norm(thigh_vec, axis=1)
-    norm_s = np.linalg.norm(shank_vec, axis=1)
-    denom = norm_t * norm_s
 
+def _vector_angle_deg(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
+    """Ângulo (graus, 0-180) entre dois conjuntos de vetores por amostra."""
+    dot = np.sum(v1 * v2, axis=1)
+    norm1 = np.linalg.norm(v1, axis=1)
+    norm2 = np.linalg.norm(v2, axis=1)
+    denom = norm1 * norm2
     cos_angle = np.divide(dot, denom, out=np.zeros_like(dot), where=denom != 0)
     cos_angle = np.clip(cos_angle, -1.0, 1.0)
-    # Ângulo entre os vetores coxa (quadril→joelho) e perna (joelho→tornozelo):
-    # ~0° quando os vetores apontam na mesma direção (perna estendida),
-    # aumenta conforme o joelho flexiona.
     return np.degrees(np.arccos(cos_angle))
+
+
+def _signed_planar_angle_deg(v1_2d: np.ndarray, v2_2d: np.ndarray) -> np.ndarray:
+    """
+    Ângulo assinado (-180° a 180°) entre dois vetores 2D por amostra, via
+    atan2(produto vetorial, produto escalar). O sinal indica de que lado v2
+    está em relação a v1 no plano — permite diferenciar valgo de varo, ou
+    rotação interna de externa, em vez de só a magnitude.
+    """
+    cross = v1_2d[:, 0] * v2_2d[:, 1] - v1_2d[:, 1] * v2_2d[:, 0]
+    dot = np.sum(v1_2d * v2_2d, axis=1)
+    return np.degrees(np.arctan2(cross, dot))
+
+
+def knee_angle_from_kinem_plane(df: pd.DataFrame, hip_keywords: tuple, knee_keywords: tuple,
+                                ankle_keywords: tuple, plane: str = "sagittal",
+                                signed: bool = False) -> np.ndarray | None:
+    """
+    Ângulo do joelho do Kinem projetado num único plano anatômico:
+    'sagittal' (flexão/extensão — comparável ao ângulo do celular),
+    'frontal' (valgo/varo) ou 'transverse' (rotação interna/externa).
+
+    Por padrão (signed=False) retorna a magnitude (0° = segmentos colineares
+    nesse plano, aumenta conforme o ângulo abre — bom pra sagital, onde só a
+    quantidade de flexão importa). Com signed=True retorna um ângulo com
+    sinal (-180° a 180°), preservando de que lado o desvio ocorre — use para
+    frontal/transverso, onde a direção (valgo x varo, interna x externa)
+    importa. Ver knee_angle_direction_note() para orientação de qual sinal
+    corresponde a qual lado.
+    """
+    thigh_vec, shank_vec = _kinem_segment_vectors(df, hip_keywords, knee_keywords, ankle_keywords)
+    if thigh_vec is None:
+        return None
+    i, j = _KINEM_PLANE_AXES[plane]
+    v1, v2 = thigh_vec[:, [i, j]], shank_vec[:, [i, j]]
+    if signed:
+        return _signed_planar_angle_deg(v1, v2)
+    return _vector_angle_deg(v1, v2)
+
+
+def knee_angle_direction_note(plane: str) -> str:
+    """
+    Texto explicando, em termos matemáticos verificáveis, o que significa o
+    sinal (positivo/negativo) de um ângulo de plano frontal ou transverso.
+    A correspondência exata com valgo/varo ou rotação interna/externa
+    depende da orientação dos eixos configurada no Kinem e de como os
+    celulares foram fixados — não é possível garantir isso só a partir dos
+    dados. Recomenda-se confirmar empiricamente: peça pro avaliado fazer um
+    movimento conhecido (ex.: joelho pra dentro/pra fora de propósito) e veja
+    pra que lado a curva se move.
+    """
+    if plane == "frontal":
+        return ("Frontal: sinal positivo/negativo indica desvio medial (valgo) ou lateral (varo) "
+                "do joelho — qual é qual depende da orientação dos eixos no seu setup. "
+                "Confirme fazendo o avaliado desviar o joelho de propósito pra um lado conhecido.")
+    if plane == "transverse":
+        return ("Transverso: sinal positivo/negativo indica rotação interna ou externa da perna — "
+                "qual é qual depende da orientação dos eixos no seu setup, e esse sinal em especial "
+                "tende a \"derivar\" com o tempo (menos confiável). Confirme fazendo o avaliado girar "
+                "a perna de propósito pra um lado conhecido.")
+    return ""
 
 
 def zero_reference_angle(series: np.ndarray | None, x_axis: np.ndarray,

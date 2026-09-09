@@ -32,8 +32,12 @@ from signal_utils import (
     get_aligned_data,
     is_xyz_col,
     kinem_cols_for_body,
+    knee_angle_direction_note,
     knee_angle_from_kinem,
+    knee_angle_from_kinem_plane,
     knee_angle_from_phone,
+    knee_angle_from_phone_plane,
+    knee_rotation_from_phone,
     load_file,
     numeric_cols,
     resample_to_regular,
@@ -595,10 +599,11 @@ if st.session_state.proc_data and st.session_state.synced:
     # ══════════════════════════════════════════
     st.subheader("🦵 Ângulo do joelho")
     st.caption(
-        "Celular: fusão ACC+GYR (filtro complementar) entre Coxa e Tornozelo — ângulo relativo, "
-        "não calibrado clinicamente. Kinem: ângulo ótico real entre os vetores Trocânter→Côndilo e "
-        "Côndilo→Tornozelo (0° = perna estendida na geometria bruta). Use a opção abaixo para zerar "
-        "ambos os sinais numa janela do início do movimento."
+        "Sagital (flexão/extensão): sempre positivo, 0° = extensão completa, aumenta com a flexão — "
+        "celular e Kinem usam a mesma definição, diretamente comparáveis. "
+        "Frontal (valgo/varo) e Transverso (rotação) têm sinal (podem ficar negativos): o sinal indica "
+        "o lado do desvio, mas qual sinal corresponde a qual lado clínico depende de como os sensores/"
+        "marcadores foram orientados no seu setup — veja a nota abaixo de cada um."
     )
 
     # O ângulo é calculado a partir dos dados BRUTOS alinhados (reamostrados,
@@ -611,25 +616,51 @@ if st.session_state.proc_data and st.session_state.synced:
     kdf_raw = aligned_raw.get(kinem_ref, pd.DataFrame()) if aligned_raw else pd.DataFrame()
 
     pf_coxa, pf_torn = phone_files["coxa"], phone_files["tornozelo"]
-    angle_phone = None
-    if aligned_raw and all(pf_coxa[k] != NONE for k in ("acc", "gyr")) and all(pf_torn[k] != NONE for k in ("acc", "gyr")):
-        needed = [pf_coxa["acc"], pf_coxa["gyr"], pf_torn["acc"], pf_torn["gyr"]]
-        if all(f in aligned_raw for f in needed):
-            angle_phone = knee_angle_from_phone(
+    phone_ready = bool(
+        aligned_raw and all(pf_coxa[k] != NONE for k in ("acc", "gyr")) and all(pf_torn[k] != NONE for k in ("acc", "gyr"))
+        and all(f in aligned_raw for f in [pf_coxa["acc"], pf_coxa["gyr"], pf_torn["acc"], pf_torn["gyr"]])
+    )
+
+    angle_phone_sagital = angle_phone_frontal = angle_phone_transverse = None
+    if phone_ready:
+        angle_phone_sagital = knee_angle_from_phone_plane(
+            aligned_raw[pf_coxa["acc"]], aligned_raw[pf_coxa["gyr"]],
+            aligned_raw[pf_torn["acc"]], aligned_raw[pf_torn["gyr"]],
+            pfs, plane="sagittal", alpha=cf_alpha,
+        )
+
+    kinem_angle_kw = (GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"])
+    angle_kinem_sagital = knee_angle_from_kinem_plane(
+        kdf_raw, *kinem_angle_kw, plane="sagittal",
+    ) if not kdf_raw.empty else None
+
+    show_planes_extra = st.checkbox(
+        "Mostrar também Frontal (valgo/varo) e Transverso (rotação) — celular e Kinem",
+        value=False, key="show_planes_extra",
+        help="Frontal e transverso tendem a ser mais ruidosos: a coxa/perna ficam quase alinhadas com o eixo vertical, então a pequena parcela horizontal usada nesses planos é mais sensível a ruído. O transverso do celular também sofre deriva (sem correção do acelerômetro).",
+    )
+    angle_kinem_3d = angle_kinem_frontal = angle_kinem_transverse = None
+    angle_phone_frontal = angle_phone_transverse = None
+    if show_planes_extra:
+        if not kdf_raw.empty:
+            angle_kinem_3d = knee_angle_from_kinem(kdf_raw, *kinem_angle_kw)
+            angle_kinem_frontal = knee_angle_from_kinem_plane(kdf_raw, *kinem_angle_kw, plane="frontal", signed=True)
+            angle_kinem_transverse = knee_angle_from_kinem_plane(kdf_raw, *kinem_angle_kw, plane="transverse", signed=True)
+        if phone_ready:
+            angle_phone_frontal = knee_angle_from_phone_plane(
                 aligned_raw[pf_coxa["acc"]], aligned_raw[pf_coxa["gyr"]],
                 aligned_raw[pf_torn["acc"]], aligned_raw[pf_torn["gyr"]],
-                pfs, alpha=cf_alpha,
+                pfs, plane="frontal", alpha=cf_alpha,
             )
-
-    angle_kinem = knee_angle_from_kinem(
-        kdf_raw, GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"],
-    ) if not kdf_raw.empty else None
+            angle_phone_transverse = knee_rotation_from_phone(
+                aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs,
+            )
 
     zc1, zc2, zc3 = st.columns([1.4, 1, 1])
     with zc1:
         zero_baseline = st.checkbox(
             "Zerar no início (0° = extensão completa)", value=True, key="zero_baseline",
-            help="Usa a média numa janela no início do movimento como referência de 0° — o resto do sinal passa a mostrar o quanto flexionou a partir dessa postura.",
+            help="Usa a média numa janela no início do movimento como referência de 0° — o resto do sinal passa a mostrar o quanto flexionou/desviou a partir dessa postura.",
         )
     with zc2:
         baseline_start = st.number_input(
@@ -643,44 +674,82 @@ if st.session_state.proc_data and st.session_state.synced:
         )
 
     if zero_baseline:
-        angle_kinem = zero_reference_angle(angle_kinem, x_axis, baseline_start, baseline_end)
-        angle_phone = zero_reference_angle(angle_phone, x_axis, baseline_start, baseline_end)
+        angle_kinem_sagital = zero_reference_angle(angle_kinem_sagital, x_axis, baseline_start, baseline_end)
+        angle_phone_sagital = zero_reference_angle(angle_phone_sagital, x_axis, baseline_start, baseline_end)
+        angle_kinem_3d = zero_reference_angle(angle_kinem_3d, x_axis, baseline_start, baseline_end)
+        angle_kinem_frontal = zero_reference_angle(angle_kinem_frontal, x_axis, baseline_start, baseline_end)
+        angle_kinem_transverse = zero_reference_angle(angle_kinem_transverse, x_axis, baseline_start, baseline_end)
+        angle_phone_frontal = zero_reference_angle(angle_phone_frontal, x_axis, baseline_start, baseline_end)
+        angle_phone_transverse = zero_reference_angle(angle_phone_transverse, x_axis, baseline_start, baseline_end)
 
-    if angle_phone is None and angle_kinem is None:
+    if angle_phone_sagital is None and angle_kinem_sagital is None:
         st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")
     else:
         mask_ang = (x_axis >= view_start) & (x_axis <= view_end)
-        fig_ang = go.Figure()
-        if angle_kinem is not None:
-            n = min(len(angle_kinem), len(x_axis))
-            y_k = angle_kinem[:n]
+
+        def add_angle_trace(fig, series, color, name, dash=None):
+            if series is None:
+                return
+            n = min(len(series), len(x_axis))
+            y = series[:n]
             m = mask_ang[:n]
-            fig_ang.add_trace(go.Scatter(
-                x=x_axis[:n][m], y=y_k[m], mode="lines",
-                line=dict(color="blue", width=2), name="Kinem (ótico)",
+            fig.add_trace(go.Scatter(
+                x=x_axis[:n][m], y=y[m], mode="lines",
+                line=dict(color=color, width=2, dash=dash), name=name,
             ))
-        if angle_phone is not None:
-            n = min(len(angle_phone), len(x_axis))
-            y_p = angle_phone[:n]
-            m = mask_ang[:n]
-            fig_ang.add_trace(go.Scatter(
-                x=x_axis[:n][m], y=y_p[m], mode="lines",
-                line=dict(color="red", width=2), name="Celular (ACC+GYR)",
-            ))
-        fig_ang.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
-        fig_ang.update_layout(
+
+        # --- Plano sagital (flexão/extensão) ---
+        st.markdown("**Sagital — flexão (↑) / extensão (↓)**")
+        fig_sag = go.Figure()
+        add_angle_trace(fig_sag, angle_kinem_sagital, "blue", "Kinem — sagital")
+        add_angle_trace(fig_sag, angle_phone_sagital, "red", "Celular — sagital")
+        if show_planes_extra:
+            add_angle_trace(fig_sag, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
+        fig_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
+        fig_sag.update_layout(
             xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[view_start, view_end]),
-            yaxis_title="Ângulo (graus)", height=420, template="plotly_white", hovermode="x unified",
+            yaxis_title="Ângulo (graus)", height=380, template="plotly_white", hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
         )
-        st.plotly_chart(fig_ang, use_container_width=True)
+        st.plotly_chart(fig_sag, use_container_width=True)
 
-        if angle_kinem is None:
+        if angle_kinem_sagital is None:
             st.caption("⚠️ Ângulo do Kinem não calculado — verifique se as colunas de posição X/Y/Z de Trocânter, Côndilo e Tornozelo estão presentes.")
-        if angle_phone is None:
+        if angle_phone_sagital is None:
             st.caption("⚠️ Ângulo do celular não calculado — selecione ACC e GYR de Coxa e Tornozelo na barra lateral.")
 
+        # --- Planos frontal e transverso (opcionais) ---
+        if show_planes_extra:
+            st.markdown("**Frontal — valgo (↑ ou ↓, ver nota) / varo (sentido oposto)**")
+            fig_front = go.Figure()
+            add_angle_trace(fig_front, angle_kinem_frontal, "green", "Kinem — frontal")
+            add_angle_trace(fig_front, angle_phone_frontal, "darkorange", "Celular — frontal")
+            fig_front.add_hline(y=0, line_dash="dot", line_color="lightgray")
+            fig_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
+            fig_front.update_layout(
+                xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[view_start, view_end]),
+                yaxis_title="Ângulo (graus)", height=340, template="plotly_white", hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
+            )
+            st.plotly_chart(fig_front, use_container_width=True)
+            st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
+
+            st.markdown("**Transverso — rotação interna (↑ ou ↓, ver nota) / externa (sentido oposto)**")
+            fig_trans = go.Figure()
+            add_angle_trace(fig_trans, angle_kinem_transverse, "purple", "Kinem — transverso")
+            add_angle_trace(fig_trans, angle_phone_transverse, "brown", "Celular — transverso (deriva)")
+            fig_trans.add_hline(y=0, line_dash="dot", line_color="lightgray")
+            fig_trans.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
+            fig_trans.update_layout(
+                xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[view_start, view_end]),
+                yaxis_title="Ângulo (graus)", height=340, template="plotly_white", hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
+            )
+            st.plotly_chart(fig_trans, use_container_width=True)
+            st.caption("ℹ️ " + knee_angle_direction_note("transverse"))
+
     st.divider()
+
 
     # ══════════════════════════════════════════
     # Check de qualidade
@@ -787,16 +856,25 @@ if st.session_state.proc_data and st.session_state.synced:
                 )
 
             df_angle = pd.DataFrame({"Tempo (s)": t_w})
-            if angle_kinem is not None:
-                if len(angle_kinem) >= (win_idx.max() + 1):
-                    df_angle["Angulo_Kinem_graus"] = angle_kinem[win_idx]
+
+            def add_angle_col(df_out, series, col_name):
+                if series is None:
+                    return
+                if len(series) >= (win_idx.max() + 1):
+                    df_out[col_name] = series[win_idx]
                 else:
-                    df_angle["Angulo_Kinem_graus"] = np.full(len(win_idx), np.nan)
-            if angle_phone is not None:
-                valid_idx = win_idx[win_idx < len(angle_phone)]
-                y_p = np.full(len(win_idx), np.nan)
-                y_p[:len(valid_idx)] = angle_phone[valid_idx]
-                df_angle["Angulo_Celular_graus"] = y_p
+                    valid_idx = win_idx[win_idx < len(series)]
+                    y = np.full(len(win_idx), np.nan)
+                    y[:len(valid_idx)] = series[valid_idx]
+                    df_out[col_name] = y
+
+            add_angle_col(df_angle, angle_kinem_sagital, "Angulo_Kinem_Sagital_graus")
+            add_angle_col(df_angle, angle_phone_sagital, "Angulo_Celular_Sagital_graus")
+            add_angle_col(df_angle, angle_kinem_3d, "Angulo_Kinem_3D_total_graus")
+            add_angle_col(df_angle, angle_kinem_frontal, "Angulo_Kinem_Frontal_graus")
+            add_angle_col(df_angle, angle_kinem_transverse, "Angulo_Kinem_Transverso_graus")
+            add_angle_col(df_angle, angle_phone_frontal, "Angulo_Celular_Frontal_graus")
+            add_angle_col(df_angle, angle_phone_transverse, "Angulo_Celular_Transverso_graus")
 
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:

@@ -197,8 +197,8 @@ with st.sidebar:
         )
         cf_alpha = st.slider(
             "Filtro complementar (ângulo do joelho) — peso do giroscópio", 0.80, 0.999,
-            value=0.98, step=0.005,
-            help="Mais próximo de 1 = confia mais no giroscópio (menos deriva do acelerômetro).",
+            value=0.995, step=0.005,
+            help="Mais próximo de 1 = confia mais no giroscópio (menos deriva do acelerômetro). 0,995 tende a captar melhor a amplitude do plano frontal (valgo/varo) sem prejudicar o sagital — testado empiricamente.",
         )
 
 

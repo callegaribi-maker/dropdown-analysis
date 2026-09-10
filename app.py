@@ -556,76 +556,84 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         angle_phone_frontal = zero_reference_angle(angle_phone_frontal, x_axis, baseline_start, baseline_end)
         angle_phone_transverse = zero_reference_angle(angle_phone_transverse, x_axis, baseline_start, baseline_end)
 
-    # ── Correção de atraso no tempo do celular (corrige atraso mecânico —
-    # ex.: o sensor preso por faixa sobre tecido mole responde um instante
-    # depois do movimento real do osso, medido pelo Kinem) ──
-    # Detecta o atraso usando uma janela mais larga (±1.6s) que a de
-    # calibração de amplitude, pra não cortar o pico do celular fora da
-    # busca se o atraso for grande.
-    lag_win_sag = auto_calibration_window(angle_kinem_sagital, x_axis, x_min_data, x_max_data, half_width=1.6)
-    lag_win_front = auto_calibration_window(angle_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
-    lag_win_trans = auto_calibration_window(angle_kinem_transverse, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
+    apply_corrections = st.radio(
+        "Ângulo do celular:", ["Com correções (atraso + calibração de amplitude)", "Sem correções (estimativa bruta)"],
+        index=0, horizontal=True, key="apply_corrections",
+    ) == "Com correções (atraso + calibração de amplitude)"
 
-    lag_sagital = estimate_time_lag_from_peaks(angle_kinem_sagital, angle_phone_sagital, x_axis, *lag_win_sag)
-    lag_frontal = estimate_time_lag_from_peaks(angle_kinem_frontal, angle_phone_frontal, x_axis, *lag_win_front, signed=True)
-    lag_transverse = estimate_time_lag_from_peaks(angle_kinem_transverse, angle_phone_transverse, x_axis, *lag_win_trans, signed=True)
+    if apply_corrections:
+        # ── Correção de atraso no tempo do celular (corrige atraso mecânico —
+        # ex.: o sensor preso por faixa sobre tecido mole responde um instante
+        # depois do movimento real do osso, medido pelo Kinem) ──
+        # Detecta o atraso usando uma janela mais larga (±1.6s) que a de
+        # calibração de amplitude, pra não cortar o pico do celular fora da
+        # busca se o atraso for grande.
+        lag_win_sag = auto_calibration_window(angle_kinem_sagital, x_axis, x_min_data, x_max_data, half_width=1.6)
+        lag_win_front = auto_calibration_window(angle_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
+        lag_win_trans = auto_calibration_window(angle_kinem_transverse, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
 
-    angle_phone_sagital = apply_time_shift(angle_phone_sagital, pfs, lag_sagital)
-    angle_phone_frontal = apply_time_shift(angle_phone_frontal, pfs, lag_frontal)
-    angle_phone_transverse = apply_time_shift(angle_phone_transverse, pfs, lag_transverse)
+        lag_sagital = estimate_time_lag_from_peaks(angle_kinem_sagital, angle_phone_sagital, x_axis, *lag_win_sag)
+        lag_frontal = estimate_time_lag_from_peaks(angle_kinem_frontal, angle_phone_frontal, x_axis, *lag_win_front, signed=True)
+        lag_transverse = estimate_time_lag_from_peaks(angle_kinem_transverse, angle_phone_transverse, x_axis, *lag_win_trans, signed=True)
 
-    lag_msgs = []
-    if lag_sagital is not None:
-        lag_msgs.append(f"sagital {lag_sagital:+.2f}s")
-    if lag_frontal is not None:
-        lag_msgs.append(f"frontal {lag_frontal:+.2f}s")
-    if lag_transverse is not None:
-        lag_msgs.append(f"transverso {lag_transverse:+.2f}s")
-    if lag_msgs:
-        st.caption(f"⏱️ Atraso do celular corrigido (adiantado no tempo): {', '.join(lag_msgs)} — positivo = celular estava atrasado em relação ao Kinem.")
+        angle_phone_sagital = apply_time_shift(angle_phone_sagital, pfs, lag_sagital)
+        angle_phone_frontal = apply_time_shift(angle_phone_frontal, pfs, lag_frontal)
+        angle_phone_transverse = apply_time_shift(angle_phone_transverse, pfs, lag_transverse)
 
-    # ── Calibração de amplitude do celular (corrige desalinhamento de
-    # montagem / artefato de tecido mole, que tende a atenuar o sinal do
-    # celular por um fator ~constante em relação ao Kinem) ──
-    # Cada plano usa sua PRÓPRIA janela automática (±1s ao redor do pico
-    # daquele plano específico no Kinem), não uma janela única baseada no
-    # sagital — frontal e transverso podem ter o pico em outro instante
-    # (ex.: atraso mecânico do sensor no tecido mole), então ancorar todos
-    # no pico sagital sub-otimizaria a calibração dos outros planos.
-    cal_start_sag, cal_end_sag = auto_calibration_window(angle_kinem_sagital, x_axis, x_min_data, x_max_data)
-    cal_start_front, cal_end_front = auto_calibration_window(angle_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True)
-    cal_start_trans, cal_end_trans = auto_calibration_window(angle_kinem_transverse, x_axis, x_min_data, x_max_data, signed=True)
+        lag_msgs = []
+        if lag_sagital is not None:
+            lag_msgs.append(f"sagital {lag_sagital:+.2f}s")
+        if lag_frontal is not None:
+            lag_msgs.append(f"frontal {lag_frontal:+.2f}s")
+        if lag_transverse is not None:
+            lag_msgs.append(f"transverso {lag_transverse:+.2f}s")
+        if lag_msgs:
+            st.caption(f"⏱️ Atraso do celular corrigido (adiantado no tempo): {', '.join(lag_msgs)} — positivo = celular estava atrasado em relação ao Kinem.")
 
-    st.caption(
-        "A amplitude do celular é sempre calibrada automaticamente pra bater com o Kinem "
-        "(±1s ao redor do pico de cada plano, calibrado separadamente, já com o atraso corrigido). "
-        "Corrige desalinhamento de montagem/tecido mole **dessa gravação específica** — não é uma "
-        "calibração permanente do sensor."
-    )
+        # ── Calibração de amplitude do celular (corrige desalinhamento de
+        # montagem / artefato de tecido mole, que tende a atenuar o sinal do
+        # celular por um fator ~constante em relação ao Kinem) ──
+        # Cada plano usa sua PRÓPRIA janela automática (±1s ao redor do pico
+        # daquele plano específico no Kinem), não uma janela única baseada no
+        # sagital — frontal e transverso podem ter o pico em outro instante
+        # (ex.: atraso mecânico do sensor no tecido mole), então ancorar todos
+        # no pico sagital sub-otimizaria a calibração dos outros planos.
+        cal_start_sag, cal_end_sag = auto_calibration_window(angle_kinem_sagital, x_axis, x_min_data, x_max_data)
+        cal_start_front, cal_end_front = auto_calibration_window(angle_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True)
+        cal_start_trans, cal_end_trans = auto_calibration_window(angle_kinem_transverse, x_axis, x_min_data, x_max_data, signed=True)
 
-    gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start_sag, cal_end_sag)
-    if gain_sagital is not None and angle_phone_sagital is not None:
-        angle_phone_sagital = angle_phone_sagital * gain_sagital
+        st.caption(
+            "A amplitude do celular é calibrada automaticamente pra bater com o Kinem "
+            "(±1s ao redor do pico de cada plano, calibrado separadamente, já com o atraso corrigido). "
+            "Corrige desalinhamento de montagem/tecido mole **dessa gravação específica** — não é uma "
+            "calibração permanente do sensor."
+        )
 
-    gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start_front, cal_end_front)
-    if gain_frontal is not None and angle_phone_frontal is not None:
-        angle_phone_frontal = angle_phone_frontal * gain_frontal
+        gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start_sag, cal_end_sag)
+        if gain_sagital is not None and angle_phone_sagital is not None:
+            angle_phone_sagital = angle_phone_sagital * gain_sagital
 
-    gain_transverse = fit_scale_gain(angle_kinem_transverse, angle_phone_transverse, x_axis, cal_start_trans, cal_end_trans)
-    if gain_transverse is not None and angle_phone_transverse is not None:
-        angle_phone_transverse = angle_phone_transverse * gain_transverse
+        gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start_front, cal_end_front)
+        if gain_frontal is not None and angle_phone_frontal is not None:
+            angle_phone_frontal = angle_phone_frontal * gain_frontal
 
-    gain_msgs = []
-    if gain_sagital is not None:
-        gain_msgs.append(f"sagital ×{gain_sagital:.2f}")
-    if gain_frontal is not None:
-        gain_msgs.append(f"frontal ×{gain_frontal:.2f}")
-    if gain_transverse is not None:
-        gain_msgs.append(f"transverso ×{gain_transverse:.2f}")
-    if gain_msgs:
-        st.caption(f"📐 Fator de calibração aplicado ao celular: {', '.join(gain_msgs)} (não mexe no Kinem). O transverso continua sujeito a deriva — calibrar a amplitude não corrige isso.")
+        gain_transverse = fit_scale_gain(angle_kinem_transverse, angle_phone_transverse, x_axis, cal_start_trans, cal_end_trans)
+        if gain_transverse is not None and angle_phone_transverse is not None:
+            angle_phone_transverse = angle_phone_transverse * gain_transverse
+
+        gain_msgs = []
+        if gain_sagital is not None:
+            gain_msgs.append(f"sagital ×{gain_sagital:.2f}")
+        if gain_frontal is not None:
+            gain_msgs.append(f"frontal ×{gain_frontal:.2f}")
+        if gain_transverse is not None:
+            gain_msgs.append(f"transverso ×{gain_transverse:.2f}")
+        if gain_msgs:
+            st.caption(f"📐 Fator de calibração aplicado ao celular: {', '.join(gain_msgs)} (não mexe no Kinem). O transverso continua sujeito a deriva — calibrar a amplitude não corrige isso.")
+        else:
+            st.caption("⚠️ Não deu pra calibrar — confira se há dados de ambas as fontes nessa janela.")
     else:
-        st.caption("⚠️ Não deu pra calibrar — confira se há dados de ambas as fontes nessa janela.")
+        st.caption("📴 Mostrando a estimativa bruta do celular, sem correção de atraso nem calibração de amplitude.")
 
     if angle_phone_sagital is None and angle_kinem_sagital is None:
         st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")

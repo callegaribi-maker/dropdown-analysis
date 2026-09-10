@@ -474,6 +474,26 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     x_min_data, x_max_data = float(x_axis.min()), float(x_axis.max())
     kdf = aligned_data.get(kinem_ref, pd.DataFrame())
 
+    # ── Recentraliza x=0 no pico de flexão do joelho (Kinem sagital), não no
+    # pico de aceleração vertical do L5. O pico de aceleração é usado só pra
+    # alinhar os arquivos no tempo (isso não muda); mas como referência de
+    # 0" na tela, o pico de flexão é mais direto e sem ambiguidade — evita
+    # ter que adivinhar qual pico de aceleração é "o certo" quando há mais
+    # de um candidato (ex.: um movimento preparatório antes do teste).
+    kinem_angle_kw = (GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"])
+    if not kdf.empty:
+        angle_kinem_sagital_prelim = knee_angle_from_kinem_plane(kdf, *kinem_angle_kw, plane="sagittal")
+        if angle_kinem_sagital_prelim is not None:
+            n_prelim = min(len(angle_kinem_sagital_prelim), len(x_axis))
+            valid_prelim = ~np.isnan(angle_kinem_sagital_prelim[:n_prelim])
+            if np.any(valid_prelim):
+                peak_idx_prelim = np.nanargmax(angle_kinem_sagital_prelim[:n_prelim])
+                angle_peak_time = float(x_axis[:n_prelim][peak_idx_prelim])
+                if abs(angle_peak_time) > 1e-9:
+                    x_axis = x_axis - angle_peak_time
+                    x_min_data, x_max_data = float(x_axis.min()), float(x_axis.max())
+                    st.caption(f"↕️ Referência 0s recentralizada no pico de flexão do joelho (estava a {angle_peak_time:+.2f}s do pico de aceleração usado pra sincronizar os arquivos).")
+
     for gkey, gdef in GROUPS.items():
         pf = phone_files[gkey]
         render_alignment_check(

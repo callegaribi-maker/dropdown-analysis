@@ -77,6 +77,7 @@ DEFAULT_SESSION_STATE = {
     "show_preview": False,
     "synced": False,
     "synced_kinem_cols": {},
+    "ignorar_antes_seg": 0.0,
 }
 for key, default in DEFAULT_SESSION_STATE.items():
     st.session_state.setdefault(key, default)
@@ -204,7 +205,7 @@ with st.sidebar:
 # ══════════════════════════════════════════════
 # Botões: Preview + Sincronizar
 # ══════════════════════════════════════════════
-btn_col1, btn_col2, btn_col3 = st.columns([2, 1, 2])
+btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([1.6, 1, 1, 1.6])
 
 with btn_col1:
     if st.button("👁 Preview sinais brutos", use_container_width=True):
@@ -217,6 +218,12 @@ with btn_col2:
     )
 
 with btn_col3:
+    ignorar_antes_seg = st.number_input(
+        "Ignorar picos antes de (s)", min_value=0.0, max_value=300.0, value=0.0, step=0.5,
+        help="Se houver um movimento preparatório antes do evento que você quer sincronizar (um pico de aceleração maior mas que não é o que importa), aumente esse valor pra pular ele e sincronizar no próximo pico.",
+    )
+
+with btn_col4:
     sincronizar = st.button("🔗 Sincronizar", type="primary", use_container_width=True)
 
 
@@ -264,16 +271,21 @@ if sincronizar:
         st.session_state.fs_info = fs_info
 
         janela_samp = int(janela_seg * fs_target)
+        ignorar_samp = int(ignorar_antes_seg * fs_target)
         offsets = {kinem_ref: 0}
         msgs_sync = []
 
         peak_l5 = find_highest_peak(
             try_numeric(raw_synced[kinem_ref][kinem_sync_cols["l5"]]), janela_samp, fs_target,
+            search_start=ignorar_samp,
         )
+        st.session_state.ignorar_antes_seg = ignorar_antes_seg
         st.session_state.peak_ref = peak_l5
         st.session_state.synced = True
         st.session_state.show_preview = False
         msgs_sync.append(f"**Kinem L5** — pico @ {peak_l5} ({peak_l5/fs_target:.2f} s) → x=0")
+        if ignorar_antes_seg > 0:
+            msgs_sync.append(f"⏭️ Ignorados picos antes de {ignorar_antes_seg:.1f}s")
 
         group_peaks = {"l5": peak_l5}
         for gkey in ("coxa", "tornozelo"):
@@ -324,7 +336,8 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         offs = dict(st.session_state.offsets)
 
         if prev_cols.get("l5") != kinem_sync_cols["l5"] and kinem_sync_cols["l5"] in raws.get(kinem_ref, pd.DataFrame()).columns:
-            pk_l5 = find_highest_peak(try_numeric(raws[kinem_ref][kinem_sync_cols["l5"]]), jsamp, tfs)
+            ignorar_samp = int((st.session_state.ignorar_antes_seg or 0.0) * tfs)
+            pk_l5 = find_highest_peak(try_numeric(raws[kinem_ref][kinem_sync_cols["l5"]]), jsamp, tfs, search_start=ignorar_samp)
             st.session_state.peak_ref = pk_l5
             offs[kinem_ref] = 0
             pf = phone_files["l5"]

@@ -290,19 +290,24 @@ def _impact_envelope(v, fs: float = 100.0) -> np.ndarray:
     return np.abs(sp_signal.sosfiltfilt(sos, v))
 
 
-def find_highest_peak(series: pd.Series, search_end: int, fs: float = 100.0) -> int:
-    """Índice do pico de maior amplitude no envelope de impacto, dentro da janela."""
-    raw = try_numeric(series).fillna(0).values[:search_end].astype(float)
+def find_highest_peak(series: pd.Series, search_end: int, fs: float = 100.0, search_start: int = 0) -> int:
+    """
+    Índice do pico de maior amplitude no envelope de impacto, dentro da
+    janela [search_start, search_end). Use search_start > 0 pra ignorar um
+    pico anterior (ex.: um movimento preparatório antes do evento principal)
+    e sincronizar num pico posterior.
+    """
+    raw = try_numeric(series).fillna(0).values[search_start:search_end].astype(float)
     if len(raw) == 0:
-        return 0
+        return search_start
     vals = _impact_envelope(raw, fs)
     max_val = vals.max()
     if max_val == 0:
-        return int(np.argmax(vals))
+        return search_start + int(np.argmax(vals))
     peaks, _ = sp_signal.find_peaks(vals, prominence=max_val * 0.30)
     if len(peaks) == 0:
-        return int(np.argmax(vals))
-    return int(peaks[np.argmax(vals[peaks])])
+        return search_start + int(np.argmax(vals))
+    return search_start + int(peaks[np.argmax(vals[peaks])])
 
 
 def _local_corr(kinem_vals, phone_vals, kinem_peak: int, phone_peak: int, fs: float) -> float:

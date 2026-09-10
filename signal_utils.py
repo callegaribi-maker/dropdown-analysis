@@ -534,6 +534,26 @@ def knee_angle_from_phone_plane(thigh_acc: pd.DataFrame, thigh_gyro: pd.DataFram
     return thigh_angle[:n] - shank_angle[:n]
 
 
+def hip_angle_from_phone_plane(l5_acc: pd.DataFrame, l5_gyro: pd.DataFrame,
+                               thigh_acc: pd.DataFrame, thigh_gyro: pd.DataFrame,
+                               fs: float, plane: str = "sagittal",
+                               alpha: float = 0.98) -> np.ndarray | None:
+    """
+    Ângulo relativo do quadril (tronco vs coxa) estimado pelos celulares num
+    plano específico ('sagittal' ou 'frontal'): diferença entre o ângulo do
+    L5 e o da coxa nesse plano, cada um via filtro complementar. Mesma
+    lógica de knee_angle_from_phone_plane, mas usando o par L5/Coxa em vez
+    de Coxa/Tornozelo — o L5 usa role='l5' (mapeamento de eixo diferente do
+    celular no membro).
+    """
+    l5_angle = complementary_angle(l5_acc, l5_gyro, fs, role="l5", plane=plane, alpha=alpha)
+    thigh_angle = complementary_angle(thigh_acc, thigh_gyro, fs, role="limb", plane=plane, alpha=alpha)
+    if l5_angle is None or thigh_angle is None:
+        return None
+    n = min(len(l5_angle), len(thigh_angle))
+    return l5_angle[:n] - thigh_angle[:n]
+
+
 def knee_rotation_from_phone(thigh_gyro: pd.DataFrame, shank_gyro: pd.DataFrame,
                              fs: float, role: str = "limb") -> np.ndarray | None:
     """

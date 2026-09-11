@@ -573,12 +573,21 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         )
 
     hip_angle_kw = (GROUPS["l5"]["kinem_kw"], GROUPS["coxa"]["kinem_kw"], ("condilo",))
+    # Nota: invertido (×-1) porque a geometria vetorial do quadril (tronco→coxa)
+    # tem convenção oposta à do joelho — o ângulo bruto DIMINUI quando o quadril
+    # flexiona (vetores ficam mais paralelos), ao contrário do joelho, onde
+    # aumenta. Invertendo, "sobe = flexiona" fica consistente nos dois
+    # segmentos e bate com a convenção do celular (L5 − Coxa).
     angle_hip_kinem_sagital = knee_angle_from_kinem_plane(
         kdf_raw, *hip_angle_kw, plane="sagittal",
     ) if not kdf_raw.empty else None
+    if angle_hip_kinem_sagital is not None:
+        angle_hip_kinem_sagital = -angle_hip_kinem_sagital
     angle_hip_kinem_frontal = knee_angle_from_kinem_plane(
         kdf_raw, *hip_angle_kw, plane="frontal", signed=True,
     ) if not kdf_raw.empty else None
+    if angle_hip_kinem_frontal is not None:
+        angle_hip_kinem_frontal = -angle_hip_kinem_frontal
 
     kinem_angle_kw = (GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"])
     angle_kinem_sagital = knee_angle_from_kinem_plane(

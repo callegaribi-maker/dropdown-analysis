@@ -436,12 +436,6 @@ def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, lab
             f"{'🔵' if i == 0 else '🔴'} **{series[i][1]}**: {caps[i]}" for i in range(len(series))
         )
         st.caption(cap + f"  ·  reamostrado a {vfs:.0f} Hz  ·  normalizado pelo pico  ·  sem filtro passa-baixa")
-        if abs(raw_sync_x) > 1e-9:
-            st.caption(
-                f"↕️ A linha pontilhada roxa marca onde a **sincronização bruta dos arquivos** (pico de aceleração) "
-                f"realmente ficou ({raw_sync_x:+.2f}s) — diferente da linha 'pico flexão' (0 = pico de flexão do joelho). "
-                f"Se os picos das duas curvas abaixo caem em cima da linha roxa, a sincronização dos arquivos está correta."
-            )
 
         x_view_lo, x_view_hi = raw_sync_x - 2, raw_sync_x + 2
         mask_2 = (vx >= x_view_lo) & (vx <= x_view_hi)
@@ -775,6 +769,11 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             x=x_axis[:n_l5][mask_l5], y=l5_vertical[:n_l5][mask_l5], mode="lines",
             line=dict(color="black", width=1.5), name="L5 — posição vertical (Kinem)",
         ))
+        def y_at(x_target):
+            idx = int(np.argmin(np.abs(x_axis[:n_l5] - x_target)))
+            return l5_vertical[idx]
+
+        marker_x, marker_y, marker_color = [], [], []
         for phases in trial_phases:
             if not phases:
                 continue
@@ -787,7 +786,17 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 fig_l5v.add_vrect(x0=d_start, x1=d_end, fillcolor="orange", opacity=0.15, line_width=0)
             if s_end > s_start:
                 fig_l5v.add_vrect(x0=s_start, x1=s_end, fillcolor="steelblue", opacity=0.15, line_width=0)
-            fig_l5v.add_vline(x=d_end, line_dash="dot", line_color="black", line_width=1)
+            # bolinhas exatamente nas transições de cor: início da descida,
+            # ponto mais baixo (descida→subida) e fim da subida
+            marker_x += [d_start, d_end, s_end]
+            marker_y += [y_at(d_start), y_at(d_end), y_at(s_end)]
+            marker_color += ["orange", "black", "steelblue"]
+        if marker_x:
+            fig_l5v.add_trace(go.Scatter(
+                x=marker_x, y=marker_y, mode="markers",
+                marker=dict(color=marker_color, size=9, line=dict(color="black", width=1)),
+                name="Transições de fase", showlegend=False,
+            ))
         fig_l5v.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
         fig_l5v.update_layout(
             xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
@@ -796,8 +805,8 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         )
         st.plotly_chart(fig_l5v, use_container_width=True)
         st.caption(
-            "Cinza = preparação · laranja = descida · azul = subida · linha pontilhada preta = ponto mais baixo do L5 "
-            "(fim da descida). Confira se as cores batem com o movimento real antes de confiar na sombra dos gráficos abaixo."
+            "Cinza = preparação · laranja = descida · azul = subida. Bolinhas laranja = início da descida · "
+            "bolinha preta = ponto mais baixo (transição descida→subida) · bolinha azul = fim da subida."
         )
         st.divider()
 
@@ -818,12 +827,15 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             ))
 
         def add_phase_shading(fig):
-            """Sombreia descida (laranja claro) e subida (azul claro) de cada trial detectado."""
+            """Sombreia preparação (cinza), descida (laranja) e subida (azul) de cada trial — mesmas cores do gráfico de validação do L5."""
             for phases in trial_phases:
                 if not phases:
                     continue
+                p_start, p_end = phases["preparacao"]
                 d_start, d_end = phases["descida"]
                 s_start, s_end = phases["subida"]
+                if p_end > p_start:
+                    fig.add_vrect(x0=p_start, x1=p_end, fillcolor="lightgray", opacity=0.20, line_width=0)
                 if d_end > d_start:
                     fig.add_vrect(x0=d_start, x1=d_end, fillcolor="orange", opacity=0.10, line_width=0)
                 if s_end > s_start:
@@ -845,7 +857,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
         # --- Plano sagital (flexão/extensão) ---
         st.markdown("**Sagital — flexão (↑) / extensão (↓)**")
-        st.caption("Fundo laranja = fase de descida · fundo azul = fase de subida · linha pontilhada cinza = deslocamento vertical do L5 (eixo direito, cm).")
+        st.caption("Fundo cinza = preparação · laranja = descida · azul = subida · linha pontilhada cinza = deslocamento vertical do L5 (eixo direito, cm).")
         fig_sag = go.Figure()
         add_phase_shading(fig_sag)
         add_angle_trace(fig_sag, angle_kinem_sagital, "blue", "Kinem — sagital")

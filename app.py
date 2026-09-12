@@ -42,6 +42,7 @@ from signal_utils import (
     knee_angle_from_phone_plane,
     load_file,
     numeric_cols,
+    normalize_trial_curve,
     position_xyz_cols,
     resample_to_regular,
     segment_trial_phases,
@@ -743,6 +744,21 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 prev_return = trial_phases[i - 1]["subida"][1]
                 this_onset = trial_phases[i]["preparacao"][1]
                 trial_phases[i]["preparacao"] = (prev_return, this_onset)
+
+        # O primeiro trial não tem um trial anterior pra emendar — a janela
+        # dele geralmente pega sobra de antes da gravação/movimento real
+        # começar. Em vez disso, usa a duração MÉDIA das preparações dos
+        # outros trials, posicionada logo antes do início da descida; tudo
+        # antes disso fica sem fase nenhuma (sem sombra, sem bolinha).
+        if trial_phases and trial_phases[0]:
+            outras_duracoes = [
+                tp["preparacao"][1] - tp["preparacao"][0]
+                for tp in trial_phases[1:] if tp
+            ]
+            if outras_duracoes:
+                dur_media = float(np.mean(outras_duracoes))
+                onset0 = trial_phases[0]["preparacao"][1]
+                trial_phases[0]["preparacao"] = (onset0 - dur_media, onset0)
     else:
         trial_phases = [None] * len(trials)
 
@@ -950,6 +966,51 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             )
             st.plotly_chart(fig_hip_front, use_container_width=True)
             st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
+
+        # --- Ver análise: trials sobrepostos (% do movimento) por métrica ---
+        st.divider()
+        ver_analise_overlay = st.button("🔍 Ver análise", type="primary", use_container_width=True, key="btn_ver_analise_overlay")
+        if ver_analise_overlay:
+            st.session_state.mostrar_analise_overlay = True
+        if st.session_state.get("mostrar_analise_overlay"):
+            valid_trial_phases = [p for p in trial_phases if p]
+            if not valid_trial_phases:
+                st.info("Não há trials segmentados pra sobrepor.")
+            else:
+                st.markdown("#### 📊 Trials sobrepostos (0-100% do movimento: descida → subida)")
+                st.caption(f"{len(valid_trial_phases)} trials sobrepostos por métrica. Linhas finas = cada trial individual · linha grossa = resultante (média).")
+
+                def render_overlay_chart(title, kinem_series, phone_series, color_k, color_p):
+                    fig = go.Figure()
+                    x_pct = np.linspace(0, 100, 101)
+                    kinem_curves, phone_curves = [], []
+                    for phases in valid_trial_phases:
+                        t0, t1 = phases["descida"][0], phases["subida"][1]
+                        yk = normalize_trial_curve(kinem_series, x_axis, t0, t1)
+                        yp = normalize_trial_curve(phone_series, x_axis, t0, t1)
+                        if yk is not None:
+                            kinem_curves.append(yk)
+                            fig.add_trace(go.Scatter(x=x_pct, y=yk, mode="lines", line=dict(color=color_k, width=1), opacity=0.30, showlegend=False))
+                        if yp is not None:
+                            phone_curves.append(yp)
+                            fig.add_trace(go.Scatter(x=x_pct, y=yp, mode="lines", line=dict(color=color_p, width=1), opacity=0.30, showlegend=False))
+                    if kinem_curves:
+                        mean_k = np.nanmean(np.array(kinem_curves), axis=0)
+                        fig.add_trace(go.Scatter(x=x_pct, y=mean_k, mode="lines", line=dict(color=color_k, width=3), name="Kinem — resultante"))
+                    if phone_curves:
+                        mean_p = np.nanmean(np.array(phone_curves), axis=0)
+                        fig.add_trace(go.Scatter(x=x_pct, y=mean_p, mode="lines", line=dict(color=color_p, width=3), name="Celular — resultante"))
+                    fig.update_layout(
+                        title=title, xaxis_title="% do movimento (descida → subida)", yaxis_title="Ângulo (graus)",
+                        height=320, template="plotly_white", hovermode="x unified",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=40, b=40),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                render_overlay_chart("Joelho — Sagital", angle_kinem_sagital, angle_phone_sagital, "blue", "red")
+                render_overlay_chart("Joelho — Frontal", angle_kinem_frontal, angle_phone_frontal, "green", "darkorange")
+                render_overlay_chart("Quadril — Sagital", angle_hip_kinem_sagital, angle_hip_phone_sagital, "teal", "crimson")
+                render_overlay_chart("Quadril — Frontal", angle_hip_kinem_frontal, angle_hip_phone_frontal, "darkcyan", "deeppink")
 
         # --- Fases do movimento por trial ---
         if trials:

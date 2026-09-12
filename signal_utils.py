@@ -950,6 +950,31 @@ def compute_rom(series: np.ndarray | None, x_axis: np.ndarray,
     return float(np.nanmax(seg) - np.nanmin(seg))
 
 
+def normalize_trial_curve(series: np.ndarray | None, x_axis: np.ndarray,
+                          t_start: float, t_end: float, n_points: int = 101) -> np.ndarray | None:
+    """
+    Recorta 'series' na janela [t_start, t_end] e reamostra pra uma escala
+    de tempo normalizada de 0% a 100% (n_points pontos), independente da
+    duração real do trecho — permite sobrepor vários trials de durações
+    diferentes no mesmo eixo (0-100% do movimento).
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    mask = (x_axis[:n] >= t_start) & (x_axis[:n] <= t_end)
+    x_w = x_axis[:n][mask]
+    y_w = series[:n][mask]
+    valid = ~np.isnan(y_w)
+    if np.sum(valid) < 3:
+        return None
+    x_w, y_w = x_w[valid], y_w[valid]
+    if x_w[-1] <= x_w[0]:
+        return None
+    x_pct = (x_w - x_w[0]) / (x_w[-1] - x_w[0]) * 100.0
+    x_target = np.linspace(0, 100, n_points)
+    return np.interp(x_target, x_pct, y_w)
+
+
 def compute_peak(series: np.ndarray | None, x_axis: np.ndarray,
                  window_start: float, window_end: float, signed: bool = False) -> float | None:
     """

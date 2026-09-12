@@ -967,6 +967,71 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             st.plotly_chart(fig_hip_front, use_container_width=True)
             st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
 
+        # --- Avaliação clínica: nota + análise completa por trial ---
+        st.divider()
+        st.markdown("#### 🩺 Avaliação clínica")
+        nota_clinica = st.radio(
+            "Nota clínica do teste (avaliação visual)", ["1", "2", "3"],
+            index=None, horizontal=True, key="nota_clinica",
+            help="Classificação visual do teste, pra comparar depois com as métricas quantitativas do celular/Kinem (grau 1 = melhor, 3 = pior, ou a escala que você usa clinicamente).",
+        )
+        ver_analise = st.button("🔍 Ver análise", type="primary", use_container_width=True, key="btn_ver_analise")
+
+        if ver_analise:
+            st.session_state.mostrar_analise_clinica = True
+        if st.session_state.get("mostrar_analise_clinica"):
+            if not trials:
+                st.info("Não consegui detectar repetições — não dá pra montar a tabela de análise.")
+            else:
+                analise_rows = []
+                for i, (t_start, t_end) in enumerate(trials, start=1):
+                    phases = trial_phases[i - 1] if i - 1 < len(trial_phases) else None
+                    d_start, d_end = phases["descida"] if phases else (t_start, t_start)
+                    s_start, s_end = phases["subida"] if phases else (t_end, t_end)
+                    analise_rows.append({
+                        "Trial": str(i),
+                        "Nota clínica": nota_clinica if nota_clinica else "—",
+                        "ADM Joelho Sagital — Kinem": compute_rom(angle_kinem_sagital, x_axis, t_start, t_end),
+                        "ADM Joelho Sagital — Celular": compute_rom(angle_phone_sagital, x_axis, t_start, t_end),
+                        "Pico Flexão Joelho — Kinem": compute_peak(angle_kinem_sagital, x_axis, t_start, t_end),
+                        "Pico Flexão Joelho — Celular": compute_peak(angle_phone_sagital, x_axis, t_start, t_end),
+                        "ADM Joelho Frontal — Kinem": compute_rom(angle_kinem_frontal, x_axis, t_start, t_end),
+                        "ADM Joelho Frontal — Celular": compute_rom(angle_phone_frontal, x_axis, t_start, t_end),
+                        "Pico Valgo Joelho — Kinem": compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True),
+                        "Pico Valgo Joelho — Celular": compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True),
+                        "Pico Valgo (Descida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, d_start, d_end, signed=True),
+                        "Pico Valgo (Descida) — Celular": compute_peak(angle_phone_frontal, x_axis, d_start, d_end, signed=True),
+                        "Pico Valgo (Subida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, s_start, s_end, signed=True),
+                        "Pico Valgo (Subida) — Celular": compute_peak(angle_phone_frontal, x_axis, s_start, s_end, signed=True),
+                        "ADM Quadril Sagital — Kinem": compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end),
+                        "ADM Quadril Sagital — Celular": compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end),
+                        "ADM Quadril Frontal — Kinem": compute_rom(angle_hip_kinem_frontal, x_axis, t_start, t_end),
+                        "ADM Quadril Frontal — Celular": compute_rom(angle_hip_phone_frontal, x_axis, t_start, t_end),
+                    })
+                analise_df = pd.DataFrame(analise_rows)
+
+                resultante_analise = {"Trial": "Resultante (média)", "Nota clínica": nota_clinica if nota_clinica else "—"}
+                for col in analise_df.columns:
+                    if col in ("Trial", "Nota clínica"):
+                        continue
+                    resultante_analise[col] = analise_df[col].mean()
+                analise_df_full = pd.concat([analise_df, pd.DataFrame([resultante_analise])], ignore_index=True)
+
+                with st.container(border=True):
+                    fmt_cols = {c: "{:.1f}°" for c in analise_df_full.columns if c not in ("Trial", "Nota clínica")}
+                    st.dataframe(analise_df_full.style.format(fmt_cols), hide_index=True, use_container_width=True)
+
+                st.caption(
+                    "Pico = maior valor atingido no trial (não a variação total). Pico de valgo preserva o sinal "
+                    "(positivo/negativo indicam o lado — ver nota do plano frontal)."
+                )
+
+                csv_bytes = analise_df_full.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "📥 Exportar análise (CSV)", csv_bytes,
+                    file_name="analise_clinica_step_down.csv", mime="text/csv",
+                    use_container_width=True,
+                )
         # --- Ver análise: trials sobrepostos (% do movimento) por métrica ---
         st.divider()
         ver_analise_overlay = st.button("🔍 Ver análise", type="primary", use_container_width=True, key="btn_ver_analise_overlay")
@@ -1072,71 +1137,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 )
             st.caption(f"{len(trials)} repetições detectadas automaticamente pelos picos do Kinem sagital. ADM = máximo − mínimo do ângulo dentro de cada trial.")
 
-        # --- Avaliação clínica: nota + análise completa por trial ---
-        st.divider()
-        st.markdown("#### 🩺 Avaliação clínica")
-        nota_clinica = st.radio(
-            "Nota clínica do teste (avaliação visual)", ["1", "2", "3"],
-            index=None, horizontal=True, key="nota_clinica",
-            help="Classificação visual do teste, pra comparar depois com as métricas quantitativas do celular/Kinem (grau 1 = melhor, 3 = pior, ou a escala que você usa clinicamente).",
-        )
-        ver_analise = st.button("🔍 Ver análise", type="primary", use_container_width=True, key="btn_ver_analise")
-
-        if ver_analise:
-            st.session_state.mostrar_analise_clinica = True
-        if st.session_state.get("mostrar_analise_clinica"):
-            if not trials:
-                st.info("Não consegui detectar repetições — não dá pra montar a tabela de análise.")
-            else:
-                analise_rows = []
-                for i, (t_start, t_end) in enumerate(trials, start=1):
-                    phases = trial_phases[i - 1] if i - 1 < len(trial_phases) else None
-                    d_start, d_end = phases["descida"] if phases else (t_start, t_start)
-                    s_start, s_end = phases["subida"] if phases else (t_end, t_end)
-                    analise_rows.append({
-                        "Trial": str(i),
-                        "Nota clínica": nota_clinica if nota_clinica else "—",
-                        "ADM Joelho Sagital — Kinem": compute_rom(angle_kinem_sagital, x_axis, t_start, t_end),
-                        "ADM Joelho Sagital — Celular": compute_rom(angle_phone_sagital, x_axis, t_start, t_end),
-                        "Pico Flexão Joelho — Kinem": compute_peak(angle_kinem_sagital, x_axis, t_start, t_end),
-                        "Pico Flexão Joelho — Celular": compute_peak(angle_phone_sagital, x_axis, t_start, t_end),
-                        "ADM Joelho Frontal — Kinem": compute_rom(angle_kinem_frontal, x_axis, t_start, t_end),
-                        "ADM Joelho Frontal — Celular": compute_rom(angle_phone_frontal, x_axis, t_start, t_end),
-                        "Pico Valgo Joelho — Kinem": compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True),
-                        "Pico Valgo Joelho — Celular": compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True),
-                        "Pico Valgo (Descida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, d_start, d_end, signed=True),
-                        "Pico Valgo (Descida) — Celular": compute_peak(angle_phone_frontal, x_axis, d_start, d_end, signed=True),
-                        "Pico Valgo (Subida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, s_start, s_end, signed=True),
-                        "Pico Valgo (Subida) — Celular": compute_peak(angle_phone_frontal, x_axis, s_start, s_end, signed=True),
-                        "ADM Quadril Sagital — Kinem": compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end),
-                        "ADM Quadril Sagital — Celular": compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end),
-                        "ADM Quadril Frontal — Kinem": compute_rom(angle_hip_kinem_frontal, x_axis, t_start, t_end),
-                        "ADM Quadril Frontal — Celular": compute_rom(angle_hip_phone_frontal, x_axis, t_start, t_end),
-                    })
-                analise_df = pd.DataFrame(analise_rows)
-
-                resultante_analise = {"Trial": "Resultante (média)", "Nota clínica": nota_clinica if nota_clinica else "—"}
-                for col in analise_df.columns:
-                    if col in ("Trial", "Nota clínica"):
-                        continue
-                    resultante_analise[col] = analise_df[col].mean()
-                analise_df_full = pd.concat([analise_df, pd.DataFrame([resultante_analise])], ignore_index=True)
-
-                with st.container(border=True):
-                    fmt_cols = {c: "{:.1f}°" for c in analise_df_full.columns if c not in ("Trial", "Nota clínica")}
-                    st.dataframe(analise_df_full.style.format(fmt_cols), hide_index=True, use_container_width=True)
-
-                st.caption(
-                    "Pico = maior valor atingido no trial (não a variação total). Pico de valgo preserva o sinal "
-                    "(positivo/negativo indicam o lado — ver nota do plano frontal)."
-                )
-
-                csv_bytes = analise_df_full.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    "📥 Exportar análise (CSV)", csv_bytes,
-                    file_name="analise_clinica_step_down.csv", mime="text/csv",
-                    use_container_width=True,
-                )
 
     st.divider()
 

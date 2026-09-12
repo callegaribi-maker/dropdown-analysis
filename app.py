@@ -43,7 +43,9 @@ from signal_utils import (
     knee_rotation_from_phone,
     load_file,
     numeric_cols,
+    position_xyz_cols,
     resample_to_regular,
+    segment_trial_phases,
     try_numeric,
     zero_reference_angle,
 )
@@ -438,7 +440,7 @@ def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, lab
         if abs(raw_sync_x) > 1e-9:
             st.caption(
                 f"↕️ A linha pontilhada roxa marca onde a **sincronização bruta dos arquivos** (pico de aceleração) "
-                f"realmente ficou ({raw_sync_x:+.2f}s) — diferente da linha 'salto' (0 = pico de flexão do joelho). "
+                f"realmente ficou ({raw_sync_x:+.2f}s) — diferente da linha 'pico flexão' (0 = pico de flexão do joelho). "
                 f"Se os picos das duas curvas abaixo caem em cima da linha roxa, a sincronização dos arquivos está correta."
             )
 
@@ -459,7 +461,7 @@ def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, lab
                 x=vx, y=diff, mode="lines", line=dict(color="gray", width=1, dash="dot"), name="Diferença",
             ))
         fig_v.add_vline(x=0, line_dash="dash", line_color="black",
-                         annotation_text="salto", annotation_position="top right")
+                         annotation_text="pico flexão", annotation_position="top right")
         if abs(raw_sync_x) > 1e-9:
             fig_v.add_vline(x=raw_sync_x, line_dash="dot", line_color="purple",
                              annotation_text="sinc. bruta", annotation_position="bottom right")
@@ -746,6 +748,22 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     else:
         st.caption("📴 Mostrando a estimativa bruta do celular, sem correção de atraso nem calibração de amplitude.")
 
+    # ── Detecta trials e segmenta cada um em preparação/descida/subida,
+    # usando o deslocamento vertical do L5 (mesma lógica usada no Y-Balance
+    # pra marcar as fases do movimento) ──
+    trials = detect_trial_windows(angle_kinem_sagital, x_axis)
+    pos_l5_cols = position_xyz_cols(kdf_raw, "l5", "l 5") if not kdf_raw.empty else {}
+    l5_vertical = None
+    if all(k in pos_l5_cols for k in "XYZ"):
+        l5_vertical = try_numeric(kdf_raw[pos_l5_cols["Z"]]).values.astype(float)
+    trial_phases = []
+    if trials and l5_vertical is not None:
+        for t_start, t_end in trials:
+            phases = segment_trial_phases(l5_vertical, x_axis, t_start, t_end)
+            trial_phases.append(phases)
+    else:
+        trial_phases = [None] * len(trials)
+
     if angle_phone_sagital is None and angle_kinem_sagital is None:
         st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")
     else:
@@ -762,15 +780,29 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 line=dict(color=color, width=2, dash=dash), name=name,
             ))
 
+        def add_phase_shading(fig):
+            """Sombreia descida (laranja claro) e subida (azul claro) de cada trial detectado."""
+            for phases in trial_phases:
+                if not phases:
+                    continue
+                d_start, d_end = phases["descida"]
+                s_start, s_end = phases["subida"]
+                if d_end > d_start:
+                    fig.add_vrect(x0=d_start, x1=d_end, fillcolor="orange", opacity=0.10, line_width=0)
+                if s_end > s_start:
+                    fig.add_vrect(x0=s_start, x1=s_end, fillcolor="steelblue", opacity=0.10, line_width=0)
+
         # --- Plano sagital (flexão/extensão) ---
         st.markdown("**Sagital — flexão (↑) / extensão (↓)**")
+        st.caption("Fundo laranja = fase de descida · fundo azul = fase de subida (detectadas pelo deslocamento vertical do L5).")
         fig_sag = go.Figure()
+        add_phase_shading(fig_sag)
         add_angle_trace(fig_sag, angle_kinem_sagital, "blue", "Kinem — sagital")
         add_angle_trace(fig_sag, angle_phone_sagital, "red", "Celular — sagital")
         add_angle_trace(fig_sag, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
-        fig_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
+        fig_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
         fig_sag.update_layout(
-            xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[view_start, view_end]),
+            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
             yaxis_title="Ângulo (graus)", height=380, template="plotly_white", hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
         )
@@ -788,9 +820,9 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             add_angle_trace(fig_front, angle_kinem_frontal, "green", "Kinem — frontal")
             add_angle_trace(fig_front, angle_phone_frontal, "darkorange", "Celular — frontal")
             fig_front.add_hline(y=0, line_dash="dot", line_color="lightgray")
-            fig_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
+            fig_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig_front.update_layout(
-                xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[view_start, view_end]),
+                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
                 yaxis_title="Ângulo (graus)", height=340, template="plotly_white", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
             )
@@ -802,9 +834,9 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             add_angle_trace(fig_trans, angle_kinem_transverse, "purple", "Kinem — transverso")
             add_angle_trace(fig_trans, angle_phone_transverse, "brown", "Celular — transverso (deriva)")
             fig_trans.add_hline(y=0, line_dash="dot", line_color="lightgray")
-            fig_trans.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
+            fig_trans.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig_trans.update_layout(
-                xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[view_start, view_end]),
+                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
                 yaxis_title="Ângulo (graus)", height=340, template="plotly_white", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
             )
@@ -825,9 +857,9 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             fig_hip_sag = go.Figure()
             add_angle_trace(fig_hip_sag, angle_hip_kinem_sagital, "teal", "Kinem — quadril sagital")
             add_angle_trace(fig_hip_sag, angle_hip_phone_sagital, "crimson", "Celular — quadril sagital")
-            fig_hip_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
+            fig_hip_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig_hip_sag.update_layout(
-                xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[view_start, view_end]),
+                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
                 yaxis_title="Ângulo (graus)", height=340, template="plotly_white", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
             )
@@ -838,18 +870,43 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             add_angle_trace(fig_hip_front, angle_hip_kinem_frontal, "darkcyan", "Kinem — quadril frontal")
             add_angle_trace(fig_hip_front, angle_hip_phone_frontal, "deeppink", "Celular — quadril frontal")
             fig_hip_front.add_hline(y=0, line_dash="dot", line_color="lightgray")
-            fig_hip_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
+            fig_hip_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig_hip_front.update_layout(
-                xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[view_start, view_end]),
+                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
                 yaxis_title="Ângulo (graus)", height=340, template="plotly_white", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
             )
             st.plotly_chart(fig_hip_front, use_container_width=True)
             st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
 
+        # --- Fases do movimento por trial ---
+        if trials:
+            st.markdown("#### ⏱️ Fases do movimento por trial")
+            st.caption("Segmentação de cada repetição em preparação (parado), descida e subida, usando o deslocamento vertical do L5.")
+            fase_rows = []
+            for i, ((t_start, t_end), phases) in enumerate(zip(trials, trial_phases), start=1):
+                if not phases:
+                    fase_rows.append({"Trial": str(i), "Preparação (s)": None, "Descida (s)": None, "Subida (s)": None})
+                    continue
+                prep = phases["preparacao"]
+                desc = phases["descida"]
+                sub = phases["subida"]
+                fase_rows.append({
+                    "Trial": str(i),
+                    "Preparação (s)": prep[1] - prep[0],
+                    "Descida (s)": desc[1] - desc[0],
+                    "Subida (s)": sub[1] - sub[0],
+                })
+            fase_df = pd.DataFrame(fase_rows)
+            with st.container(border=True):
+                st.dataframe(
+                    fase_df.style.format({c: "{:.2f}s" for c in fase_df.columns if c != "Trial"}),
+                    hide_index=True, use_container_width=True,
+                )
+            st.caption("Trials nas bordas (primeiro/último) podem ter fases distorcidas — a janela deles inclui trecho antes do início ou depois do fim da gravação real.")
+
         # --- ADM (Amplitude de Movimento) por trial ---
         st.markdown("#### 📏 ADM por trial — Joelho e Quadril (Sagital e Frontal)")
-        trials = detect_trial_windows(angle_kinem_sagital, x_axis)
         if not trials:
             st.info("Não consegui detectar repetições individuais automaticamente (poucos picos claros no sinal do Kinem).")
         else:
@@ -900,6 +957,9 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             else:
                 analise_rows = []
                 for i, (t_start, t_end) in enumerate(trials, start=1):
+                    phases = trial_phases[i - 1] if i - 1 < len(trial_phases) else None
+                    d_start, d_end = phases["descida"] if phases else (t_start, t_start)
+                    s_start, s_end = phases["subida"] if phases else (t_end, t_end)
                     analise_rows.append({
                         "Trial": str(i),
                         "Nota clínica": nota_clinica if nota_clinica else "—",
@@ -911,6 +971,10 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                         "ADM Joelho Frontal — Celular": compute_rom(angle_phone_frontal, x_axis, t_start, t_end),
                         "Pico Valgo Joelho — Kinem": compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True),
                         "Pico Valgo Joelho — Celular": compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True),
+                        "Pico Valgo (Descida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, d_start, d_end, signed=True),
+                        "Pico Valgo (Descida) — Celular": compute_peak(angle_phone_frontal, x_axis, d_start, d_end, signed=True),
+                        "Pico Valgo (Subida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, s_start, s_end, signed=True),
+                        "Pico Valgo (Subida) — Celular": compute_peak(angle_phone_frontal, x_axis, s_start, s_end, signed=True),
                         "ADM Quadril Sagital — Kinem": compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end),
                         "ADM Quadril Sagital — Celular": compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end),
                         "ADM Quadril Frontal — Kinem": compute_rom(angle_hip_kinem_frontal, x_axis, t_start, t_end),
@@ -943,87 +1007,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
     st.divider()
 
-
-    # ══════════════════════════════════════════
-    # Check de qualidade
-    # ══════════════════════════════════════════
-    with st.expander("⚙️ Colunas para check de qualidade (1 por fonte)", expanded=False):
-        st.caption("Escolha exatamente qual coluna usar de cada fonte. Os sinais serão plotados sobrepostos (z-score).")
-
-        qa_kinem_keywords = {
-            "l5": ["l 5 d(z)", "l5 d(z)", "l 5 v(z)", "l5 v(z)", "l 5 a(z)", "l5 a(z)", "l 5 z", "l5"],
-            "coxa": ["trocanter maior dir. a(z)", "trocanter a(z)", "trocanter maior dir.", "trocanter"],
-            "tornozelo": ["osso externo do torn. dir. a(z)", "osso externo do torn. a(z)", "osso externo do torn.", "torn"],
-        }
-
-        qa_kinem_cols, qa_phone_cols = {}, {}
-        qa_cols_ui = st.columns(3)
-        for ui_col, gkey in zip(qa_cols_ui, GROUPS):
-            with ui_col:
-                gdef = GROUPS[gkey]
-                qa_kinem_cols[gkey] = st.selectbox(
-                    f"{gdef['emoji']} Kinem — {gdef['label']}", kinem_num, key=f"qa_kinem_{gkey}",
-                    index=col_default(kinem_num, qa_kinem_keywords[gkey]),
-                )
-                pf = phone_files[gkey]
-                acc_num = numeric_cols(aligned_data.get(pf["acc"], pd.DataFrame())) if pf["acc"] != NONE else []
-                gyr_num = numeric_cols(aligned_data.get(pf["gyr"], pd.DataFrame())) if pf["gyr"] != NONE else []
-                qa_phone_cols[gkey] = {
-                    "acc": st.selectbox(
-                        f"{gdef['emoji']} ACC — {gdef['label']}", acc_num if acc_num else ["—"],
-                        key=f"qa_acc_{gkey}", index=col_default(acc_num, ["z", "y", "x"]) if acc_num else 0,
-                    ) if acc_num else None,
-                    "gyr": st.selectbox(
-                        f"{gdef['emoji']} GYR — {gdef['label']}", gyr_num if gyr_num else ["—"],
-                        key=f"qa_gyr_{gkey}", index=col_default(gyr_num, ["z", "y", "x"]) if gyr_num else 0,
-                    ) if gyr_num else None,
-                }
-
-    show_qa = st.checkbox("🔍 Checar qualidade dos dados", value=False)
-    if show_qa:
-        qa_xmin, qa_xmax = view_start, view_end
-        mask_qa = (x_axis >= qa_xmin) & (x_axis <= qa_xmax)
-        x_view = x_axis[mask_qa]
-
-        def get_qa_entry(fname, col_name):
-            df_q = aligned_data.get(fname) if (fname and fname != NONE) else None
-            if df_q is None or col_name is None or col_name not in df_q.columns:
-                return None
-            y = try_numeric(df_q[col_name]).values[mask_qa].astype(float)
-            if np.all(np.isnan(y)):
-                return None
-            return (float(np.nanstd(y)), f"{fname[:20]} · {col_name}", y)
-
-        qa_cols_out = st.columns(3)
-        for ui_col, gkey in zip(qa_cols_out, GROUPS):
-            gdef = GROUPS[gkey]
-            pf = phone_files[gkey]
-            group_entries = [e for e in [
-                get_qa_entry(kinem_ref, qa_kinem_cols[gkey]),
-                get_qa_entry(pf["acc"] if pf["acc"] != NONE else "", qa_phone_cols[gkey]["acc"]),
-                get_qa_entry(pf["gyr"] if pf["gyr"] != NONE else "", qa_phone_cols[gkey]["gyr"]),
-            ] if e]
-            with ui_col:
-                st.markdown(f"#### {gdef['emoji']} {gdef['label']} — Kinem vs Celular")
-                if not group_entries:
-                    st.info("Nenhum sinal classificado neste grupo.")
-                    continue
-                fig_qa = go.Figure()
-                for std_val, lbl, y_raw in group_entries:
-                    mn, sd = np.nanmean(y_raw), np.nanstd(y_raw)
-                    y_norm = (y_raw - mn) / sd if sd > 0 else y_raw - mn
-                    fig_qa.add_trace(go.Scatter(
-                        x=x_view, y=y_norm, mode="lines", name=f"{lbl}  (σ_orig={std_val:.3f})",
-                    ))
-                fig_qa.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="salto")
-                fig_qa.update_layout(
-                    xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[qa_xmin, qa_xmax]),
-                    yaxis_title="z-score", height=360, template="plotly_white", hovermode="x unified",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
-                )
-                st.plotly_chart(fig_qa, use_container_width=True)
-
-    st.divider()
 
     # ══════════════════════════════════════════
     # Exportar Excel — apenas janela selecionada

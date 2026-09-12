@@ -827,6 +827,56 @@ def fit_scale_gain(reference: np.ndarray | None, target: np.ndarray | None,
     return float(np.clip(gain, clip[0], clip[1]))
 
 
+def segment_trial_phases(vertical_pos: np.ndarray | None, x_axis: np.ndarray,
+                         t_start: float, t_end: float, onset_frac: float = 0.15) -> dict | None:
+    """
+    Segmenta um trial em 3 fases usando o deslocamento vertical de um ponto
+    (tipicamente L5): 'preparacao' (parado, antes do movimento começar),
+    'descida' (do início do movimento até o ponto mais baixo) e 'subida'
+    (do ponto mais baixo até o fim do trial).
+
+    onset_frac: fração do deslocamento total (baseline até o ponto mais
+    baixo) usada como limiar pra marcar o início do movimento — evita que
+    pequenas oscilações de ruído no começo do trial sejam contadas como
+    início da descida.
+
+    Retorna {'preparacao': (t0,t1), 'descida': (t1,t2), 'subida': (t2,t3)}
+    ou None se não der pra segmentar (dados insuficientes ou sem descida
+    clara nesse trial).
+    """
+    if vertical_pos is None:
+        return None
+    n = min(len(vertical_pos), len(x_axis))
+    mask = (x_axis[:n] >= t_start) & (x_axis[:n] <= t_end)
+    x_w = x_axis[:n][mask]
+    y_w = vertical_pos[:n][mask]
+    valid = ~np.isnan(y_w)
+    if np.sum(valid) < 5:
+        return None
+    x_w, y_w = x_w[valid], y_w[valid]
+
+    ref_n = max(1, int(0.1 * len(y_w)))
+    baseline = float(np.nanmean(y_w[:ref_n]))
+
+    bottom_idx = int(np.nanargmin(y_w))
+    t_bottom = float(x_w[bottom_idx])
+
+    displacement = baseline - y_w  # positivo = desceu em relação à referência inicial
+    max_disp = displacement[bottom_idx]
+    if max_disp <= 0:
+        return None
+
+    onset_thresh = onset_frac * max_disp
+    onset_candidates = np.where(displacement[: bottom_idx + 1] >= onset_thresh)[0]
+    t_onset = float(x_w[onset_candidates[0]]) if len(onset_candidates) else float(x_w[0])
+
+    return {
+        "preparacao": (float(x_w[0]), t_onset),
+        "descida": (t_onset, t_bottom),
+        "subida": (t_bottom, float(x_w[-1])),
+    }
+
+
 def detect_trial_windows(reference: np.ndarray | None, x_axis: np.ndarray,
                          min_distance_seconds: float = 2.0,
                          prominence_frac: float = 0.3) -> list:

@@ -731,11 +731,21 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
              "Baixo = mais sensível (marca o início mais cedo, mas pode pegar ruído). Alto = mais "
              "conservador (só marca quando o movimento já está bem claro). Ajuste e confira no gráfico abaixo.",
     )
+    ignorar_primeiro_ciclo = st.checkbox(
+        "Ignorar o primeiro ciclo detectado (ex.: movimento preparatório antes do teste, não uma repetição de verdade)",
+        value=False, key="ignorar_primeiro_ciclo",
+        help="Descarta o primeiro trial detectado por completo — sem sombra, sem bolinha, sem entrar nas tabelas/análise. Use se o primeiro pico não for uma repetição real do teste.",
+    )
     trial_phases = []
     if trials and l5_vertical is not None:
         for t_start, t_end in trials:
             phases = segment_trial_phases(l5_vertical, x_axis, t_start, t_end, onset_frac=onset_frac)
             trial_phases.append(phases)
+
+        if ignorar_primeiro_ciclo and len(trials) > 1:
+            trials = trials[1:]
+            trial_phases = trial_phases[1:]
+
         # Emenda: a preparação de cada trial passa a começar exatamente onde a
         # subida do trial anterior terminou (em vez do limite arbitrário da
         # janela do trial) — elimina a lacuna sem fase entre um ciclo e outro.
@@ -745,11 +755,12 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 this_onset = trial_phases[i]["preparacao"][1]
                 trial_phases[i]["preparacao"] = (prev_return, this_onset)
 
-        # O primeiro trial não tem um trial anterior pra emendar — a janela
-        # dele geralmente pega sobra de antes da gravação/movimento real
-        # começar. Em vez disso, usa a duração MÉDIA das preparações dos
-        # outros trials, posicionada logo antes do início da descida; tudo
-        # antes disso fica sem fase nenhuma (sem sombra, sem bolinha).
+        # O primeiro trial (o que sobrar depois do descarte acima, se marcado)
+        # não tem um trial anterior pra emendar — a janela dele geralmente
+        # pega sobra de antes da gravação/movimento real começar. Em vez
+        # disso, usa a duração MÉDIA das preparações dos outros trials,
+        # posicionada logo antes do início da descida; tudo antes disso fica
+        # sem fase nenhuma (sem sombra, sem bolinha, sem entrar na análise).
         if trial_phases and trial_phases[0]:
             outras_duracoes = [
                 tp["preparacao"][1] - tp["preparacao"][0]

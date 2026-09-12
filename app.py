@@ -40,7 +40,6 @@ from signal_utils import (
     knee_angle_from_kinem_plane,
     knee_angle_from_phone,
     knee_angle_from_phone_plane,
-    knee_rotation_from_phone,
     load_file,
     numeric_cols,
     position_xyz_cols,
@@ -542,9 +541,9 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     st.caption(
         "Sagital (flexão/extensão): sempre positivo, 0° = extensão completa, aumenta com a flexão — "
         "celular e Kinem usam a mesma definição, diretamente comparáveis. "
-        "Frontal (valgo/varo) e Transverso (rotação) têm sinal (podem ficar negativos): o sinal indica "
+        "Frontal (valgo/varo) tem sinal (pode ficar negativo): o sinal indica "
         "o lado do desvio, mas qual sinal corresponde a qual lado clínico depende de como os sensores/"
-        "marcadores foram orientados no seu setup — veja a nota abaixo de cada um."
+        "marcadores foram orientados no seu setup — veja a nota abaixo."
     )
 
     # O ângulo é calculado a partir dos dados sincronizados BRUTOS (reamostrados,
@@ -566,7 +565,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         and all(f in aligned_raw for f in [pf_l5["acc"], pf_l5["gyr"], pf_coxa["acc"], pf_coxa["gyr"]])
     )
 
-    angle_phone_sagital = angle_phone_frontal = angle_phone_transverse = None
+    angle_phone_sagital = angle_phone_frontal = None
     if phone_ready:
         angle_phone_sagital = knee_angle_from_phone_plane(
             aligned_raw[pf_coxa["acc"]], aligned_raw[pf_coxa["gyr"]],
@@ -609,21 +608,17 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         kdf_raw, *kinem_angle_kw, plane="sagittal",
     ) if not kdf_raw.empty else None
 
-    st.caption("Mostrando os 3 planos anatômicos: sagital, frontal (valgo/varo) e transverso (rotação) — celular e Kinem.")
-    angle_kinem_3d = angle_kinem_frontal = angle_kinem_transverse = None
-    angle_phone_frontal = angle_phone_transverse = None
+    st.caption("Mostrando os planos anatômicos: sagital e frontal (valgo/varo) — celular e Kinem.")
+    angle_kinem_3d = angle_kinem_frontal = None
+    angle_phone_frontal = None
     if not kdf_raw.empty:
         angle_kinem_3d = knee_angle_from_kinem(kdf_raw, *kinem_angle_kw)
         angle_kinem_frontal = knee_angle_from_kinem_plane(kdf_raw, *kinem_angle_kw, plane="frontal", signed=True)
-        angle_kinem_transverse = knee_angle_from_kinem_plane(kdf_raw, *kinem_angle_kw, plane="transverse", signed=True)
     if phone_ready:
         angle_phone_frontal = knee_angle_from_phone_plane(
             aligned_raw[pf_coxa["acc"]], aligned_raw[pf_coxa["gyr"]],
             aligned_raw[pf_torn["acc"]], aligned_raw[pf_torn["gyr"]],
             pfs, plane="frontal", alpha=cf_alpha,
-        )
-        angle_phone_transverse = knee_rotation_from_phone(
-            aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs,
         )
 
     zero_baseline = st.checkbox(
@@ -637,9 +632,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         angle_phone_sagital = zero_reference_angle(angle_phone_sagital, x_axis, baseline_start, baseline_end)
         angle_kinem_3d = zero_reference_angle(angle_kinem_3d, x_axis, baseline_start, baseline_end)
         angle_kinem_frontal = zero_reference_angle(angle_kinem_frontal, x_axis, baseline_start, baseline_end)
-        angle_kinem_transverse = zero_reference_angle(angle_kinem_transverse, x_axis, baseline_start, baseline_end)
         angle_phone_frontal = zero_reference_angle(angle_phone_frontal, x_axis, baseline_start, baseline_end)
-        angle_phone_transverse = zero_reference_angle(angle_phone_transverse, x_axis, baseline_start, baseline_end)
         angle_hip_kinem_sagital = zero_reference_angle(angle_hip_kinem_sagital, x_axis, baseline_start, baseline_end)
         angle_hip_phone_sagital = zero_reference_angle(angle_hip_phone_sagital, x_axis, baseline_start, baseline_end)
         angle_hip_kinem_frontal = zero_reference_angle(angle_hip_kinem_frontal, x_axis, baseline_start, baseline_end)
@@ -659,19 +652,16 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         # busca se o atraso for grande.
         lag_win_sag = auto_calibration_window(angle_kinem_sagital, x_axis, x_min_data, x_max_data, half_width=1.6)
         lag_win_front = auto_calibration_window(angle_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
-        lag_win_trans = auto_calibration_window(angle_kinem_transverse, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
         lag_win_hip_sag = auto_calibration_window(angle_hip_kinem_sagital, x_axis, x_min_data, x_max_data, half_width=1.6)
         lag_win_hip_front = auto_calibration_window(angle_hip_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
 
         lag_sagital = estimate_time_lag_from_peaks(angle_kinem_sagital, angle_phone_sagital, x_axis, *lag_win_sag)
         lag_frontal = estimate_time_lag_from_peaks(angle_kinem_frontal, angle_phone_frontal, x_axis, *lag_win_front, signed=True)
-        lag_transverse = estimate_time_lag_from_peaks(angle_kinem_transverse, angle_phone_transverse, x_axis, *lag_win_trans, signed=True)
         lag_hip_sagital = estimate_time_lag_from_peaks(angle_hip_kinem_sagital, angle_hip_phone_sagital, x_axis, *lag_win_hip_sag)
         lag_hip_frontal = estimate_time_lag_from_peaks(angle_hip_kinem_frontal, angle_hip_phone_frontal, x_axis, *lag_win_hip_front, signed=True)
 
         angle_phone_sagital = apply_time_shift(angle_phone_sagital, pfs, lag_sagital)
         angle_phone_frontal = apply_time_shift(angle_phone_frontal, pfs, lag_frontal)
-        angle_phone_transverse = apply_time_shift(angle_phone_transverse, pfs, lag_transverse)
         angle_hip_phone_sagital = apply_time_shift(angle_hip_phone_sagital, pfs, lag_hip_sagital)
         angle_hip_phone_frontal = apply_time_shift(angle_hip_phone_frontal, pfs, lag_hip_frontal)
 
@@ -680,8 +670,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             lag_msgs.append(f"joelho sagital {lag_sagital:+.2f}s")
         if lag_frontal is not None:
             lag_msgs.append(f"joelho frontal {lag_frontal:+.2f}s")
-        if lag_transverse is not None:
-            lag_msgs.append(f"joelho transverso {lag_transverse:+.2f}s")
         if lag_hip_sagital is not None:
             lag_msgs.append(f"quadril sagital {lag_hip_sagital:+.2f}s")
         if lag_hip_frontal is not None:
@@ -694,12 +682,11 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         # celular por um fator ~constante em relação ao Kinem) ──
         # Cada plano usa sua PRÓPRIA janela automática (±1s ao redor do pico
         # daquele plano específico no Kinem), não uma janela única baseada no
-        # sagital — frontal e transverso podem ter o pico em outro instante
-        # (ex.: atraso mecânico do sensor no tecido mole), então ancorar todos
-        # no pico sagital sub-otimizaria a calibração dos outros planos.
+        # sagital — frontal pode ter o pico em outro instante (ex.: atraso
+        # mecânico do sensor no tecido mole), então ancorar todos no pico
+        # sagital sub-otimizaria a calibração dos outros planos.
         cal_start_sag, cal_end_sag = auto_calibration_window(angle_kinem_sagital, x_axis, x_min_data, x_max_data)
         cal_start_front, cal_end_front = auto_calibration_window(angle_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True)
-        cal_start_trans, cal_end_trans = auto_calibration_window(angle_kinem_transverse, x_axis, x_min_data, x_max_data, signed=True)
         cal_start_hip_sag, cal_end_hip_sag = auto_calibration_window(angle_hip_kinem_sagital, x_axis, x_min_data, x_max_data)
         cal_start_hip_front, cal_end_hip_front = auto_calibration_window(angle_hip_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True)
 
@@ -718,10 +705,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         if gain_frontal is not None and angle_phone_frontal is not None:
             angle_phone_frontal = angle_phone_frontal * gain_frontal
 
-        gain_transverse = fit_scale_gain(angle_kinem_transverse, angle_phone_transverse, x_axis, cal_start_trans, cal_end_trans)
-        if gain_transverse is not None and angle_phone_transverse is not None:
-            angle_phone_transverse = angle_phone_transverse * gain_transverse
-
         gain_hip_sagital = fit_scale_gain(angle_hip_kinem_sagital, angle_hip_phone_sagital, x_axis, cal_start_hip_sag, cal_end_hip_sag)
         if gain_hip_sagital is not None and angle_hip_phone_sagital is not None:
             angle_hip_phone_sagital = angle_hip_phone_sagital * gain_hip_sagital
@@ -735,14 +718,12 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             gain_msgs.append(f"joelho sagital ×{gain_sagital:.2f}")
         if gain_frontal is not None:
             gain_msgs.append(f"joelho frontal ×{gain_frontal:.2f}")
-        if gain_transverse is not None:
-            gain_msgs.append(f"joelho transverso ×{gain_transverse:.2f}")
         if gain_hip_sagital is not None:
             gain_msgs.append(f"quadril sagital ×{gain_hip_sagital:.2f}")
         if gain_hip_frontal is not None:
             gain_msgs.append(f"quadril frontal ×{gain_hip_frontal:.2f}")
         if gain_msgs:
-            st.caption(f"📐 Fator de calibração aplicado ao celular: {', '.join(gain_msgs)} (não mexe no Kinem). O transverso continua sujeito a deriva — calibrar a amplitude não corrige isso.")
+            st.caption(f"📐 Fator de calibração aplicado ao celular: {', '.join(gain_msgs)} (não mexe no Kinem).")
         else:
             st.caption("⚠️ Não deu pra calibrar — confira se há dados de ambas as fontes nessa janela.")
     else:
@@ -813,7 +794,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         if angle_phone_sagital is None:
             st.caption("⚠️ Ângulo do celular não calculado — selecione ACC e GYR de Coxa e Tornozelo na barra lateral.")
 
-        # --- Planos frontal e transverso ---
+        # --- Plano frontal ---
         if True:
             st.markdown("**Frontal — valgo (↑ ou ↓, ver nota) / varo (sentido oposto)**")
             fig_front = go.Figure()
@@ -828,20 +809,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             )
             st.plotly_chart(fig_front, use_container_width=True)
             st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
-
-            st.markdown("**Transverso — rotação interna (↑ ou ↓, ver nota) / externa (sentido oposto)**")
-            fig_trans = go.Figure()
-            add_angle_trace(fig_trans, angle_kinem_transverse, "purple", "Kinem — transverso")
-            add_angle_trace(fig_trans, angle_phone_transverse, "brown", "Celular — transverso (deriva)")
-            fig_trans.add_hline(y=0, line_dash="dot", line_color="lightgray")
-            fig_trans.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
-            fig_trans.update_layout(
-                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-                yaxis_title="Ângulo (graus)", height=340, template="plotly_white", hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
-            )
-            st.plotly_chart(fig_trans, use_container_width=True)
-            st.caption("ℹ️ " + knee_angle_direction_note("transverse"))
 
         # --- Ângulo do quadril (tronco/L5 vs coxa) ---
         st.divider()
@@ -1048,9 +1015,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             add_angle_col(df_angle, angle_phone_sagital, "Angulo_Celular_Joelho_Sagital_graus")
             add_angle_col(df_angle, angle_kinem_3d, "Angulo_Kinem_Joelho_3D_total_graus")
             add_angle_col(df_angle, angle_kinem_frontal, "Angulo_Kinem_Joelho_Frontal_graus")
-            add_angle_col(df_angle, angle_kinem_transverse, "Angulo_Kinem_Joelho_Transverso_graus")
             add_angle_col(df_angle, angle_phone_frontal, "Angulo_Celular_Joelho_Frontal_graus")
-            add_angle_col(df_angle, angle_phone_transverse, "Angulo_Celular_Joelho_Transverso_graus")
             add_angle_col(df_angle, angle_hip_kinem_sagital, "Angulo_Kinem_Quadril_Sagital_graus")
             add_angle_col(df_angle, angle_hip_phone_sagital, "Angulo_Celular_Quadril_Sagital_graus")
             add_angle_col(df_angle, angle_hip_kinem_frontal, "Angulo_Kinem_Quadril_Frontal_graus")

@@ -410,7 +410,7 @@ if st.session_state.show_preview:
 # Verificação de alinhamento
 # ══════════════════════════════════════════════
 def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, label_p,
-                            vraw, vx, vfs):
+                            vraw, vx, vfs, raw_sync_x=0.0):
     check = []
     df_k = vraw.get(kinem_ref, pd.DataFrame())
     if kinem_col in df_k.columns:
@@ -435,8 +435,15 @@ def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, lab
             f"{'🔵' if i == 0 else '🔴'} **{series[i][1]}**: {caps[i]}" for i in range(len(series))
         )
         st.caption(cap + f"  ·  reamostrado a {vfs:.0f} Hz  ·  normalizado pelo pico  ·  sem filtro passa-baixa")
+        if abs(raw_sync_x) > 1e-9:
+            st.caption(
+                f"↕️ A linha pontilhada roxa marca onde a **sincronização bruta dos arquivos** (pico de aceleração) "
+                f"realmente ficou ({raw_sync_x:+.2f}s) — diferente da linha 'salto' (0 = pico de flexão do joelho). "
+                f"Se os picos das duas curvas abaixo caem em cima da linha roxa, a sincronização dos arquivos está correta."
+            )
 
-        mask_2 = (vx >= -2) & (vx <= 2)
+        x_view_lo, x_view_hi = min(-2, raw_sync_x - 0.5), max(2, raw_sync_x + 0.5)
+        mask_2 = (vx >= x_view_lo) & (vx <= x_view_hi)
         all_vals = np.concatenate([s[mask_2] for s, _ in series if len(s) == len(vx)])
         all_vals = all_vals[~np.isnan(all_vals)]
         y_lo, y_hi = (float(np.nanmin(all_vals)) - 0.5, float(np.nanmax(all_vals)) + 0.5) if len(all_vals) else (-1.5, 1.5)
@@ -453,9 +460,12 @@ def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, lab
             ))
         fig_v.add_vline(x=0, line_dash="dash", line_color="black",
                          annotation_text="salto", annotation_position="top right")
+        if abs(raw_sync_x) > 1e-9:
+            fig_v.add_vline(x=raw_sync_x, line_dash="dot", line_color="purple",
+                             annotation_text="sinc. bruta", annotation_position="bottom right")
         fig_v.update_layout(
             title=f"{title} — normalizado pelo pico (sem filtro)",
-            xaxis=dict(title="Tempo (s)  —  0 = pico do salto", range=[-2, 2]),
+            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[x_view_lo, x_view_hi]),
             yaxis=dict(title="Amplitude norm.", range=[y_lo, y_hi]),
             hovermode="x unified", template="plotly_white", height=400,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
@@ -483,6 +493,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # ter que adivinhar qual pico de aceleração é "o certo" quando há mais
     # de um candidato (ex.: um movimento preparatório antes do teste).
     kinem_angle_kw = (GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"])
+    angle_peak_time = 0.0
     if not kdf.empty:
         angle_kinem_sagital_prelim = knee_angle_from_kinem_plane(kdf, *kinem_angle_kw, plane="sagittal")
         if angle_kinem_sagital_prelim is not None:
@@ -501,6 +512,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         render_alignment_check(
             gdef["label"], kinem_sync_cols[gkey], pf["acc"], pf["acc_col"],
             f"Kinem {gdef['label']}", f"ACC {gdef['label']}", aligned_data, x_axis, pfs,
+            raw_sync_x=-angle_peak_time,
         )
 
     st.divider()

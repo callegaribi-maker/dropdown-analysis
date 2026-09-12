@@ -459,7 +459,7 @@ def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, lab
             fig_v.add_vline(x=raw_sync_x, line_dash="dot", line_color="purple",
                              annotation_text="sinc. bruta", annotation_position="bottom right")
         fig_v.update_layout(
-            title=f"{title} — normalizado pelo pico (sem filtro)",
+            title=title,
             xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[x_view_lo, x_view_hi]),
             yaxis=dict(title="Amplitude norm.", range=[y_lo, y_hi]),
             hovermode="x unified", template="plotly_white", height=380,
@@ -735,7 +735,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         l5_vertical = try_numeric(kdf_raw[pos_l5_cols["Z"]]).values.astype(float)
 
     onset_frac = st.slider(
-        "Sensibilidade do início do movimento (segmentação)", 0.05, 0.40, value=0.15, step=0.01,
+        "Sensibilidade do início do movimento (segmentação)", 0.005, 0.40, value=0.15, step=0.005,
         key="onset_frac",
         help="Fração do deslocamento total do L5 usada pra marcar onde a descida realmente começa. "
              "Baixo = mais sensível (marca o início mais cedo, mas pode pegar ruído). Alto = mais "
@@ -841,6 +841,29 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 if s_end > s_start:
                     fig.add_vrect(x0=s_start, x1=s_end, fillcolor="steelblue", opacity=0.10, line_width=0)
 
+        def add_phase_markers(fig, series):
+            """Bolinhas nas transições de fase (início da descida, ponto mais baixo, fim da subida), na curva 'series' desse gráfico."""
+            if series is None:
+                return
+            n_s = min(len(series), len(x_axis))
+            mx, my, mc = [], [], []
+            for phases in trial_phases:
+                if not phases:
+                    continue
+                d_start, d_end = phases["descida"]
+                s_start, s_end = phases["subida"]
+                for xt, color in [(d_start, "orange"), (d_end, "black"), (s_end, "steelblue")]:
+                    idx = int(np.argmin(np.abs(x_axis[:n_s] - xt)))
+                    mx.append(xt)
+                    my.append(series[idx])
+                    mc.append(color)
+            if mx:
+                fig.add_trace(go.Scatter(
+                    x=mx, y=my, mode="markers",
+                    marker=dict(color=mc, size=8, line=dict(color="black", width=1)),
+                    name="Transições de fase", showlegend=False,
+                ))
+
         def add_l5_overlay(fig):
             """Sobrepõe o deslocamento vertical do L5 num eixo Y secundário (direita, em cm)."""
             if l5_vertical is None:
@@ -864,6 +887,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         add_angle_trace(fig_sag, angle_phone_sagital, "red", "Celular — sagital")
         add_angle_trace(fig_sag, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
         add_l5_overlay(fig_sag)
+        add_phase_markers(fig_sag, angle_kinem_sagital)
         fig_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
         fig_sag.update_layout(
             xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
@@ -885,6 +909,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             add_angle_trace(fig_front, angle_kinem_frontal, "green", "Kinem — frontal")
             add_angle_trace(fig_front, angle_phone_frontal, "darkorange", "Celular — frontal")
             add_l5_overlay(fig_front)
+            add_phase_markers(fig_front, angle_kinem_frontal)
             fig_front.add_hline(y=0, line_dash="dot", line_color="lightgray")
             fig_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig_front.update_layout(
@@ -911,6 +936,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             add_angle_trace(fig_hip_sag, angle_hip_kinem_sagital, "teal", "Kinem — quadril sagital")
             add_angle_trace(fig_hip_sag, angle_hip_phone_sagital, "crimson", "Celular — quadril sagital")
             add_l5_overlay(fig_hip_sag)
+            add_phase_markers(fig_hip_sag, angle_hip_kinem_sagital)
             fig_hip_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig_hip_sag.update_layout(
                 xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
@@ -925,6 +951,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             add_angle_trace(fig_hip_front, angle_hip_kinem_frontal, "darkcyan", "Kinem — quadril frontal")
             add_angle_trace(fig_hip_front, angle_hip_phone_frontal, "deeppink", "Celular — quadril frontal")
             add_l5_overlay(fig_hip_front)
+            add_phase_markers(fig_hip_front, angle_hip_kinem_frontal)
             fig_hip_front.add_hline(y=0, line_dash="dot", line_color="lightgray")
             fig_hip_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig_hip_front.update_layout(

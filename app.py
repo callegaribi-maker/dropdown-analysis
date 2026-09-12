@@ -745,6 +745,44 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     else:
         trial_phases = [None] * len(trials)
 
+    # --- Validação da segmentação: deslocamento vertical do L5 ---
+    st.subheader("📐 Deslocamento vertical do L5 (validação da segmentação)")
+    if l5_vertical is None:
+        st.info("Não encontrei as colunas de posição X/Y/Z do L5 no Kinem — não dá pra segmentar por deslocamento vertical.")
+    else:
+        n_l5 = min(len(l5_vertical), len(x_axis))
+        mask_l5 = (x_axis[:n_l5] >= view_start) & (x_axis[:n_l5] <= view_end)
+        fig_l5v = go.Figure()
+        fig_l5v.add_trace(go.Scatter(
+            x=x_axis[:n_l5][mask_l5], y=l5_vertical[:n_l5][mask_l5], mode="lines",
+            line=dict(color="black", width=1.5), name="L5 — posição vertical (Kinem)",
+        ))
+        for phases in trial_phases:
+            if not phases:
+                continue
+            d_start, d_end = phases["descida"]
+            s_start, s_end = phases["subida"]
+            p_start, p_end = phases["preparacao"]
+            if p_end > p_start:
+                fig_l5v.add_vrect(x0=p_start, x1=p_end, fillcolor="lightgray", opacity=0.30, line_width=0)
+            if d_end > d_start:
+                fig_l5v.add_vrect(x0=d_start, x1=d_end, fillcolor="orange", opacity=0.15, line_width=0)
+            if s_end > s_start:
+                fig_l5v.add_vrect(x0=s_start, x1=s_end, fillcolor="steelblue", opacity=0.15, line_width=0)
+            fig_l5v.add_vline(x=d_end, line_dash="dot", line_color="black", line_width=1)
+        fig_l5v.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
+        fig_l5v.update_layout(
+            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+            yaxis_title="Posição vertical L5", height=340, template="plotly_white", hovermode="x unified",
+            margin=dict(t=30, b=40),
+        )
+        st.plotly_chart(fig_l5v, use_container_width=True)
+        st.caption(
+            "Cinza = preparação · laranja = descida · azul = subida · linha pontilhada preta = ponto mais baixo do L5 "
+            "(fim da descida). Confira se as cores batem com o movimento real antes de confiar na sombra dos gráficos abaixo."
+        )
+        st.divider()
+
     if angle_phone_sagital is None and angle_kinem_sagital is None:
         st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")
     else:

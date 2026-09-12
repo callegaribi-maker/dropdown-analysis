@@ -752,6 +752,14 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         for t_start, t_end in trials:
             phases = segment_trial_phases(l5_vertical, x_axis, t_start, t_end, onset_frac=onset_frac)
             trial_phases.append(phases)
+        # Emenda: a preparação de cada trial passa a começar exatamente onde a
+        # subida do trial anterior terminou (em vez do limite arbitrário da
+        # janela do trial) — elimina a lacuna sem fase entre um ciclo e outro.
+        for i in range(1, len(trial_phases)):
+            if trial_phases[i] and trial_phases[i - 1]:
+                prev_return = trial_phases[i - 1]["subida"][1]
+                this_onset = trial_phases[i]["preparacao"][1]
+                trial_phases[i]["preparacao"] = (prev_return, this_onset)
     else:
         trial_phases = [None] * len(trials)
 

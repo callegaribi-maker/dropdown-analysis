@@ -833,12 +833,14 @@ def segment_trial_phases(vertical_pos: np.ndarray | None, x_axis: np.ndarray,
     Segmenta um trial em 3 fases usando o deslocamento vertical de um ponto
     (tipicamente L5): 'preparacao' (parado, antes do movimento começar),
     'descida' (do início do movimento até o ponto mais baixo) e 'subida'
-    (do ponto mais baixo até o fim do trial).
+    (do ponto mais baixo até a pessoa voltar perto da postura inicial —
+    não até o fim da janela do trial, que costuma incluir um platô de
+    descanso que pertence à preparação do PRÓXIMO trial, não à subida deste).
 
     onset_frac: fração do deslocamento total (baseline até o ponto mais
-    baixo) usada como limiar pra marcar o início do movimento — evita que
-    pequenas oscilações de ruído no começo do trial sejam contadas como
-    início da descida.
+    baixo) usada como limiar pra marcar o início do movimento e também o
+    retorno à postura inicial — evita que pequenas oscilações de ruído no
+    começo/fim do trial sejam contadas como parte do movimento.
 
     Retorna {'preparacao': (t0,t1), 'descida': (t1,t2), 'subida': (t2,t3)}
     ou None se não der pra segmentar (dados insuficientes ou sem descida
@@ -870,10 +872,15 @@ def segment_trial_phases(vertical_pos: np.ndarray | None, x_axis: np.ndarray,
     onset_candidates = np.where(displacement[: bottom_idx + 1] >= onset_thresh)[0]
     t_onset = float(x_w[onset_candidates[0]]) if len(onset_candidates) else float(x_w[0])
 
+    # Fim da subida: primeiro ponto, depois do fundo, em que o deslocamento
+    # volta a ficar abaixo do limiar (perto da postura inicial de novo).
+    return_candidates = np.where(displacement[bottom_idx:] <= onset_thresh)[0]
+    t_return = float(x_w[bottom_idx + return_candidates[0]]) if len(return_candidates) else float(x_w[-1])
+
     return {
         "preparacao": (float(x_w[0]), t_onset),
         "descida": (t_onset, t_bottom),
-        "subida": (t_bottom, float(x_w[-1])),
+        "subida": (t_bottom, t_return),
     }
 
 

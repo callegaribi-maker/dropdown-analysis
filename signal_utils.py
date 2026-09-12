@@ -881,6 +881,29 @@ def compute_rom(series: np.ndarray | None, x_axis: np.ndarray,
     return float(np.nanmax(seg) - np.nanmin(seg))
 
 
+def compute_peak(series: np.ndarray | None, x_axis: np.ndarray,
+                 window_start: float, window_end: float, signed: bool = False) -> float | None:
+    """
+    Valor de pico de 'series' dentro de uma janela de tempo — o máximo
+    (signed=False, para ângulos sempre positivos como flexão) ou o máximo em
+    magnitude absoluta, preservando o sinal original (signed=True, para
+    ângulos com direção como valgo/varo — retorna o pico real, positivo ou
+    negativo, não só sua magnitude).
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    mask = (x_axis[:n] >= window_start) & (x_axis[:n] <= window_end)
+    seg = series[:n][mask]
+    seg = seg[~np.isnan(seg)]
+    if len(seg) == 0:
+        return None
+    if signed:
+        idx = np.argmax(np.abs(seg))
+        return float(seg[idx])
+    return float(np.nanmax(seg))
+
+
 def zero_reference_angle(series: np.ndarray | None, x_axis: np.ndarray,
                          baseline_start: float, baseline_end: float) -> np.ndarray | None:
     """

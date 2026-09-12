@@ -514,21 +514,10 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
     st.divider()
 
-    # ══════════════════════════════════════════
-    # Seleção de janela
-    # ══════════════════════════════════════════
-    st.subheader("🪟 Seleção de janela")
-    wc1, wc2 = st.columns(2)
-    with wc1:
-        view_start = st.number_input(
-            "Início (s) relativo ao pico", value=float(x_min_data), step=0.5, key="view_start",
-        )
-    with wc2:
-        view_end = st.number_input(
-            "Fim (s) relativo ao pico", value=float(x_max_data), step=0.5, key="view_end",
-        )
-
-    st.divider()
+    # Janela de exibição/exportação — sempre a gravação inteira (a seleção
+    # manual foi removida; a segmentação por fase já cobre o que antes se
+    # fazia recortando a janela manualmente).
+    view_start, view_end = float(x_min_data), float(x_max_data)
 
     # ══════════════════════════════════════════
     # Ângulo do joelho (celular vs. Kinem)

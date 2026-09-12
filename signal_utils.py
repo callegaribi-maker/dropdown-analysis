@@ -857,25 +857,37 @@ def segment_trial_phases(vertical_pos: np.ndarray | None, x_axis: np.ndarray,
         return None
     x_w, y_w = x_w[valid], y_w[valid]
 
-    ref_n = max(1, int(0.1 * len(y_w)))
-    baseline = float(np.nanmean(y_w[:ref_n]))
-
     bottom_idx = int(np.nanargmin(y_w))
     t_bottom = float(x_w[bottom_idx])
 
-    displacement = baseline - y_w  # positivo = desceu em relação à referência inicial
-    max_disp = displacement[bottom_idx]
-    if max_disp <= 0:
+    # Início da descida: usa como referência o pico mais alto realmente
+    # alcançado ANTES do fundo (não só a média do início da janela) — mesma
+    # lógica simétrica usada pro fim da subida, mais robusta a pequenas
+    # diferenças de altura do platô de um trial pro outro.
+    before_bottom = y_w[: bottom_idx + 1]
+    local_top_before = float(np.nanmax(before_bottom))
+    descent_range = local_top_before - y_w[bottom_idx]
+    if descent_range <= 0:
         return None
-
-    onset_thresh = onset_frac * max_disp
-    onset_candidates = np.where(displacement[: bottom_idx + 1] >= onset_thresh)[0]
+    onset_thresh = onset_frac * descent_range
+    departed = (local_top_before - before_bottom) >= onset_thresh
+    onset_candidates = np.where(departed)[0]
     t_onset = float(x_w[onset_candidates[0]]) if len(onset_candidates) else float(x_w[0])
 
-    # Fim da subida: primeiro ponto, depois do fundo, em que o deslocamento
-    # volta a ficar abaixo do limiar (perto da postura inicial de novo).
-    return_candidates = np.where(displacement[bottom_idx:] <= onset_thresh)[0]
-    t_return = float(x_w[bottom_idx + return_candidates[0]]) if len(return_candidates) else float(x_w[-1])
+    # Fim da subida: mesma lógica, usando o pico mais alto realmente
+    # alcançado DEPOIS do fundo (não a linha de base medida no início da
+    # janela) — evita marcar o retorno cedo demais se o platô seguinte
+    # estiver um pouco mais alto/baixo que a referência inicial.
+    after_bottom = y_w[bottom_idx:]
+    local_top_after = float(np.nanmax(after_bottom))
+    ascent_range = local_top_after - y_w[bottom_idx]
+    if ascent_range <= 0:
+        t_return = float(x_w[-1])
+    else:
+        return_thresh = onset_frac * ascent_range
+        recovered = (local_top_after - after_bottom) <= return_thresh
+        return_candidates = np.where(recovered)[0]
+        t_return = float(x_w[bottom_idx + return_candidates[0]]) if len(return_candidates) else float(x_w[-1])
 
     return {
         "preparacao": (float(x_w[0]), t_onset),

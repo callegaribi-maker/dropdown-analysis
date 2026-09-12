@@ -443,7 +443,7 @@ def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, lab
                 f"Se os picos das duas curvas abaixo caem em cima da linha roxa, a sincronização dos arquivos está correta."
             )
 
-        x_view_lo, x_view_hi = min(-2, raw_sync_x - 0.5), max(2, raw_sync_x + 0.5)
+        x_view_lo, x_view_hi = raw_sync_x - 2, raw_sync_x + 2
         mask_2 = (vx >= x_view_lo) & (vx <= x_view_hi)
         all_vals = np.concatenate([s[mask_2] for s, _ in series if len(s) == len(vx)])
         all_vals = all_vals[~np.isnan(all_vals)]
@@ -468,7 +468,7 @@ def render_alignment_check(title, kinem_col, phone_file, phone_col, label_k, lab
             title=f"{title} — normalizado pelo pico (sem filtro)",
             xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[x_view_lo, x_view_hi]),
             yaxis=dict(title="Amplitude norm.", range=[y_lo, y_hi]),
-            hovermode="x unified", template="plotly_white", height=400,
+            hovermode="x unified", template="plotly_white", height=380,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
             margin=dict(t=50, b=50, l=60, r=20),
         )
@@ -508,13 +508,15 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                     x_min_data, x_max_data = float(x_axis.min()), float(x_axis.max())
                     st.caption(f"↕️ Referência 0s recentralizada no pico de flexão do joelho (estava a {angle_peak_time:+.2f}s do pico de aceleração usado pra sincronizar os arquivos).")
 
-    for gkey, gdef in GROUPS.items():
-        pf = phone_files[gkey]
-        render_alignment_check(
-            gdef["label"], kinem_sync_cols[gkey], pf["acc"], pf["acc_col"],
-            f"Kinem {gdef['label']}", f"ACC {gdef['label']}", aligned_data, x_axis, pfs,
-            raw_sync_x=-angle_peak_time,
-        )
+    verif_cols = st.columns(len(GROUPS))
+    for col, (gkey, gdef) in zip(verif_cols, GROUPS.items()):
+        with col:
+            pf = phone_files[gkey]
+            render_alignment_check(
+                gdef["label"], kinem_sync_cols[gkey], pf["acc"], pf["acc_col"],
+                f"Kinem {gdef['label']}", f"ACC {gdef['label']}", aligned_data, x_axis, pfs,
+                raw_sync_x=-angle_peak_time,
+            )
 
     st.divider()
 

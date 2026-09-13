@@ -44,6 +44,7 @@ from signal_utils import (
     knee_angle_from_phone,
     knee_angle_from_phone_plane,
     load_file,
+    lowpass_array,
     numeric_cols,
     normalize_trial_curve,
     norm,
@@ -723,15 +724,24 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
     # ── Velocidade angular (derivada dos ângulos já corrigidos/calibrados) —
     # métrica de qualidade de movimento: quão rápido o joelho flexiona/desvia,
-    # não só o quanto. ──
-    vel_kinem_sagital = compute_derivative(angle_kinem_sagital, x_axis)
-    vel_phone_sagital = compute_derivative(angle_phone_sagital, x_axis)
-    vel_kinem_frontal = compute_derivative(angle_kinem_frontal, x_axis)
-    vel_phone_frontal = compute_derivative(angle_phone_frontal, x_axis)
+    # não só o quanto. Filtra o ângulo (passa-baixa 10Hz) ANTES de derivar —
+    # testamos com dados reais: sem isso o jerk fica dominado por ruído
+    # amplificado pela derivação; no próprio ângulo (ADM/pico/forma) o
+    # filtro não muda quase nada, então só filtramos aqui, não no ângulo
+    # principal exibido nos gráficos. ──
+    angle_kinem_sagital_sm = lowpass_array(angle_kinem_sagital, pfs, 10.0)
+    angle_phone_sagital_sm = lowpass_array(angle_phone_sagital, pfs, 10.0)
+    angle_kinem_frontal_sm = lowpass_array(angle_kinem_frontal, pfs, 10.0)
+    angle_phone_frontal_sm = lowpass_array(angle_phone_frontal, pfs, 10.0)
+    vel_kinem_sagital = compute_derivative(angle_kinem_sagital_sm, x_axis)
+    vel_phone_sagital = compute_derivative(angle_phone_sagital_sm, x_axis)
+    vel_kinem_frontal = compute_derivative(angle_kinem_frontal_sm, x_axis)
+    vel_phone_frontal = compute_derivative(angle_phone_frontal_sm, x_axis)
 
-    # ── Jerk (derivada da velocidade) — mede suavidade do movimento; não é
-    # exibido como curva (fica ruidoso demais, principalmente no celular),
-    # só como RMS por trial na tabela — quanto maior, mais "trêmulo"/irregular. ──
+    # ── Jerk (derivada da velocidade, já suavizada acima) — mede suavidade
+    # do movimento; não é exibido como curva (fica ruidoso demais, mesmo
+    # filtrado), só como RMS por trial na tabela — quanto maior, mais
+    # "trêmulo"/irregular. ──
     jerk_kinem_sagital = compute_derivative(vel_kinem_sagital, x_axis)
     jerk_phone_sagital = compute_derivative(vel_phone_sagital, x_axis)
 

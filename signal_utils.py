@@ -275,6 +275,22 @@ def apply_lowpass(df: pd.DataFrame, fs: float, cutoff_hz: float, order: int = 4)
     return result
 
 
+def lowpass_array(series: np.ndarray | None, fs: float, cutoff_hz: float, order: int = 4) -> np.ndarray | None:
+    """
+    Mesmo filtro passa-baixa Butterworth de apply_lowpass, mas pra um array
+    1D avulso (não DataFrame) — usado antes de derivar (velocidade/jerk),
+    já que derivar amplifica ruído de alta frequência e um sinal filtrado
+    antes de derivar fica bem mais interpretável.
+    """
+    if series is None:
+        return None
+    nyq = fs / 2.0
+    if cutoff_hz >= nyq:
+        return series
+    sos = sp_signal.butter(order, cutoff_hz / nyq, btype="low", output="sos")
+    return sp_signal.sosfiltfilt(sos, np.nan_to_num(series))
+
+
 # ──────────────────────────────────────────────
 # Detecção de pico / sincronização
 # ──────────────────────────────────────────────

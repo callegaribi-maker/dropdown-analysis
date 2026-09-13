@@ -46,6 +46,8 @@ from signal_utils import (
     load_file,
     numeric_cols,
     normalize_trial_curve,
+    norm,
+    phone_axis_col,
     position_xyz_cols,
     resample_to_regular,
     segment_trial_phases,
@@ -744,6 +746,42 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         l5_vertical = try_numeric(kdf_raw[pos_l5_cols["Z"]]).values.astype(float)
         l5_lateral = try_numeric(kdf_raw[pos_l5_cols["X"]]).values.astype(float)
 
+    # ── Estabilidade de tronco: comparação Kinem × Celular via ACELERAÇÃO e
+    # VELOCIDADE ANGULAR brutas (sem integrar nada) — testamos e essa é a
+    # forma que dá uma relação consistente entre as duas fontes (ao
+    # contrário da posição lateral integrada, que se mostrou pouco confiável). ──
+    acc_ml_kinem_trunk = None
+    if not kdf_raw.empty:
+        acc_ml_kinem_cols = [c for c in kdf_raw.columns if norm(c).lower() == "l 5 a(x)"]
+        if acc_ml_kinem_cols:
+            acc_ml_kinem_trunk = try_numeric(kdf_raw[acc_ml_kinem_cols[0]]).values.astype(float)
+
+    acc_ml_phone_trunk = None
+    if pf_l5["acc"] != NONE and pf_l5["acc"] in aligned_raw:
+        acc_ml_phone_trunk = try_numeric(
+            aligned_raw[pf_l5["acc"]][phone_axis_col(aligned_raw[pf_l5["acc"]], "l5", "ML")]
+        ).values.astype(float)
+
+    trunk_angvel_kinem = None
+    pos_troc_cols_trunk = position_xyz_cols(kdf_raw, "trocanter") if not kdf_raw.empty else {}
+    if all(k in pos_l5_cols for k in "XYZ") and all(k in pos_troc_cols_trunk for k in "XYZ"):
+        l5_pos_arr = np.column_stack([try_numeric(kdf_raw[pos_l5_cols[a]]).values for a in "XYZ"]).astype(float)
+        troc_pos_arr = np.column_stack([try_numeric(kdf_raw[pos_troc_cols_trunk[a]]).values for a in "XYZ"]).astype(float)
+        trunk_vec = troc_pos_arr - l5_pos_arr
+        trunk_vec_frontal = trunk_vec[:, [0, 2]]
+        vertical_ref = np.tile([0.0, -1.0], (len(trunk_vec_frontal), 1))
+        cross = trunk_vec_frontal[:, 0] * vertical_ref[:, 1] - trunk_vec_frontal[:, 1] * vertical_ref[:, 0]
+        dot = trunk_vec_frontal[:, 0] * vertical_ref[:, 0] + trunk_vec_frontal[:, 1] * vertical_ref[:, 1]
+        trunk_lean_kinem_iso = np.degrees(np.arctan2(cross, dot))
+        trunk_angvel_kinem = compute_derivative(trunk_lean_kinem_iso, x_axis)
+
+    trunk_angvel_phone = None
+    if pf_l5["gyr"] != NONE and pf_l5["gyr"] in aligned_raw:
+        gyr_ap_raw = try_numeric(
+            aligned_raw[pf_l5["gyr"]][phone_axis_col(aligned_raw[pf_l5["gyr"]], "l5", "AP")]
+        ).values.astype(float)
+        trunk_angvel_phone = np.degrees(gyr_ap_raw)
+
     onset_frac = st.slider(
         "Sensibilidade do início do movimento (segmentação)", 0.005, 0.40, value=0.15, step=0.005,
         key="onset_frac",
@@ -1142,9 +1180,24 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                     jerk_rms_k = compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end)
                     jerk_rms_p = compute_rms(jerk_phone_sagital, x_axis, t_start, t_end)
 
+                    rms_accel_trunk_k = compute_rms(acc_ml_kinem_trunk, x_axis, d_start, s_end)
+                    rms_accel_trunk_p = compute_rms(acc_ml_phone_trunk, x_axis, d_start, s_end)
+                    razao_accel_trunk = (rms_accel_trunk_p / rms_accel_trunk_k) if (rms_accel_trunk_p is not None and rms_accel_trunk_k not in (None, 0)) else None
+
+                    rms_angvel_trunk_k = compute_rms(trunk_angvel_kinem, x_axis, d_start, s_end)
+                    rms_angvel_trunk_p = compute_rms(trunk_angvel_phone, x_axis, d_start, s_end)
+                    razao_angvel_trunk = (rms_angvel_trunk_p / rms_angvel_trunk_k) if (rms_angvel_trunk_p is not None and rms_angvel_trunk_k not in (None, 0)) else None
+
+                    prep_dur = (phases["preparacao"][1] - phases["preparacao"][0]) if phases else None
+                    desc_dur = (phases["descida"][1] - phases["descida"][0]) if phases else None
+                    sub_dur = (phases["subida"][1] - phases["subida"][0]) if phases else None
+
                     analise_rows.append({
                         "Trial": str(i),
                         "Nota clínica": nota_clinica if nota_clinica else "—",
+                        "Duração Preparação (s)": prep_dur,
+                        "Duração Descida (s)": desc_dur,
+                        "Duração Subida (s)": sub_dur,
                         "ADM Joelho Sagital — Kinem": compute_rom(angle_kinem_sagital, x_axis, t_start, t_end),
                         "ADM Joelho Sagital — Celular": compute_rom(angle_phone_sagital, x_axis, t_start, t_end),
                         "Pico Flexão Joelho — Kinem": compute_peak(angle_kinem_sagital, x_axis, t_start, t_end),
@@ -1171,6 +1224,12 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                         "ADM Quadril Frontal — Celular": compute_rom(angle_hip_phone_frontal, x_axis, t_start, t_end),
                         "Estabilidade Tronco — RMS lateral L5 (m)": rms_l5_lateral,
                         "Estabilidade Tronco — Razão caminho/deslocamento": razao_path_rom,
+                        "Estabilidade Tronco — RMS Acel. Lateral (Kinem)": rms_accel_trunk_k,
+                        "Estabilidade Tronco — RMS Acel. Lateral (Celular)": rms_accel_trunk_p,
+                        "Estabilidade Tronco — Razão Acel. Celular/Kinem": razao_accel_trunk,
+                        "Estabilidade Tronco — RMS Vel.Ang. (Kinem)": rms_angvel_trunk_k,
+                        "Estabilidade Tronco — RMS Vel.Ang. (Celular)": rms_angvel_trunk_p,
+                        "Estabilidade Tronco — Razão Vel.Ang. Celular/Kinem": razao_angvel_trunk,
                         "Suavidade (Jerk RMS) Joelho Sagital — Kinem": jerk_rms_k,
                         "Suavidade (Jerk RMS) Joelho Sagital — Celular": jerk_rms_p,
                     })
@@ -1190,14 +1249,18 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
                 with st.container(border=True):
                     def fmt_for_col(col):
-                        if "Tempo até" in col:
-                            return "{:+.2f}s"
-                        if "Vel." in col:
-                            return "{:.0f}°/s"
-                        if "Jerk" in col:
-                            return "{:.0f}°/s³"
                         if "Razão" in col:
                             return "{:.2f}×"
+                        if "Duração" in col:
+                            return "{:.2f}s"
+                        if "Tempo até" in col:
+                            return "{:+.2f}s"
+                        if "Jerk" in col:
+                            return "{:.0f}°/s³"
+                        if "RMS Acel" in col:
+                            return "{:.3f}m/s²"
+                        if "RMS Vel" in col or "Vel." in col:
+                            return "{:.0f}°/s"
                         if "RMS lateral" in col:
                             return "{:.4f}m"
                         return "{:.1f}°"
@@ -1215,31 +1278,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                     file_name="analise_clinica_step_down.csv", mime="text/csv",
                     use_container_width=True,
                 )
-        # --- Fases do movimento por trial ---
-        if trials:
-            st.markdown("#### ⏱️ Fases do movimento por trial")
-            st.caption("Segmentação de cada repetição em preparação (parado), descida e subida, usando o deslocamento vertical do L5.")
-            fase_rows = []
-            for i, ((t_start, t_end), phases) in enumerate(zip(trials, trial_phases), start=1):
-                if not phases:
-                    fase_rows.append({"Trial": str(i), "Preparação (s)": None, "Descida (s)": None, "Subida (s)": None})
-                    continue
-                prep = phases["preparacao"]
-                desc = phases["descida"]
-                sub = phases["subida"]
-                fase_rows.append({
-                    "Trial": str(i),
-                    "Preparação (s)": prep[1] - prep[0],
-                    "Descida (s)": desc[1] - desc[0],
-                    "Subida (s)": sub[1] - sub[0],
-                })
-            fase_df = pd.DataFrame(fase_rows)
-            with st.container(border=True):
-                st.dataframe(
-                    fase_df.style.format({c: "{:.2f}s" for c in fase_df.columns if c != "Trial"}),
-                    hide_index=True, use_container_width=True,
-                )
-            st.caption("Trials nas bordas (primeiro/último) podem ter fases distorcidas — a janela deles inclui trecho antes do início ou depois do fim da gravação real.")
+        # --- Fases do movimento por trial: duração já incluída na tabela "Ver variáveis" acima ---
 
     st.divider()
 

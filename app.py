@@ -998,6 +998,111 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             st.plotly_chart(fig_hip_front, use_container_width=True)
             st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
 
+        # --- Ver análise: trials sobrepostos (ciclo inteiro 0-1, com fases) por métrica ---
+        st.divider()
+        ver_analise_overlay = st.button("🔍 Ver análise", type="primary", use_container_width=True, key="btn_ver_analise_overlay")
+        if ver_analise_overlay:
+            st.session_state.mostrar_analise_overlay = True
+        if st.session_state.get("mostrar_analise_overlay"):
+            valid_trial_phases = [p for p in trial_phases if p]
+            if not valid_trial_phases:
+                st.info("Não há trials segmentados pra sobrepor.")
+            else:
+                st.markdown("#### 📊 Trials sobrepostos (ciclo inteiro normalizado: 0 = início da preparação, 1 = fim da subida)")
+                st.caption(
+                    f"{len(valid_trial_phases)} trials sobrepostos por métrica. Linhas finas = cada trial individual · "
+                    "linha grossa = resultante (média). Fundo cinza/laranja/azul = preparação/descida/subida (posição média entre os trials)."
+                )
+
+                # Fração média (0-1) de onde cada fase termina, pra pintar o fundo
+                prep_fracs, desc_fracs = [], []
+                for phases in valid_trial_phases:
+                    t0 = phases["preparacao"][0]
+                    t_onset = phases["descida"][0]
+                    t_bottom = phases["descida"][1]
+                    t_fim = phases["subida"][1]
+                    total = t_fim - t0
+                    if total > 0:
+                        prep_fracs.append((t_onset - t0) / total)
+                        desc_fracs.append((t_bottom - t0) / total)
+                avg_prep_frac = float(np.mean(prep_fracs)) if prep_fracs else 0.3
+                avg_desc_frac = float(np.mean(desc_fracs)) if desc_fracs else 0.6
+
+                def render_overlay_chart(title, kinem_series, phone_series, color_k, color_p, yaxis_title="Ângulo (graus)"):
+                    fig = go.Figure()
+                    fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
+                    fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
+                    fig.add_vrect(x0=avg_desc_frac, x1=1, fillcolor="steelblue", opacity=0.12, line_width=0)
+
+                    x_norm = np.linspace(0, 1, 101)
+                    kinem_curves, phone_curves = [], []
+                    for phases in valid_trial_phases:
+                        t0, t1 = phases["preparacao"][0], phases["subida"][1]
+                        yk = normalize_trial_curve(kinem_series, x_axis, t0, t1)
+                        yp = normalize_trial_curve(phone_series, x_axis, t0, t1)
+                        if yk is not None:
+                            kinem_curves.append(yk)
+                            fig.add_trace(go.Scatter(x=x_norm, y=yk, mode="lines", line=dict(color=color_k, width=1), opacity=0.30, showlegend=False))
+                        if yp is not None:
+                            phone_curves.append(yp)
+                            fig.add_trace(go.Scatter(x=x_norm, y=yp, mode="lines", line=dict(color=color_p, width=1), opacity=0.30, showlegend=False))
+                    if kinem_curves:
+                        mean_k = np.nanmean(np.array(kinem_curves), axis=0)
+                        fig.add_trace(go.Scatter(x=x_norm, y=mean_k, mode="lines", line=dict(color=color_k, width=3), name="Kinem — resultante"))
+                    if phone_curves:
+                        mean_p = np.nanmean(np.array(phone_curves), axis=0)
+                        fig.add_trace(go.Scatter(x=x_norm, y=mean_p, mode="lines", line=dict(color=color_p, width=3), name="Celular — resultante"))
+                    fig.update_layout(
+                        title=title, xaxis_title="Ciclo normalizado (0-1)", yaxis_title=yaxis_title,
+                        height=420, width=420, template="plotly_white", hovermode="x unified",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=40, b=40),
+                    )
+                    st.plotly_chart(fig, use_container_width=False)
+
+                def render_overlay_chart_single(title, series, color, yaxis_title="Posição vertical L5"):
+                    fig = go.Figure()
+                    fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
+                    fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
+                    fig.add_vrect(x0=avg_desc_frac, x1=1, fillcolor="steelblue", opacity=0.12, line_width=0)
+                    x_norm = np.linspace(0, 1, 101)
+                    curves = []
+                    for phases in valid_trial_phases:
+                        t0, t1 = phases["preparacao"][0], phases["subida"][1]
+                        y = normalize_trial_curve(series, x_axis, t0, t1)
+                        if y is not None:
+                            curves.append(y)
+                            fig.add_trace(go.Scatter(x=x_norm, y=y, mode="lines", line=dict(color=color, width=1), opacity=0.30, showlegend=False))
+                    if curves:
+                        mean_y = np.nanmean(np.array(curves), axis=0)
+                        fig.add_trace(go.Scatter(x=x_norm, y=mean_y, mode="lines", line=dict(color=color, width=3), name="Resultante"))
+                    fig.update_layout(
+                        title=title, xaxis_title="Ciclo normalizado (0-1)", yaxis_title=yaxis_title,
+                        height=420, width=420, template="plotly_white", hovermode="x unified",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=40, b=40),
+                    )
+                    st.plotly_chart(fig, use_container_width=False)
+
+                oc1, oc2 = st.columns(2)
+                with oc1:
+                    render_overlay_chart("Joelho — Sagital", angle_kinem_sagital, angle_phone_sagital, "blue", "red")
+                with oc2:
+                    render_overlay_chart("Joelho — Frontal", angle_kinem_frontal, angle_phone_frontal, "green", "darkorange")
+                oc3, oc4 = st.columns(2)
+                with oc3:
+                    render_overlay_chart("Quadril — Sagital", angle_hip_kinem_sagital, angle_hip_phone_sagital, "teal", "crimson")
+                with oc4:
+                    render_overlay_chart("Quadril — Frontal", angle_hip_kinem_frontal, angle_hip_phone_frontal, "darkcyan", "deeppink")
+                oc5, oc6 = st.columns(2)
+                with oc5:
+                    render_overlay_chart_single("L5 — Deslocamento vertical", l5_vertical, "black")
+                with oc6:
+                    render_overlay_chart_single("L5 — Deslocamento lateral (estabilidade de tronco)", l5_lateral, "purple", yaxis_title="Posição lateral (ML)")
+                oc7, oc8 = st.columns(2)
+                with oc7:
+                    render_overlay_chart("Velocidade Angular — Joelho Sagital", vel_kinem_sagital, vel_phone_sagital, "blue", "red", yaxis_title="Velocidade (°/s)")
+                with oc8:
+                    render_overlay_chart("Velocidade Angular — Joelho Frontal (Valgo/Varo)", vel_kinem_frontal, vel_phone_frontal, "green", "darkorange", yaxis_title="Velocidade (°/s)")
+
         # --- Avaliação clínica: nota + análise completa por trial ---
         st.divider()
         st.markdown("#### 🩺 Avaliação clínica")
@@ -1110,111 +1215,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                     file_name="analise_clinica_step_down.csv", mime="text/csv",
                     use_container_width=True,
                 )
-        # --- Ver análise: trials sobrepostos (ciclo inteiro 0-1, com fases) por métrica ---
-        st.divider()
-        ver_analise_overlay = st.button("🔍 Ver análise", type="primary", use_container_width=True, key="btn_ver_analise_overlay")
-        if ver_analise_overlay:
-            st.session_state.mostrar_analise_overlay = True
-        if st.session_state.get("mostrar_analise_overlay"):
-            valid_trial_phases = [p for p in trial_phases if p]
-            if not valid_trial_phases:
-                st.info("Não há trials segmentados pra sobrepor.")
-            else:
-                st.markdown("#### 📊 Trials sobrepostos (ciclo inteiro normalizado: 0 = início da preparação, 1 = fim da subida)")
-                st.caption(
-                    f"{len(valid_trial_phases)} trials sobrepostos por métrica. Linhas finas = cada trial individual · "
-                    "linha grossa = resultante (média). Fundo cinza/laranja/azul = preparação/descida/subida (posição média entre os trials)."
-                )
-
-                # Fração média (0-1) de onde cada fase termina, pra pintar o fundo
-                prep_fracs, desc_fracs = [], []
-                for phases in valid_trial_phases:
-                    t0 = phases["preparacao"][0]
-                    t_onset = phases["descida"][0]
-                    t_bottom = phases["descida"][1]
-                    t_fim = phases["subida"][1]
-                    total = t_fim - t0
-                    if total > 0:
-                        prep_fracs.append((t_onset - t0) / total)
-                        desc_fracs.append((t_bottom - t0) / total)
-                avg_prep_frac = float(np.mean(prep_fracs)) if prep_fracs else 0.3
-                avg_desc_frac = float(np.mean(desc_fracs)) if desc_fracs else 0.6
-
-                def render_overlay_chart(title, kinem_series, phone_series, color_k, color_p, yaxis_title="Ângulo (graus)"):
-                    fig = go.Figure()
-                    fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
-                    fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
-                    fig.add_vrect(x0=avg_desc_frac, x1=1, fillcolor="steelblue", opacity=0.12, line_width=0)
-
-                    x_norm = np.linspace(0, 1, 101)
-                    kinem_curves, phone_curves = [], []
-                    for phases in valid_trial_phases:
-                        t0, t1 = phases["preparacao"][0], phases["subida"][1]
-                        yk = normalize_trial_curve(kinem_series, x_axis, t0, t1)
-                        yp = normalize_trial_curve(phone_series, x_axis, t0, t1)
-                        if yk is not None:
-                            kinem_curves.append(yk)
-                            fig.add_trace(go.Scatter(x=x_norm, y=yk, mode="lines", line=dict(color=color_k, width=1), opacity=0.30, showlegend=False))
-                        if yp is not None:
-                            phone_curves.append(yp)
-                            fig.add_trace(go.Scatter(x=x_norm, y=yp, mode="lines", line=dict(color=color_p, width=1), opacity=0.30, showlegend=False))
-                    if kinem_curves:
-                        mean_k = np.nanmean(np.array(kinem_curves), axis=0)
-                        fig.add_trace(go.Scatter(x=x_norm, y=mean_k, mode="lines", line=dict(color=color_k, width=3), name="Kinem — resultante"))
-                    if phone_curves:
-                        mean_p = np.nanmean(np.array(phone_curves), axis=0)
-                        fig.add_trace(go.Scatter(x=x_norm, y=mean_p, mode="lines", line=dict(color=color_p, width=3), name="Celular — resultante"))
-                    fig.update_layout(
-                        title=title, xaxis_title="Ciclo normalizado (0-1)", yaxis_title=yaxis_title,
-                        height=420, width=420, template="plotly_white", hovermode="x unified",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=40, b=40),
-                    )
-                    st.plotly_chart(fig, use_container_width=False)
-
-                def render_overlay_chart_single(title, series, color, yaxis_title="Posição vertical L5"):
-                    fig = go.Figure()
-                    fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
-                    fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
-                    fig.add_vrect(x0=avg_desc_frac, x1=1, fillcolor="steelblue", opacity=0.12, line_width=0)
-                    x_norm = np.linspace(0, 1, 101)
-                    curves = []
-                    for phases in valid_trial_phases:
-                        t0, t1 = phases["preparacao"][0], phases["subida"][1]
-                        y = normalize_trial_curve(series, x_axis, t0, t1)
-                        if y is not None:
-                            curves.append(y)
-                            fig.add_trace(go.Scatter(x=x_norm, y=y, mode="lines", line=dict(color=color, width=1), opacity=0.30, showlegend=False))
-                    if curves:
-                        mean_y = np.nanmean(np.array(curves), axis=0)
-                        fig.add_trace(go.Scatter(x=x_norm, y=mean_y, mode="lines", line=dict(color=color, width=3), name="Resultante"))
-                    fig.update_layout(
-                        title=title, xaxis_title="Ciclo normalizado (0-1)", yaxis_title=yaxis_title,
-                        height=420, width=420, template="plotly_white", hovermode="x unified",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=40, b=40),
-                    )
-                    st.plotly_chart(fig, use_container_width=False)
-
-                oc1, oc2 = st.columns(2)
-                with oc1:
-                    render_overlay_chart("Joelho — Sagital", angle_kinem_sagital, angle_phone_sagital, "blue", "red")
-                with oc2:
-                    render_overlay_chart("Joelho — Frontal", angle_kinem_frontal, angle_phone_frontal, "green", "darkorange")
-                oc3, oc4 = st.columns(2)
-                with oc3:
-                    render_overlay_chart("Quadril — Sagital", angle_hip_kinem_sagital, angle_hip_phone_sagital, "teal", "crimson")
-                with oc4:
-                    render_overlay_chart("Quadril — Frontal", angle_hip_kinem_frontal, angle_hip_phone_frontal, "darkcyan", "deeppink")
-                oc5, oc6 = st.columns(2)
-                with oc5:
-                    render_overlay_chart_single("L5 — Deslocamento vertical", l5_vertical, "black")
-                with oc6:
-                    render_overlay_chart_single("L5 — Deslocamento lateral (estabilidade de tronco)", l5_lateral, "purple", yaxis_title="Posição lateral (ML)")
-                oc7, oc8 = st.columns(2)
-                with oc7:
-                    render_overlay_chart("Velocidade Angular — Joelho Sagital", vel_kinem_sagital, vel_phone_sagital, "blue", "red", yaxis_title="Velocidade (°/s)")
-                with oc8:
-                    render_overlay_chart("Velocidade Angular — Joelho Frontal (Valgo/Varo)", vel_kinem_frontal, vel_phone_frontal, "green", "darkorange", yaxis_title="Velocidade (°/s)")
-
         # --- Fases do movimento por trial ---
         if trials:
             st.markdown("#### ⏱️ Fases do movimento por trial")

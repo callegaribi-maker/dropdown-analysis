@@ -1086,18 +1086,21 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                             fig.add_trace(go.Scatter(x=x_norm, y=yp, mode="lines", line=dict(color=color_p, width=1), opacity=0.30, showlegend=False))
                     if kinem_curves:
                         mean_k = np.nanmean(np.array(kinem_curves), axis=0)
-                        fig.add_trace(go.Scatter(x=x_norm, y=mean_k, mode="lines", line=dict(color=color_k, width=3), name="Kinem — resultante"))
+                        fig.add_trace(go.Scatter(x=x_norm, y=mean_k, mode="lines", line=dict(color=color_k, width=3), name="Kinem"))
                     if phone_curves:
                         mean_p = np.nanmean(np.array(phone_curves), axis=0)
-                        fig.add_trace(go.Scatter(x=x_norm, y=mean_p, mode="lines", line=dict(color=color_p, width=3), name="Celular — resultante"))
+                        fig.add_trace(go.Scatter(x=x_norm, y=mean_p, mode="lines", line=dict(color=color_p, width=3), name="Celular"))
                     fig.update_layout(
-                        title=title, xaxis_title="Ciclo normalizado (0-1)", yaxis_title=yaxis_title,
-                        height=420, width=420, template="plotly_white", hovermode="x unified",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=40, b=40),
+                        title=dict(text=title, x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=13)),
+                        xaxis_title="Ciclo normalizado (0 = início · 1 = fim)",
+                        yaxis_title=yaxis_title,
+                        height=460, width=420, template="plotly_white", hovermode="x unified",
+                        legend=dict(orientation="h", yanchor="top", y=-0.22, x=0.5, xanchor="center", font=dict(size=10)),
+                        margin=dict(t=55, b=95, l=55, r=15),
                     )
                     st.plotly_chart(fig, use_container_width=False)
 
-                def render_overlay_chart_single(title, series, color, yaxis_title="Posição vertical L5"):
+                def render_overlay_chart_single(title, series, color, yaxis_title="Posição vertical L5 (m)"):
                     fig = go.Figure()
                     fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
                     fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
@@ -1114,9 +1117,12 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                         mean_y = np.nanmean(np.array(curves), axis=0)
                         fig.add_trace(go.Scatter(x=x_norm, y=mean_y, mode="lines", line=dict(color=color, width=3), name="Resultante"))
                     fig.update_layout(
-                        title=title, xaxis_title="Ciclo normalizado (0-1)", yaxis_title=yaxis_title,
-                        height=420, width=420, template="plotly_white", hovermode="x unified",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=40, b=40),
+                        title=dict(text=title, x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=13)),
+                        xaxis_title="Ciclo normalizado (0 = início · 1 = fim)",
+                        yaxis_title=yaxis_title,
+                        height=460, width=420, template="plotly_white", hovermode="x unified",
+                        legend=dict(orientation="h", yanchor="top", y=-0.22, x=0.5, xanchor="center", font=dict(size=10)),
+                        margin=dict(t=55, b=95, l=55, r=15),
                     )
                     st.plotly_chart(fig, use_container_width=False)
 
@@ -1132,14 +1138,19 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                     render_overlay_chart("Quadril — Frontal", angle_hip_kinem_frontal, angle_hip_phone_frontal, "darkcyan", "deeppink")
                 oc5, oc6 = st.columns(2)
                 with oc5:
-                    render_overlay_chart_single("L5 — Deslocamento vertical", l5_vertical, "black")
+                    render_overlay_chart("Vel. Angular — Joelho Sagital", vel_kinem_sagital, vel_phone_sagital, "blue", "red", yaxis_title="Velocidade (°/s)")
                 with oc6:
-                    render_overlay_chart_single("L5 — Deslocamento lateral (estabilidade de tronco)", l5_lateral, "purple", yaxis_title="Posição lateral (ML)")
+                    render_overlay_chart("Vel. Angular — Joelho Frontal", vel_kinem_frontal, vel_phone_frontal, "green", "darkorange", yaxis_title="Velocidade (°/s)")
                 oc7, oc8 = st.columns(2)
                 with oc7:
-                    render_overlay_chart("Velocidade Angular — Joelho Sagital", vel_kinem_sagital, vel_phone_sagital, "blue", "red", yaxis_title="Velocidade (°/s)")
+                    render_overlay_chart_single("L5 — Deslocamento vertical", l5_vertical, "black", yaxis_title="Posição vertical (m)")
                 with oc8:
-                    render_overlay_chart("Velocidade Angular — Joelho Frontal (Valgo/Varo)", vel_kinem_frontal, vel_phone_frontal, "green", "darkorange", yaxis_title="Velocidade (°/s)")
+                    render_overlay_chart_single("L5 — Deslocamento lateral", l5_lateral, "purple", yaxis_title="Posição lateral / ML (m)")
+                oc9, oc10 = st.columns(2)
+                with oc9:
+                    render_overlay_chart("Tronco — Acel. Lateral (estabilidade)", acc_ml_kinem_trunk, acc_ml_phone_trunk, "black", "purple", yaxis_title="Aceleração (m/s²)")
+                with oc10:
+                    render_overlay_chart("Tronco — Vel. Angular (estabilidade)", trunk_angvel_kinem, trunk_angvel_phone, "black", "purple", yaxis_title="Velocidade (°/s)")
 
         # --- Avaliação clínica: nota + análise completa por trial ---
         st.divider()

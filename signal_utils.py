@@ -950,6 +950,85 @@ def compute_rom(series: np.ndarray | None, x_axis: np.ndarray,
     return float(np.nanmax(seg) - np.nanmin(seg))
 
 
+def compute_derivative(series: np.ndarray | None, x_axis: np.ndarray) -> np.ndarray | None:
+    """
+    Deriva 'series' em relação ao tempo (ex.: ângulo → velocidade angular
+    em graus/s; velocidade → aceleração/jerk). Usa diferenciação numérica
+    (np.gradient), robusta o bastante pra sinais já reamostrados numa grade
+    regular como os que este app usa.
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    if n < 2:
+        return None
+    dt = float(np.median(np.diff(x_axis[:n])))
+    if dt <= 0:
+        return None
+    return np.gradient(series[:n], dt)
+
+
+def time_to_peak(series: np.ndarray | None, x_axis: np.ndarray,
+                 t_start: float, t_end: float, signed: bool = False) -> tuple:
+    """
+    Instante e valor do pico de 'series' dentro de uma janela — usado pra
+    comparar QUANDO dois eventos acontecem (ex.: pico de valgo vs. pico de
+    flexão), não só o quanto. signed=True usa o maior valor em módulo,
+    preservando o sinal original (útil pra valgo/varo).
+    Retorna (tempo_do_pico, valor_do_pico) — (None, None) se não der.
+    """
+    if series is None:
+        return None, None
+    n = min(len(series), len(x_axis))
+    mask = (x_axis[:n] >= t_start) & (x_axis[:n] <= t_end)
+    x_w, y_w = x_axis[:n][mask], series[:n][mask]
+    valid = ~np.isnan(y_w)
+    if np.sum(valid) == 0:
+        return None, None
+    x_w, y_w = x_w[valid], y_w[valid]
+    idx = int(np.argmax(np.abs(y_w))) if signed else int(np.argmax(y_w))
+    return float(x_w[idx]), float(y_w[idx])
+
+
+def compute_rms(series: np.ndarray | None, x_axis: np.ndarray,
+                t_start: float, t_end: float) -> float | None:
+    """
+    RMS (raiz quadrada média) de 'series' dentro de uma janela, em torno da
+    própria média local do trecho — mede o quanto um sinal 'treme'/oscila
+    dentro da janela, não sua distância de uma referência externa (por
+    isso subtrai a média LOCAL antes de calcular, não um zero absoluto).
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    mask = (x_axis[:n] >= t_start) & (x_axis[:n] <= t_end)
+    seg = series[:n][mask]
+    seg = seg[~np.isnan(seg)]
+    if len(seg) == 0:
+        return None
+    seg_local = seg - np.mean(seg)
+    return float(np.sqrt(np.mean(seg_local ** 2)))
+
+
+def compute_path_length(series: np.ndarray | None, x_axis: np.ndarray,
+                        t_start: float, t_end: float) -> float | None:
+    """
+    Comprimento total do caminho percorrido por 'series' (soma das variações
+    absolutas amostra a amostra) dentro de uma janela — um sinal que faz
+    'ziguezague' tem caminho bem maior que seu deslocamento líquido
+    (max-min), o que indica menos estabilidade.
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    mask = (x_axis[:n] >= t_start) & (x_axis[:n] <= t_end)
+    seg = series[:n][mask]
+    seg = seg[~np.isnan(seg)]
+    if len(seg) < 2:
+        return None
+    return float(np.sum(np.abs(np.diff(seg))))
+
+
 def normalize_trial_curve(series: np.ndarray | None, x_axis: np.ndarray,
                           t_start: float, t_end: float, n_points: int = 101) -> np.ndarray | None:
     """

@@ -25,7 +25,10 @@ from signal_utils import (
     best_match,
     build_export_sheet,
     col_default,
+    compute_derivative,
+    compute_path_length,
     compute_peak,
+    compute_rms,
     compute_rom,
     detect_time_axis,
     detect_trial_windows,
@@ -46,6 +49,7 @@ from signal_utils import (
     position_xyz_cols,
     resample_to_regular,
     segment_trial_phases,
+    time_to_peak,
     try_numeric,
     zero_reference_angle,
 )
@@ -715,14 +719,30 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     else:
         st.caption("📴 Mostrando a estimativa bruta do celular, sem correção de atraso nem calibração de amplitude.")
 
+    # ── Velocidade angular (derivada dos ângulos já corrigidos/calibrados) —
+    # métrica de qualidade de movimento: quão rápido o joelho flexiona/desvia,
+    # não só o quanto. ──
+    vel_kinem_sagital = compute_derivative(angle_kinem_sagital, x_axis)
+    vel_phone_sagital = compute_derivative(angle_phone_sagital, x_axis)
+    vel_kinem_frontal = compute_derivative(angle_kinem_frontal, x_axis)
+    vel_phone_frontal = compute_derivative(angle_phone_frontal, x_axis)
+
+    # ── Jerk (derivada da velocidade) — mede suavidade do movimento; não é
+    # exibido como curva (fica ruidoso demais, principalmente no celular),
+    # só como RMS por trial na tabela — quanto maior, mais "trêmulo"/irregular. ──
+    jerk_kinem_sagital = compute_derivative(vel_kinem_sagital, x_axis)
+    jerk_phone_sagital = compute_derivative(vel_phone_sagital, x_axis)
+
     # ── Detecta trials e segmenta cada um em preparação/descida/subida,
     # usando o deslocamento vertical do L5 (mesma lógica usada no Y-Balance
     # pra marcar as fases do movimento) ──
     trials = detect_trial_windows(angle_kinem_sagital, x_axis)
     pos_l5_cols = position_xyz_cols(kdf_raw, "l5", "l 5") if not kdf_raw.empty else {}
     l5_vertical = None
+    l5_lateral = None
     if all(k in pos_l5_cols for k in "XYZ"):
         l5_vertical = try_numeric(kdf_raw[pos_l5_cols["Z"]]).values.astype(float)
+        l5_lateral = try_numeric(kdf_raw[pos_l5_cols["X"]]).values.astype(float)
 
     onset_frac = st.slider(
         "Sensibilidade do início do movimento (segmentação)", 0.005, 0.40, value=0.15, step=0.005,
@@ -999,6 +1019,24 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                     phases = trial_phases[i - 1] if i - 1 < len(trial_phases) else None
                     d_start, d_end = phases["descida"] if phases else (t_start, t_start)
                     s_start, s_end = phases["subida"] if phases else (t_end, t_end)
+
+                    t_flex_k, v_flex_k = time_to_peak(angle_kinem_sagital, x_axis, t_start, t_end)
+                    t_flex_p, v_flex_p = time_to_peak(angle_phone_sagital, x_axis, t_start, t_end)
+                    t_valgo_k, v_valgo_k = time_to_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True)
+                    t_valgo_p, v_valgo_p = time_to_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True)
+                    diff_t_k = (t_valgo_k - t_flex_k) if (t_valgo_k is not None and t_flex_k is not None) else None
+                    diff_t_p = (t_valgo_p - t_flex_p) if (t_valgo_p is not None and t_flex_p is not None) else None
+                    razao_k = (abs(v_valgo_k) / v_flex_k) if (v_valgo_k is not None and v_flex_k not in (None, 0)) else None
+                    razao_p = (abs(v_valgo_p) / v_flex_p) if (v_valgo_p is not None and v_flex_p not in (None, 0)) else None
+
+                    rms_l5_lateral = compute_rms(l5_lateral, x_axis, t_start, t_end)
+                    path_l5_lateral = compute_path_length(l5_lateral, x_axis, t_start, t_end)
+                    rom_l5_lateral = compute_rom(l5_lateral, x_axis, t_start, t_end)
+                    razao_path_rom = (path_l5_lateral / rom_l5_lateral) if (path_l5_lateral is not None and rom_l5_lateral not in (None, 0)) else None
+
+                    jerk_rms_k = compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end)
+                    jerk_rms_p = compute_rms(jerk_phone_sagital, x_axis, t_start, t_end)
+
                     analise_rows.append({
                         "Trial": str(i),
                         "Nota clínica": nota_clinica if nota_clinica else "—",
@@ -1006,30 +1044,59 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                         "ADM Joelho Sagital — Celular": compute_rom(angle_phone_sagital, x_axis, t_start, t_end),
                         "Pico Flexão Joelho — Kinem": compute_peak(angle_kinem_sagital, x_axis, t_start, t_end),
                         "Pico Flexão Joelho — Celular": compute_peak(angle_phone_sagital, x_axis, t_start, t_end),
+                        "Vel. Pico Flexão (°/s) — Kinem": compute_peak(vel_kinem_sagital, x_axis, t_start, t_end),
+                        "Vel. Pico Flexão (°/s) — Celular": compute_peak(vel_phone_sagital, x_axis, t_start, t_end),
                         "ADM Joelho Frontal — Kinem": compute_rom(angle_kinem_frontal, x_axis, t_start, t_end),
                         "ADM Joelho Frontal — Celular": compute_rom(angle_phone_frontal, x_axis, t_start, t_end),
                         "Pico Valgo Joelho — Kinem": compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True),
                         "Pico Valgo Joelho — Celular": compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True),
+                        "Vel. Pico Valgo (°/s) — Kinem": compute_peak(vel_kinem_frontal, x_axis, t_start, t_end, signed=True),
+                        "Vel. Pico Valgo (°/s) — Celular": compute_peak(vel_phone_frontal, x_axis, t_start, t_end, signed=True),
                         "Pico Valgo (Descida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, d_start, d_end, signed=True),
                         "Pico Valgo (Descida) — Celular": compute_peak(angle_phone_frontal, x_axis, d_start, d_end, signed=True),
                         "Pico Valgo (Subida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, s_start, s_end, signed=True),
                         "Pico Valgo (Subida) — Celular": compute_peak(angle_phone_frontal, x_axis, s_start, s_end, signed=True),
+                        "Tempo até Pico Valgo − Flexão (s) — Kinem": diff_t_k,
+                        "Tempo até Pico Valgo − Flexão (s) — Celular": diff_t_p,
+                        "Razão |Valgo|/Flexão — Kinem": razao_k,
+                        "Razão |Valgo|/Flexão — Celular": razao_p,
                         "ADM Quadril Sagital — Kinem": compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end),
                         "ADM Quadril Sagital — Celular": compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end),
                         "ADM Quadril Frontal — Kinem": compute_rom(angle_hip_kinem_frontal, x_axis, t_start, t_end),
                         "ADM Quadril Frontal — Celular": compute_rom(angle_hip_phone_frontal, x_axis, t_start, t_end),
+                        "Estabilidade Tronco — RMS lateral L5 (m)": rms_l5_lateral,
+                        "Estabilidade Tronco — Razão caminho/deslocamento": razao_path_rom,
+                        "Suavidade (Jerk RMS) Joelho Sagital — Kinem": jerk_rms_k,
+                        "Suavidade (Jerk RMS) Joelho Sagital — Celular": jerk_rms_p,
                     })
                 analise_df = pd.DataFrame(analise_rows)
 
                 resultante_analise = {"Trial": "Resultante (média)", "Nota clínica": nota_clinica if nota_clinica else "—"}
+                desvio_analise = {"Trial": "Desvio padrão (variabilidade)", "Nota clínica": "—"}
                 for col in analise_df.columns:
                     if col in ("Trial", "Nota clínica"):
                         continue
                     resultante_analise[col] = analise_df[col].mean()
-                analise_df_full = pd.concat([analise_df, pd.DataFrame([resultante_analise])], ignore_index=True)
+                    desvio_analise[col] = analise_df[col].std()
+                analise_df_full = pd.concat(
+                    [analise_df, pd.DataFrame([resultante_analise]), pd.DataFrame([desvio_analise])],
+                    ignore_index=True,
+                )
 
                 with st.container(border=True):
-                    fmt_cols = {c: "{:.1f}°" for c in analise_df_full.columns if c not in ("Trial", "Nota clínica")}
+                    def fmt_for_col(col):
+                        if "Tempo até" in col:
+                            return "{:+.2f}s"
+                        if "Vel." in col:
+                            return "{:.0f}°/s"
+                        if "Jerk" in col:
+                            return "{:.0f}°/s³"
+                        if "Razão" in col:
+                            return "{:.2f}×"
+                        if "RMS lateral" in col:
+                            return "{:.4f}m"
+                        return "{:.1f}°"
+                    fmt_cols = {c: fmt_for_col(c) for c in analise_df_full.columns if c not in ("Trial", "Nota clínica")}
                     st.dataframe(analise_df_full.style.format(fmt_cols), hide_index=True, use_container_width=True)
 
                 st.caption(
@@ -1073,7 +1140,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 avg_prep_frac = float(np.mean(prep_fracs)) if prep_fracs else 0.3
                 avg_desc_frac = float(np.mean(desc_fracs)) if desc_fracs else 0.6
 
-                def render_overlay_chart(title, kinem_series, phone_series, color_k, color_p):
+                def render_overlay_chart(title, kinem_series, phone_series, color_k, color_p, yaxis_title="Ângulo (graus)"):
                     fig = go.Figure()
                     fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
                     fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
@@ -1098,13 +1165,13 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                         mean_p = np.nanmean(np.array(phone_curves), axis=0)
                         fig.add_trace(go.Scatter(x=x_norm, y=mean_p, mode="lines", line=dict(color=color_p, width=3), name="Celular — resultante"))
                     fig.update_layout(
-                        title=title, xaxis_title="Ciclo normalizado (0-1)", yaxis_title="Ângulo (graus)",
+                        title=title, xaxis_title="Ciclo normalizado (0-1)", yaxis_title=yaxis_title,
                         height=420, width=420, template="plotly_white", hovermode="x unified",
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=40, b=40),
                     )
                     st.plotly_chart(fig, use_container_width=False)
 
-                def render_overlay_chart_single(title, series, color):
+                def render_overlay_chart_single(title, series, color, yaxis_title="Posição vertical L5"):
                     fig = go.Figure()
                     fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
                     fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
@@ -1121,7 +1188,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                         mean_y = np.nanmean(np.array(curves), axis=0)
                         fig.add_trace(go.Scatter(x=x_norm, y=mean_y, mode="lines", line=dict(color=color, width=3), name="Resultante"))
                     fig.update_layout(
-                        title=title, xaxis_title="Ciclo normalizado (0-1)", yaxis_title="Posição vertical L5",
+                        title=title, xaxis_title="Ciclo normalizado (0-1)", yaxis_title=yaxis_title,
                         height=420, width=420, template="plotly_white", hovermode="x unified",
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=40, b=40),
                     )
@@ -1140,6 +1207,13 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 oc5, oc6 = st.columns(2)
                 with oc5:
                     render_overlay_chart_single("L5 — Deslocamento vertical", l5_vertical, "black")
+                with oc6:
+                    render_overlay_chart_single("L5 — Deslocamento lateral (estabilidade de tronco)", l5_lateral, "purple", yaxis_title="Posição lateral (ML)")
+                oc7, oc8 = st.columns(2)
+                with oc7:
+                    render_overlay_chart("Velocidade Angular — Joelho Sagital", vel_kinem_sagital, vel_phone_sagital, "blue", "red", yaxis_title="Velocidade (°/s)")
+                with oc8:
+                    render_overlay_chart("Velocidade Angular — Joelho Frontal (Valgo/Varo)", vel_kinem_frontal, vel_phone_frontal, "green", "darkorange", yaxis_title="Velocidade (°/s)")
 
         # --- Fases do movimento por trial ---
         if trials:
@@ -1188,11 +1262,13 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             rom_df = pd.DataFrame(rom_rows)
 
             resultante = {"Trial": "Resultante (média)"}
+            desvio = {"Trial": "Desvio padrão (variabilidade)"}
             for col in rom_df.columns:
                 if col == "Trial":
                     continue
                 resultante[col] = rom_df[col].mean()
-            rom_df = pd.concat([rom_df, pd.DataFrame([resultante])], ignore_index=True)
+                desvio[col] = rom_df[col].std()
+            rom_df = pd.concat([rom_df, pd.DataFrame([resultante]), pd.DataFrame([desvio])], ignore_index=True)
 
             with st.container(border=True):
                 st.dataframe(

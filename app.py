@@ -1241,43 +1241,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 )
             st.caption("Trials nas bordas (primeiro/último) podem ter fases distorcidas — a janela deles inclui trecho antes do início ou depois do fim da gravação real.")
 
-        # --- ADM (Amplitude de Movimento) por trial ---
-        st.markdown("#### 📏 ADM por trial — Joelho e Quadril (Sagital e Frontal)")
-        if not trials:
-            st.info("Não consegui detectar repetições individuais automaticamente (poucos picos claros no sinal do Kinem).")
-        else:
-            rom_rows = []
-            for i, (t_start, t_end) in enumerate(trials, start=1):
-                rom_rows.append({
-                    "Trial": str(i),
-                    "Kinem — Joelho Sagital": compute_rom(angle_kinem_sagital, x_axis, t_start, t_end),
-                    "Celular — Joelho Sagital": compute_rom(angle_phone_sagital, x_axis, t_start, t_end),
-                    "Kinem — Joelho Frontal": compute_rom(angle_kinem_frontal, x_axis, t_start, t_end),
-                    "Celular — Joelho Frontal": compute_rom(angle_phone_frontal, x_axis, t_start, t_end),
-                    "Kinem — Quadril Sagital": compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end),
-                    "Celular — Quadril Sagital": compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end),
-                    "Kinem — Quadril Frontal": compute_rom(angle_hip_kinem_frontal, x_axis, t_start, t_end),
-                    "Celular — Quadril Frontal": compute_rom(angle_hip_phone_frontal, x_axis, t_start, t_end),
-                })
-            rom_df = pd.DataFrame(rom_rows)
-
-            resultante = {"Trial": "Resultante (média)"}
-            desvio = {"Trial": "Desvio padrão (variabilidade)"}
-            for col in rom_df.columns:
-                if col == "Trial":
-                    continue
-                resultante[col] = rom_df[col].mean()
-                desvio[col] = rom_df[col].std()
-            rom_df = pd.concat([rom_df, pd.DataFrame([resultante]), pd.DataFrame([desvio])], ignore_index=True)
-
-            with st.container(border=True):
-                st.dataframe(
-                    rom_df.style.format({c: "{:.1f}°" for c in rom_df.columns if c != "Trial"}),
-                    hide_index=True, use_container_width=True,
-                )
-            st.caption(f"{len(trials)} repetições detectadas automaticamente pelos picos do Kinem sagital. ADM = máximo − mínimo do ângulo dentro de cada trial.")
-
-
     st.divider()
 
 

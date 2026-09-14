@@ -894,6 +894,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         )
         st.divider()
 
+    nota_clinica = None
     if angle_phone_sagital is None and angle_kinem_sagital is None:
         st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")
     else:
@@ -1362,3 +1363,94 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
+
+    st.divider()
+
+    # ══════════════════════════════════════════
+    # Quadro-resumo do resultado do teste
+    # ══════════════════════════════════════════
+    valid_trials_summary = [(t, p) for t, p in zip(trials, trial_phases) if p]
+    if valid_trials_summary:
+        adm_sag_k, adm_sag_p, peak_valgo_k, peak_valgo_p = [], [], [], []
+        vel_pico_k, jerk_k_list = [], []
+        rms_acc_k_list, rms_acc_p_list, rms_angvel_k_list, rms_angvel_p_list = [], [], [], []
+        for (t_start, t_end), phases in valid_trials_summary:
+            d_start = phases["descida"][0]
+            s_end = phases["subida"][1]
+            a = compute_rom(angle_kinem_sagital, x_axis, t_start, t_end)
+            if a is not None:
+                adm_sag_k.append(a)
+            a = compute_rom(angle_phone_sagital, x_axis, t_start, t_end)
+            if a is not None:
+                adm_sag_p.append(a)
+            a = compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True)
+            if a is not None:
+                peak_valgo_k.append(a)
+            a = compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True)
+            if a is not None:
+                peak_valgo_p.append(a)
+            a = compute_peak(vel_kinem_sagital, x_axis, t_start, t_end)
+            if a is not None:
+                vel_pico_k.append(a)
+            a = compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end)
+            if a is not None:
+                jerk_k_list.append(a)
+            a = compute_rms(acc_ml_kinem_trunk, x_axis, d_start, s_end)
+            if a is not None:
+                rms_acc_k_list.append(a)
+            a = compute_rms(acc_ml_phone_trunk, x_axis, d_start, s_end)
+            if a is not None:
+                rms_acc_p_list.append(a)
+            a = compute_rms(trunk_angvel_kinem, x_axis, d_start, s_end)
+            if a is not None:
+                rms_angvel_k_list.append(a)
+            a = compute_rms(trunk_angvel_phone, x_axis, d_start, s_end)
+            if a is not None:
+                rms_angvel_p_list.append(a)
+
+        def _fmt(lst, suffix="", casas=1):
+            return f"{np.mean(lst):.{casas}f}{suffix}" if lst else "—"
+
+        razao_acc_medias = (np.mean(rms_acc_p_list) / np.mean(rms_acc_k_list)) if rms_acc_k_list and np.mean(rms_acc_k_list) else None
+        razao_angvel_medias = (np.mean(rms_angvel_p_list) / np.mean(rms_angvel_k_list)) if rms_angvel_k_list and np.mean(rms_angvel_k_list) else None
+        nota_txt = nota_clinica if nota_clinica else "não informada"
+
+        resumo_md = f"""
+##### 📘 Resumo do resultado do teste
+
+- **{len(valid_trials_summary)} trials** analisados (repetições segmentadas com sucesso)
+- **ADM de flexão do joelho** (média entre trials): Kinem **{_fmt(adm_sag_k, '°')}** · Celular **{_fmt(adm_sag_p, '°')}**
+- **Pico de valgo/varo** (média entre trials, sinal indica o lado): Kinem **{_fmt(peak_valgo_k, '°')}** · Celular **{_fmt(peak_valgo_p, '°')}**
+- **Velocidade de pico na flexão** (média): **{_fmt(vel_pico_k, '°/s', 0)}**
+- **Suavidade do movimento** (jerk RMS médio, Kinem): **{_fmt(jerk_k_list, '°/s³', 0)}** — quanto menor, mais suave/controlado
+- **Estabilidade de tronco — aceleração lateral**: razão RMS Celular/Kinem = **{f'{razao_acc_medias:.2f}×' if razao_acc_medias else '—'}**
+- **Estabilidade de tronco — velocidade angular**: razão RMS Celular/Kinem = **{f'{razao_angvel_medias:.2f}×' if razao_angvel_medias else '—'}**
+- **Nota clínica informada**: {nota_txt}
+
+*Resumo calculado automaticamente a partir dos trials segmentados — confira a tabela "Ver variáveis" para os valores por trial.*
+"""
+        st.info(resumo_md)
+    else:
+        st.info("📘 **Resumo do resultado do teste** — não há trials segmentados o suficiente pra gerar um resumo automático.")
+
+    # ══════════════════════════════════════════
+    # Quadro-detalhe do método de processamento e análise
+    # ══════════════════════════════════════════
+    with st.container(border=True):
+        st.markdown("""
+##### 🔬 Método de processamento e análise
+
+1. **Sincronização bruta**: pico de aceleração vertical do L5 (Kinem) como referência inicial; correlação cruzada alinha Coxa, Tornozelo e os respectivos celulares a esse mesmo instante (±1s de busca por segmento).
+2. **Recentralização (x=0)**: redefinida para o pico de flexão do joelho (Kinem), não o pico de aceleração — evita ambiguidade quando há um movimento preparatório antes do teste.
+3. **Ângulo do joelho e do quadril**: Kinem via vetores 3D entre marcadores (ângulo = arco-cosseno do produto escalar, ou arco-tangente com sinal nos planos frontal/quadril); celular via filtro complementar (giroscópio integrado + correção pelo acelerômetro, peso do giroscópio α=0,995 — valor otimizado empiricamente).
+4. **Correção de atraso**: desloca a curva do celular no tempo pra alinhar seu pico ao pico do Kinem, por plano — compensa o atraso mecânico de resposta do sensor (tecido mole/fixação da faixa).
+5. **Calibração de amplitude**: fator de escala automático por plano (±1s ao redor do pico), ajustando a amplitude do celular à do Kinem **dessa gravação específica** — não é uma calibração permanente do sensor.
+6. **Segmentação de fases**: preparação/descida/subida detectadas pelo deslocamento vertical do L5 (Kinem), com limiar de sensibilidade ajustável (fração do deslocamento total que marca início/fim do movimento).
+7. **Velocidade e jerk**: derivadas numéricas do ângulo (`np.gradient`); ângulo filtrado (passa-baixa Butterworth, 10Hz) antes de derivar — testado com dados reais: reduz o ruído amplificado pela derivação sem alterar o ângulo em si.
+8. **Estabilidade de tronco**: RMS da aceleração e da velocidade angular laterais **brutas** (sem integrar) do L5, comparando Kinem e celular — testado e validado como mais consistente entre trials do que tentar estimar deslocamento lateral via dupla integração (que se mostrou pouco confiável).
+9. **Tempo até o pico / razão valgo-flexão**: instante e valor do maior desvio de cada curva dentro do trial, comparados entre planos e fontes.
+10. **Variabilidade**: desvio padrão de cada métrica entre os trials detectados (linha "Desvio padrão" nas tabelas).
+
+*Trials nas bordas (primeiro/último) podem ter métricas distorcidas — a janela deles inclui trecho antes do início ou depois do fim da gravação real.*
+""")
+

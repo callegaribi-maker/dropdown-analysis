@@ -1371,61 +1371,126 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # ══════════════════════════════════════════
     valid_trials_summary = [(t, p) for t, p in zip(trials, trial_phases) if p]
     if valid_trials_summary:
-        adm_sag_k, adm_sag_p, peak_valgo_k, peak_valgo_p = [], [], [], []
+        adm_sag_k, adm_sag_p = [], []
+        peak_valgo_k, peak_valgo_p = [], []
+        peak_valgo_desc_k, peak_valgo_desc_p = [], []
+        peak_valgo_sub_k, peak_valgo_sub_p = [], []
         vel_pico_k, jerk_k_list = [], []
-        rms_acc_k_list, rms_acc_p_list, rms_angvel_k_list, rms_angvel_p_list = [], [], [], []
+        rms_acc_k_list, rms_acc_p_list = [], []
+        rms_acc_desc_k, rms_acc_desc_p, rms_acc_sub_k, rms_acc_sub_p = [], [], [], []
+        rms_angvel_k_list, rms_angvel_p_list = [], []
+        rms_angvel_desc_k, rms_angvel_desc_p, rms_angvel_sub_k, rms_angvel_sub_p = [], [], [], []
+
+        def _add(lst, val):
+            if val is not None:
+                lst.append(val)
+
         for (t_start, t_end), phases in valid_trials_summary:
-            d_start = phases["descida"][0]
-            s_end = phases["subida"][1]
-            a = compute_rom(angle_kinem_sagital, x_axis, t_start, t_end)
-            if a is not None:
-                adm_sag_k.append(a)
-            a = compute_rom(angle_phone_sagital, x_axis, t_start, t_end)
-            if a is not None:
-                adm_sag_p.append(a)
-            a = compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True)
-            if a is not None:
-                peak_valgo_k.append(a)
-            a = compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True)
-            if a is not None:
-                peak_valgo_p.append(a)
-            a = compute_peak(vel_kinem_sagital, x_axis, t_start, t_end)
-            if a is not None:
-                vel_pico_k.append(a)
-            a = compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end)
-            if a is not None:
-                jerk_k_list.append(a)
-            a = compute_rms(acc_ml_kinem_trunk, x_axis, d_start, s_end)
-            if a is not None:
-                rms_acc_k_list.append(a)
-            a = compute_rms(acc_ml_phone_trunk, x_axis, d_start, s_end)
-            if a is not None:
-                rms_acc_p_list.append(a)
-            a = compute_rms(trunk_angvel_kinem, x_axis, d_start, s_end)
-            if a is not None:
-                rms_angvel_k_list.append(a)
-            a = compute_rms(trunk_angvel_phone, x_axis, d_start, s_end)
-            if a is not None:
-                rms_angvel_p_list.append(a)
+            d_start, d_end = phases["descida"]
+            s_start, s_end = phases["subida"]
+
+            _add(adm_sag_k, compute_rom(angle_kinem_sagital, x_axis, t_start, t_end))
+            _add(adm_sag_p, compute_rom(angle_phone_sagital, x_axis, t_start, t_end))
+
+            _add(peak_valgo_k, compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True))
+            _add(peak_valgo_p, compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True))
+            _add(peak_valgo_desc_k, compute_peak(angle_kinem_frontal, x_axis, d_start, d_end, signed=True))
+            _add(peak_valgo_desc_p, compute_peak(angle_phone_frontal, x_axis, d_start, d_end, signed=True))
+            _add(peak_valgo_sub_k, compute_peak(angle_kinem_frontal, x_axis, s_start, s_end, signed=True))
+            _add(peak_valgo_sub_p, compute_peak(angle_phone_frontal, x_axis, s_start, s_end, signed=True))
+
+            _add(vel_pico_k, compute_peak(vel_kinem_sagital, x_axis, t_start, t_end))
+            _add(jerk_k_list, compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end))
+
+            _add(rms_acc_k_list, compute_rms(acc_ml_kinem_trunk, x_axis, d_start, s_end))
+            _add(rms_acc_p_list, compute_rms(acc_ml_phone_trunk, x_axis, d_start, s_end))
+            _add(rms_acc_desc_k, compute_rms(acc_ml_kinem_trunk, x_axis, d_start, d_end))
+            _add(rms_acc_desc_p, compute_rms(acc_ml_phone_trunk, x_axis, d_start, d_end))
+            _add(rms_acc_sub_k, compute_rms(acc_ml_kinem_trunk, x_axis, s_start, s_end))
+            _add(rms_acc_sub_p, compute_rms(acc_ml_phone_trunk, x_axis, s_start, s_end))
+
+            _add(rms_angvel_k_list, compute_rms(trunk_angvel_kinem, x_axis, d_start, s_end))
+            _add(rms_angvel_p_list, compute_rms(trunk_angvel_phone, x_axis, d_start, s_end))
+            _add(rms_angvel_desc_k, compute_rms(trunk_angvel_kinem, x_axis, d_start, d_end))
+            _add(rms_angvel_desc_p, compute_rms(trunk_angvel_phone, x_axis, d_start, d_end))
+            _add(rms_angvel_sub_k, compute_rms(trunk_angvel_kinem, x_axis, s_start, s_end))
+            _add(rms_angvel_sub_p, compute_rms(trunk_angvel_phone, x_axis, s_start, s_end))
 
         def _fmt(lst, suffix="", casas=1):
             return f"{np.mean(lst):.{casas}f}{suffix}" if lst else "—"
 
-        razao_acc_medias = (np.mean(rms_acc_p_list) / np.mean(rms_acc_k_list)) if rms_acc_k_list and np.mean(rms_acc_k_list) else None
-        razao_angvel_medias = (np.mean(rms_angvel_p_list) / np.mean(rms_angvel_k_list)) if rms_angvel_k_list and np.mean(rms_angvel_k_list) else None
+        def _razao(lst_p, lst_k):
+            if lst_p and lst_k and np.mean(lst_k):
+                return np.mean(lst_p) / np.mean(lst_k)
+            return None
+
+        razao_adm = _razao(adm_sag_p, adm_sag_k)
+        razao_acc_medias = _razao(rms_acc_p_list, rms_acc_k_list)
+        razao_angvel_medias = _razao(rms_angvel_p_list, rms_angvel_k_list)
         nota_txt = nota_clinica if nota_clinica else "não informada"
+
+        # --- leitura interpretativa: joelho, celular x Kinem ---
+        if razao_adm is None:
+            leitura_adm = "não foi possível comparar (faltam dados de uma das fontes)."
+        elif 0.85 <= razao_adm <= 1.15:
+            leitura_adm = f"o celular captou uma amplitude **bem próxima** do Kinem (proporção {razao_adm:.2f}×)."
+        elif razao_adm < 0.85:
+            leitura_adm = f"o celular **subestimou** a amplitude em relação ao Kinem (proporção {razao_adm:.2f}× — capta {razao_adm*100:.0f}% do real)."
+        else:
+            leitura_adm = f"o celular **superestimou** a amplitude em relação ao Kinem (proporção {razao_adm:.2f}×)."
+
+        # --- leitura interpretativa: joelho, descida vs subida ---
+        media_desc_k = np.mean([abs(v) for v in peak_valgo_desc_k]) if peak_valgo_desc_k else None
+        media_sub_k = np.mean([abs(v) for v in peak_valgo_sub_k]) if peak_valgo_sub_k else None
+        if media_desc_k is not None and media_sub_k is not None:
+            if media_desc_k > media_sub_k * 1.15:
+                leitura_fase_joelho = f"o valgo predominou na **descida** (fase excêntrica): {media_desc_k:.1f}° vs {media_sub_k:.1f}° na subida — sugere menor controle ao absorver a descida."
+            elif media_sub_k > media_desc_k * 1.15:
+                leitura_fase_joelho = f"o valgo predominou na **subida** (fase concêntrica): {media_sub_k:.1f}° vs {media_desc_k:.1f}° na descida — sugere menor controle ao empurrar de volta."
+            else:
+                leitura_fase_joelho = f"o valgo ficou parecido nas duas fases (descida {media_desc_k:.1f}° · subida {media_sub_k:.1f}°) — sem predomínio claro de uma fase."
+        else:
+            leitura_fase_joelho = "não foi possível comparar as fases (dados insuficientes)."
+
+        # --- leitura interpretativa: tronco, descida vs subida ---
+        media_desc_acc_k = np.mean(rms_acc_desc_k) if rms_acc_desc_k else None
+        media_sub_acc_k = np.mean(rms_acc_sub_k) if rms_acc_sub_k else None
+        if media_desc_acc_k is not None and media_sub_acc_k is not None:
+            if media_desc_acc_k > media_sub_acc_k * 1.15:
+                leitura_fase_tronco = f"o tronco balançou mais na **descida** (RMS acel. {media_desc_acc_k:.2f} vs {media_sub_acc_k:.2f} na subida) — sugere menos estabilidade ao absorver o movimento."
+            elif media_sub_acc_k > media_desc_acc_k * 1.15:
+                leitura_fase_tronco = f"o tronco balançou mais na **subida** (RMS acel. {media_sub_acc_k:.2f} vs {media_desc_acc_k:.2f} na descida) — sugere menos estabilidade ao voltar à posição inicial."
+            else:
+                leitura_fase_tronco = f"a instabilidade de tronco ficou parecida nas duas fases (descida {media_desc_acc_k:.2f} · subida {media_sub_acc_k:.2f}, RMS acel. Kinem) — sem predomínio claro."
+        else:
+            leitura_fase_tronco = "não foi possível comparar as fases (dados insuficientes)."
 
         resumo_md = f"""
 ##### 📘 Resumo do resultado do teste
 
-- **{len(valid_trials_summary)} trials** analisados (repetições segmentadas com sucesso)
-- **ADM de flexão do joelho** (média entre trials): Kinem **{_fmt(adm_sag_k, '°')}** · Celular **{_fmt(adm_sag_p, '°')}**
-- **Pico de valgo/varo** (média entre trials, sinal indica o lado): Kinem **{_fmt(peak_valgo_k, '°')}** · Celular **{_fmt(peak_valgo_p, '°')}**
-- **Velocidade de pico na flexão** (média): **{_fmt(vel_pico_k, '°/s', 0)}**
-- **Suavidade do movimento** (jerk RMS médio, Kinem): **{_fmt(jerk_k_list, '°/s³', 0)}** — quanto menor, mais suave/controlado
-- **Estabilidade de tronco — aceleração lateral**: razão RMS Celular/Kinem = **{f'{razao_acc_medias:.2f}×' if razao_acc_medias else '—'}**
-- **Estabilidade de tronco — velocidade angular**: razão RMS Celular/Kinem = **{f'{razao_angvel_medias:.2f}×' if razao_angvel_medias else '—'}**
-- **Nota clínica informada**: {nota_txt}
+**{len(valid_trials_summary)} trials** analisados (repetições segmentadas com sucesso) · Nota clínica informada: **{nota_txt}**
+
+---
+**🦵 Joelho — Celular vs. Kinem**
+- ADM de flexão (média): Kinem **{_fmt(adm_sag_k, '°')}** · Celular **{_fmt(adm_sag_p, '°')}** — {leitura_adm}
+- Pico de valgo/varo (média, sinal = lado): Kinem **{_fmt(peak_valgo_k, '°')}** · Celular **{_fmt(peak_valgo_p, '°')}**
+- Velocidade de pico na flexão: **{_fmt(vel_pico_k, '°/s', 0)}** · Suavidade (jerk RMS, Kinem): **{_fmt(jerk_k_list, '°/s³', 0)}** (quanto menor, mais suave)
+
+**🦵 Joelho — o que aconteceu em cada fase**
+- Valgo na descida: Kinem **{_fmt(peak_valgo_desc_k, '°')}** · Celular **{_fmt(peak_valgo_desc_p, '°')}**
+- Valgo na subida: Kinem **{_fmt(peak_valgo_sub_k, '°')}** · Celular **{_fmt(peak_valgo_sub_p, '°')}**
+- {leitura_fase_joelho}
+
+---
+**🧍 Coluna/Tronco — Celular vs. Kinem**
+- RMS aceleração lateral: Kinem **{_fmt(rms_acc_k_list, '', 3)}** · Celular **{_fmt(rms_acc_p_list, '', 3)}** (razão {f'{razao_acc_medias:.2f}×' if razao_acc_medias else '—'})
+- RMS velocidade angular: Kinem **{_fmt(rms_angvel_k_list, '°/s', 1)}** · Celular **{_fmt(rms_angvel_p_list, '°/s', 1)}** (razão {f'{razao_angvel_medias:.2f}×' if razao_angvel_medias else '—'})
+- *A razão Celular/Kinem se manteve consistente entre trials nos testes que fizemos — é o número mais importante pra validar o sensor, não a escala absoluta.*
+
+**🧍 Coluna/Tronco — o que aconteceu em cada fase**
+- Aceleração lateral (RMS) na descida: Kinem **{_fmt(rms_acc_desc_k, '', 3)}** · Celular **{_fmt(rms_acc_desc_p, '', 3)}**
+- Aceleração lateral (RMS) na subida: Kinem **{_fmt(rms_acc_sub_k, '', 3)}** · Celular **{_fmt(rms_acc_sub_p, '', 3)}**
+- {leitura_fase_tronco}
 
 *Resumo calculado automaticamente a partir dos trials segmentados — confira a tabela "Ver variáveis" para os valores por trial.*
 """

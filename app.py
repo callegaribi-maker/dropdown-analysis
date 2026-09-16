@@ -514,17 +514,9 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # ter que adivinhar qual pico de aceleração é "o certo" quando há mais
     # de um candidato (ex.: um movimento preparatório antes do teste).
     #
-    # Se há uma calibração externa (joelho parado num ângulo conhecido por
-    # alguns segundos), esse platô costuma ser o MAIOR ângulo da gravação
-    # inteira (maior até que os picos do teste em si) — buscar o "pico de
-    # flexão" global cairia dentro do platô de calibração, não no primeiro
-    # movimento do teste. Por isso, quando a calibração está habilitada,
-    # detectamos o platô primeiro e excluímos essa janela da busca do pico.
     kinem_angle_kw = (GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"])
     angle_peak_time = 0.0
     calib_window = None
-    calib_offset_kinem_sagital = 0.0
-    calib_offset_phone_sagital = 0.0
     if not kdf.empty:
         angle_kinem_sagital_prelim = knee_angle_from_kinem_plane(kdf, *kinem_angle_kw, plane="sagittal")
         if angle_kinem_sagital_prelim is not None:
@@ -539,14 +531,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 )
                 if calib_window is not None:
                     c_start, c_end = calib_window
-                    st.caption(f"🎯 Janela de calibração detectada: {c_start:+.2f}s a {c_end:+.2f}s ({c_end-c_start:.1f}s) — referência: {angulo_calib_conhecido:.0f}°.")
-                    calib_mask = (x_axis[:n_prelim] >= c_start) & (x_axis[:n_prelim] <= c_end)
-                    calib_vals_kinem = angle_kinem_sagital_prelim[:n_prelim][calib_mask]
-                    calib_vals_kinem = calib_vals_kinem[~np.isnan(calib_vals_kinem)]
-                    if len(calib_vals_kinem) > 0:
-                        calib_offset_kinem_sagital = angulo_calib_conhecido - float(np.mean(calib_vals_kinem))
-                        st.caption(f"📐 Kinem mediu {np.mean(calib_vals_kinem):.1f}° nessa janela → offset de {calib_offset_kinem_sagital:+.1f}° aplicado.")
-                    # exclui o platô de calibração (+ uma margem) da busca do pico de flexão
+                    st.caption(f"🎯 Janela de calibração detectada: {c_start:+.2f}s a {c_end:+.2f}s ({c_end-c_start:.1f}s) — referência: {angulo_calib_conhecido:.0f}°. A calibração (ganho + offset) é aplicada mais abaixo, usando também o início da gravação como 0° conhecido.")
                     # busca o pico só DEPOIS que a calibração termina de vez —
                     # excluir só a janela do platô não bastava, porque a
                     # "rampa" de subida até o platô também não é um pico de
@@ -679,20 +664,30 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
     if zero_baseline:
         if usar_calib_externa and calib_window is not None:
-            # Calibração externa (goniômetro) substitui o "zerar no início" só
-            # pro plano sagital do joelho — usa offset fixo calibrado contra um
-            # ângulo real conhecido, em vez de assumir 0°=extensão completa.
-            angle_kinem_sagital = angle_kinem_sagital + calib_offset_kinem_sagital
+            # Calibração externa por 2 pontos (goniômetro): início da gravação
+            # (em pé, 0° conhecido) + janela de calibração (ângulo conhecido,
+            # ex. 90°) — corrige VIÉS e ESCALA/GANHO juntos, não só o viés.
+            # Reta: corrigido = bruto * ganho + offset, resolvida pelos 2 pontos.
             c_start, c_end = calib_window
-            if angle_phone_sagital is not None:
-                n_p = min(len(angle_phone_sagital), len(x_axis))
-                calib_mask_p = (x_axis[:n_p] >= c_start) & (x_axis[:n_p] <= c_end)
-                calib_vals_phone = angle_phone_sagital[:n_p][calib_mask_p]
-                calib_vals_phone = calib_vals_phone[~np.isnan(calib_vals_phone)]
-                if len(calib_vals_phone) > 0:
-                    calib_offset_phone_sagital = angulo_calib_conhecido - float(np.mean(calib_vals_phone))
-                    st.caption(f"📐 Celular mediu {np.mean(calib_vals_phone):.1f}° nessa janela → offset de {calib_offset_phone_sagital:+.1f}° aplicado (calibração independente, sem depender do Kinem).")
-                angle_phone_sagital = angle_phone_sagital + calib_offset_phone_sagital
+
+            def _calibra_2pontos(series, label):
+                if series is None:
+                    return None, None, None
+                n_s = min(len(series), len(x_axis))
+                mask_base = (x_axis[:n_s] >= baseline_start) & (x_axis[:n_s] <= baseline_end)
+                mask_calib = (x_axis[:n_s] >= c_start) & (x_axis[:n_s] <= c_end)
+                raw_base = np.nanmean(series[:n_s][mask_base])
+                raw_calib = np.nanmean(series[:n_s][mask_calib])
+                if not np.isfinite(raw_base) or not np.isfinite(raw_calib) or raw_calib == raw_base:
+                    st.caption(f"⚠️ Não deu pra calibrar {label} — dados insuficientes na janela de base ou de calibração.")
+                    return series, None, None
+                ganho = angulo_calib_conhecido / (raw_calib - raw_base)
+                offset = -ganho * raw_base
+                st.caption(f"📐 {label}: 0° em pé = {raw_base:.1f}° bruto · {angulo_calib_conhecido:.0f}° na calibração = {raw_calib:.1f}° bruto → ganho ×{ganho:.2f}, offset {offset:+.1f}°.")
+                return series * ganho + offset, ganho, offset
+
+            angle_kinem_sagital, gain_calib_k, offset_calib_k = _calibra_2pontos(angle_kinem_sagital, "Kinem")
+            angle_phone_sagital, gain_calib_p, offset_calib_p = _calibra_2pontos(angle_phone_sagital, "Celular")
         else:
             angle_kinem_sagital = zero_reference_angle(angle_kinem_sagital, x_axis, baseline_start, baseline_end)
             angle_phone_sagital = zero_reference_angle(angle_phone_sagital, x_axis, baseline_start, baseline_end)
@@ -703,6 +698,36 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         angle_hip_phone_sagital = zero_reference_angle(angle_hip_phone_sagital, x_axis, baseline_start, baseline_end)
         angle_hip_kinem_frontal = zero_reference_angle(angle_hip_kinem_frontal, x_axis, baseline_start, baseline_end)
         angle_hip_phone_frontal = zero_reference_angle(angle_hip_phone_frontal, x_axis, baseline_start, baseline_end)
+
+    # ── Exclui o trecho de calibração externa de QUALQUER busca de pico
+    # daqui pra frente (calibração de amplitude, correção de atraso,
+    # detecção de trials) — sem isso, o platô de calibração (que vira o
+    # maior valor da gravação depois do offset) "rouba" a âncora dessas
+    # buscas automáticas, bagunçando a calibração de ganho do celular.
+    # Testado com dados reais: sem essa máscara, o resultado piora em vez
+    # de melhorar.
+    if usar_calib_externa and calib_window is not None:
+        c_start, c_end = calib_window
+        margin = 1.0
+
+        def _mask_calib(series):
+            if series is None:
+                return None
+            n = min(len(series), len(x_axis))
+            out = series.copy()
+            mask = (x_axis[:n] >= c_start - margin) & (x_axis[:n] <= c_end + margin)
+            out[:n][mask] = np.nan
+            return out
+
+        angle_kinem_sagital = _mask_calib(angle_kinem_sagital)
+        angle_phone_sagital = _mask_calib(angle_phone_sagital)
+        angle_kinem_frontal = _mask_calib(angle_kinem_frontal)
+        angle_phone_frontal = _mask_calib(angle_phone_frontal)
+        angle_hip_kinem_sagital = _mask_calib(angle_hip_kinem_sagital)
+        angle_hip_phone_sagital = _mask_calib(angle_hip_phone_sagital)
+        angle_hip_kinem_frontal = _mask_calib(angle_hip_kinem_frontal)
+        angle_hip_phone_frontal = _mask_calib(angle_hip_phone_frontal)
+        st.caption(f"✂️ Trecho de {c_start-margin:+.1f}s a {c_end+margin:+.1f}s (calibração) excluído da análise — não conta como parte do teste.")
 
     apply_corrections = st.radio(
         "Ângulo do celular:", ["Com correções (atraso + calibração de amplitude)", "Sem correções (estimativa bruta)"],

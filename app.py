@@ -35,6 +35,7 @@ from signal_utils import (
     estimate_time_lag_from_peaks,
     find_highest_peak,
     find_sync_xcorr,
+    find_plateau_window,
     fit_scale_gain,
     get_aligned_data,
     hip_angle_from_phone_plane,
@@ -69,13 +70,13 @@ GROUPS = {
                file_kw=(("acel", "l5"), ("acc", "l5"))),
     "coxa": dict(label="Coxa", emoji="🟠", kinem_kw=("trocanter",),
                  file_kw=(("acel", "coxa"), ("acc", "coxa"), ("acel", "quadril"), ("acc", "quadril"))),
-    "tornozelo": dict(label="Tornozelo", emoji="🔵", kinem_kw=("torn",),
-                      file_kw=(("acel", "tornozelo"), ("acc", "tornozelo"), ("acel", "ankle"), ("acc", "ankle"))),
+    "tornozelo": dict(label="Tornozelo", emoji="🔵", kinem_kw=("torn", "maleolo"),
+                      file_kw=(("acel", "tornozelo"), ("acc", "tornozelo"), ("acel", "ankle"), ("acc", "ankle"), ("acel", "perna"), ("acc", "perna"))),
 }
 GYR_FILE_KW = {
     "l5": (("gyro", "l5"), ("gyr", "l5")),
     "coxa": (("gyro", "coxa"), ("gyr", "coxa"), ("gyro", "quadril"), ("gyr", "quadril")),
-    "tornozelo": (("gyro", "tornozelo"), ("gyr", "tornozelo"), ("gyro", "ankle"), ("gyr", "ankle")),
+    "tornozelo": (("gyro", "tornozelo"), ("gyr", "tornozelo"), ("gyro", "ankle"), ("gyr", "ankle"), ("gyro", "perna"), ("gyr", "perna")),
 }
 
 DEFAULT_SESSION_STATE = {
@@ -159,7 +160,9 @@ with st.sidebar:
         "Coluna Tornozelo vertical (referência sync)", kinem_num,
         index=col_default(kinem_num, [
             "osso externo do torn. dir. a(z)", "osso externo do torn. a(z)",
-            "torn. dir. a(z)", "osso externo do torn.", "tornozelo", "torn",
+            "maleolo lateral dir. a(z)", "maleolo dir. a(z)", "maleolo a(z)",
+            "torn. dir. a(z)", "osso externo do torn.", "maleolo lateral dir.",
+            "tornozelo", "torn", "maleolo",
         ]),
         key="kinem_col_tornozelo",
     )
@@ -210,6 +213,21 @@ with st.sidebar:
             "Filtro complementar (ângulo do joelho) — peso do giroscópio", 0.05, 0.999,
             value=0.995, step=0.005,
             help="Mais próximo de 1 = confia mais no giroscópio (menos deriva do acelerômetro). 0,995 tende a captar melhor a amplitude do plano frontal (valgo/varo) sem prejudicar o sagital — testado empiricamente. Valores baixos (perto de 0.05) confiam quase só no acelerômetro.",
+        )
+
+    with st.expander("🎯 Calibração externa (goniômetro)", expanded=False):
+        usar_calib_externa = st.checkbox(
+            "Usar calibração externa (joelho mantido num ângulo conhecido por alguns segundos)",
+            value=False, key="usar_calib_externa",
+            help="Se você gravou um trecho com o joelho fletido num ângulo conhecido (medido com goniômetro, mantido parado por alguns segundos), isso corrige o Kinem E o celular por um offset fixo — calibração independente, sem depender de comparar um com o outro.",
+        )
+        angulo_calib_conhecido = st.number_input(
+            "Ângulo de referência conhecido (°)", value=90.0, step=1.0,
+            help="O ângulo real medido com o goniômetro durante o trecho parado.",
+        )
+        calib_min_duration = st.number_input(
+            "Duração mínima do platô a procurar (s)", value=5.0, min_value=1.0, step=0.5,
+            help="A calibração é detectada automaticamente como o maior trecho estável (variação pequena) com pelo menos essa duração.",
         )
 
 
@@ -495,20 +513,59 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # 0" na tela, o pico de flexão é mais direto e sem ambiguidade — evita
     # ter que adivinhar qual pico de aceleração é "o certo" quando há mais
     # de um candidato (ex.: um movimento preparatório antes do teste).
+    #
+    # Se há uma calibração externa (joelho parado num ângulo conhecido por
+    # alguns segundos), esse platô costuma ser o MAIOR ângulo da gravação
+    # inteira (maior até que os picos do teste em si) — buscar o "pico de
+    # flexão" global cairia dentro do platô de calibração, não no primeiro
+    # movimento do teste. Por isso, quando a calibração está habilitada,
+    # detectamos o platô primeiro e excluímos essa janela da busca do pico.
     kinem_angle_kw = (GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"])
     angle_peak_time = 0.0
+    calib_window = None
+    calib_offset_kinem_sagital = 0.0
+    calib_offset_phone_sagital = 0.0
     if not kdf.empty:
         angle_kinem_sagital_prelim = knee_angle_from_kinem_plane(kdf, *kinem_angle_kw, plane="sagittal")
         if angle_kinem_sagital_prelim is not None:
             n_prelim = min(len(angle_kinem_sagital_prelim), len(x_axis))
             valid_prelim = ~np.isnan(angle_kinem_sagital_prelim[:n_prelim])
+
+            search_mask = np.ones(n_prelim, dtype=bool)
+            if usar_calib_externa:
+                calib_window = find_plateau_window(
+                    angle_kinem_sagital_prelim, x_axis, search_start=x_axis[:n_prelim].min(),
+                    min_duration=calib_min_duration, tol_deg=6.0,
+                )
+                if calib_window is not None:
+                    c_start, c_end = calib_window
+                    st.caption(f"🎯 Janela de calibração detectada: {c_start:+.2f}s a {c_end:+.2f}s ({c_end-c_start:.1f}s) — referência: {angulo_calib_conhecido:.0f}°.")
+                    calib_mask = (x_axis[:n_prelim] >= c_start) & (x_axis[:n_prelim] <= c_end)
+                    calib_vals_kinem = angle_kinem_sagital_prelim[:n_prelim][calib_mask]
+                    calib_vals_kinem = calib_vals_kinem[~np.isnan(calib_vals_kinem)]
+                    if len(calib_vals_kinem) > 0:
+                        calib_offset_kinem_sagital = angulo_calib_conhecido - float(np.mean(calib_vals_kinem))
+                        st.caption(f"📐 Kinem mediu {np.mean(calib_vals_kinem):.1f}° nessa janela → offset de {calib_offset_kinem_sagital:+.1f}° aplicado.")
+                    # exclui o platô de calibração (+ uma margem) da busca do pico de flexão
+                    # busca o pico só DEPOIS que a calibração termina de vez —
+                    # excluir só a janela do platô não bastava, porque a
+                    # "rampa" de subida até o platô também não é um pico de
+                    # movimento do teste em si (testado com dados reais).
+                    search_mask = x_axis[:n_prelim] > (c_end + 1.0)
+                else:
+                    st.caption("⚠️ Não encontrei um platô estável — confira a duração mínima ou desative a calibração externa.")
+
+            valid_prelim = valid_prelim & search_mask
             if np.any(valid_prelim):
-                peak_idx_prelim = np.nanargmax(angle_kinem_sagital_prelim[:n_prelim])
+                masked_vals = np.where(valid_prelim, angle_kinem_sagital_prelim[:n_prelim], -np.inf)
+                peak_idx_prelim = int(np.nanargmax(masked_vals))
                 angle_peak_time = float(x_axis[:n_prelim][peak_idx_prelim])
                 if abs(angle_peak_time) > 1e-9:
                     x_axis = x_axis - angle_peak_time
                     x_min_data, x_max_data = float(x_axis.min()), float(x_axis.max())
                     st.caption(f"↕️ Referência 0s recentralizada no pico de flexão do joelho (estava a {angle_peak_time:+.2f}s do pico de aceleração usado pra sincronizar os arquivos).")
+                if calib_window is not None:
+                    calib_window = (calib_window[0] - angle_peak_time, calib_window[1] - angle_peak_time)
 
     verif_cols = st.columns(len(GROUPS))
     for col, (gkey, gdef) in zip(verif_cols, GROUPS.items()):
@@ -621,8 +678,24 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     baseline_start, baseline_end = x_min_data, x_min_data + 0.5
 
     if zero_baseline:
-        angle_kinem_sagital = zero_reference_angle(angle_kinem_sagital, x_axis, baseline_start, baseline_end)
-        angle_phone_sagital = zero_reference_angle(angle_phone_sagital, x_axis, baseline_start, baseline_end)
+        if usar_calib_externa and calib_window is not None:
+            # Calibração externa (goniômetro) substitui o "zerar no início" só
+            # pro plano sagital do joelho — usa offset fixo calibrado contra um
+            # ângulo real conhecido, em vez de assumir 0°=extensão completa.
+            angle_kinem_sagital = angle_kinem_sagital + calib_offset_kinem_sagital
+            c_start, c_end = calib_window
+            if angle_phone_sagital is not None:
+                n_p = min(len(angle_phone_sagital), len(x_axis))
+                calib_mask_p = (x_axis[:n_p] >= c_start) & (x_axis[:n_p] <= c_end)
+                calib_vals_phone = angle_phone_sagital[:n_p][calib_mask_p]
+                calib_vals_phone = calib_vals_phone[~np.isnan(calib_vals_phone)]
+                if len(calib_vals_phone) > 0:
+                    calib_offset_phone_sagital = angulo_calib_conhecido - float(np.mean(calib_vals_phone))
+                    st.caption(f"📐 Celular mediu {np.mean(calib_vals_phone):.1f}° nessa janela → offset de {calib_offset_phone_sagital:+.1f}° aplicado (calibração independente, sem depender do Kinem).")
+                angle_phone_sagital = angle_phone_sagital + calib_offset_phone_sagital
+        else:
+            angle_kinem_sagital = zero_reference_angle(angle_kinem_sagital, x_axis, baseline_start, baseline_end)
+            angle_phone_sagital = zero_reference_angle(angle_phone_sagital, x_axis, baseline_start, baseline_end)
         angle_kinem_3d = zero_reference_angle(angle_kinem_3d, x_axis, baseline_start, baseline_end)
         angle_kinem_frontal = zero_reference_angle(angle_kinem_frontal, x_axis, baseline_start, baseline_end)
         angle_phone_frontal = zero_reference_angle(angle_phone_frontal, x_axis, baseline_start, baseline_end)

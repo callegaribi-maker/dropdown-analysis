@@ -526,27 +526,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
     st.divider()
 
-    # ══════════════════════════════════════════
-    # Seleção de janela (só pra exibição/exportação — não afeta cálculos)
-    # ══════════════════════════════════════════
-    st.subheader("🪟 Seleção de janela")
-    wc1, wc2 = st.columns(2)
-    with wc1:
-        view_start = st.number_input(
-            "Início (s) relativo ao pico", value=float(x_min_data), step=0.5, key="view_start",
-        )
-    with wc2:
-        view_end = st.number_input(
-            "Fim (s) relativo ao pico", value=float(x_max_data), step=0.5, key="view_end",
-        )
-
-    # A busca automática de janela (correção de atraso/amplitude, mais
-    # abaixo) passa a respeitar o "Início" escolhido aqui — evita que um
-    # platô/trecho estranho antes do início escolhido "roube" a âncora
-    # dessas buscas automáticas (mesmo problema que já vimos antes com
-    # trechos de calibração).
-    x_min_data = max(x_min_data, view_start)
-    x_max_data = min(x_max_data, view_end)
+    view_start, view_end = float(x_min_data), float(x_max_data)
 
     st.divider()
 
@@ -554,13 +534,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # Ângulo do joelho (celular vs. Kinem)
     # ══════════════════════════════════════════
     st.subheader("🦵 Ângulo do joelho")
-    st.caption(
-        "Sagital (flexão/extensão): sempre positivo, 0° = extensão completa, aumenta com a flexão — "
-        "celular e Kinem usam a mesma definição, diretamente comparáveis. "
-        "Frontal (valgo/varo) tem sinal (pode ficar negativo): o sinal indica "
-        "o lado do desvio, mas qual sinal corresponde a qual lado clínico depende de como os sensores/"
-        "marcadores foram orientados no seu setup — veja a nota abaixo."
-    )
 
     # O ângulo é calculado a partir dos dados sincronizados BRUTOS (reamostrados,
     # sem detrend/filtro): o detrend distorce a posição 3D real do Kinem e
@@ -624,7 +597,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         kdf_raw, *kinem_angle_kw, plane="sagittal",
     ) if not kdf_raw.empty else None
 
-    st.caption("Mostrando os planos anatômicos: sagital e frontal (valgo/varo) — celular e Kinem.")
     angle_kinem_3d = angle_kinem_frontal = None
     angle_phone_frontal = None
     if not kdf_raw.empty:
@@ -636,113 +608,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             aligned_raw[pf_torn["acc"]], aligned_raw[pf_torn["gyr"]],
             pfs, plane="frontal", alpha=cf_alpha,
         )
-
-    zero_baseline = st.checkbox(
-        "Zerar no início (0° = extensão completa)", value=True, key="zero_baseline",
-        help="Usa a média nos primeiros 0.5s da gravação como referência de 0° — o resto do sinal passa a mostrar o quanto flexionou/desviou a partir dessa postura.",
-    )
-    baseline_start, baseline_end = x_min_data, x_min_data + 0.5
-
-    if zero_baseline:
-        angle_kinem_sagital = zero_reference_angle(angle_kinem_sagital, x_axis, baseline_start, baseline_end)
-        angle_phone_sagital = zero_reference_angle(angle_phone_sagital, x_axis, baseline_start, baseline_end)
-        angle_kinem_3d = zero_reference_angle(angle_kinem_3d, x_axis, baseline_start, baseline_end)
-        angle_kinem_frontal = zero_reference_angle(angle_kinem_frontal, x_axis, baseline_start, baseline_end)
-        angle_phone_frontal = zero_reference_angle(angle_phone_frontal, x_axis, baseline_start, baseline_end)
-        angle_hip_kinem_sagital = zero_reference_angle(angle_hip_kinem_sagital, x_axis, baseline_start, baseline_end)
-        angle_hip_phone_sagital = zero_reference_angle(angle_hip_phone_sagital, x_axis, baseline_start, baseline_end)
-        angle_hip_kinem_frontal = zero_reference_angle(angle_hip_kinem_frontal, x_axis, baseline_start, baseline_end)
-        angle_hip_phone_frontal = zero_reference_angle(angle_hip_phone_frontal, x_axis, baseline_start, baseline_end)
-
-    apply_corrections = st.radio(
-        "Ângulo do celular:", ["Com correções (atraso + calibração de amplitude)", "Sem correções (estimativa bruta)"],
-        index=0, horizontal=True, key="apply_corrections",
-    ) == "Com correções (atraso + calibração de amplitude)"
-
-    if apply_corrections:
-        # ── Correção de atraso no tempo do celular (corrige atraso mecânico —
-        # ex.: o sensor preso por faixa sobre tecido mole responde um instante
-        # depois do movimento real do osso, medido pelo Kinem) ──
-        # Detecta o atraso usando uma janela mais larga (±1.6s) que a de
-        # calibração de amplitude, pra não cortar o pico do celular fora da
-        # busca se o atraso for grande.
-        lag_win_sag = auto_calibration_window(angle_kinem_sagital, x_axis, x_min_data, x_max_data, half_width=1.6)
-        lag_win_front = auto_calibration_window(angle_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
-        lag_win_hip_sag = auto_calibration_window(angle_hip_kinem_sagital, x_axis, x_min_data, x_max_data, half_width=1.6)
-        lag_win_hip_front = auto_calibration_window(angle_hip_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
-
-        lag_sagital = estimate_time_lag_from_peaks(angle_kinem_sagital, angle_phone_sagital, x_axis, *lag_win_sag)
-        lag_frontal = estimate_time_lag_from_peaks(angle_kinem_frontal, angle_phone_frontal, x_axis, *lag_win_front, signed=True)
-        lag_hip_sagital = estimate_time_lag_from_peaks(angle_hip_kinem_sagital, angle_hip_phone_sagital, x_axis, *lag_win_hip_sag)
-        lag_hip_frontal = estimate_time_lag_from_peaks(angle_hip_kinem_frontal, angle_hip_phone_frontal, x_axis, *lag_win_hip_front, signed=True)
-
-        angle_phone_sagital = apply_time_shift(angle_phone_sagital, pfs, lag_sagital)
-        angle_phone_frontal = apply_time_shift(angle_phone_frontal, pfs, lag_frontal)
-        angle_hip_phone_sagital = apply_time_shift(angle_hip_phone_sagital, pfs, lag_hip_sagital)
-        angle_hip_phone_frontal = apply_time_shift(angle_hip_phone_frontal, pfs, lag_hip_frontal)
-
-        lag_msgs = []
-        if lag_sagital is not None:
-            lag_msgs.append(f"joelho sagital {lag_sagital:+.2f}s")
-        if lag_frontal is not None:
-            lag_msgs.append(f"joelho frontal {lag_frontal:+.2f}s")
-        if lag_hip_sagital is not None:
-            lag_msgs.append(f"quadril sagital {lag_hip_sagital:+.2f}s")
-        if lag_hip_frontal is not None:
-            lag_msgs.append(f"quadril frontal {lag_hip_frontal:+.2f}s")
-        if lag_msgs:
-            st.caption(f"⏱️ Atraso do celular corrigido (adiantado no tempo): {', '.join(lag_msgs)} — positivo = celular estava atrasado em relação ao Kinem.")
-
-        # ── Calibração de amplitude do celular (corrige desalinhamento de
-        # montagem / artefato de tecido mole, que tende a atenuar o sinal do
-        # celular por um fator ~constante em relação ao Kinem) ──
-        # Cada plano usa sua PRÓPRIA janela automática (±1s ao redor do pico
-        # daquele plano específico no Kinem), não uma janela única baseada no
-        # sagital — frontal pode ter o pico em outro instante (ex.: atraso
-        # mecânico do sensor no tecido mole), então ancorar todos no pico
-        # sagital sub-otimizaria a calibração dos outros planos.
-        cal_start_sag, cal_end_sag = auto_calibration_window(angle_kinem_sagital, x_axis, x_min_data, x_max_data)
-        cal_start_front, cal_end_front = auto_calibration_window(angle_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True)
-        cal_start_hip_sag, cal_end_hip_sag = auto_calibration_window(angle_hip_kinem_sagital, x_axis, x_min_data, x_max_data)
-        cal_start_hip_front, cal_end_hip_front = auto_calibration_window(angle_hip_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True)
-
-        st.caption(
-            "A amplitude do celular é calibrada automaticamente pra bater com o Kinem "
-            "(±1s ao redor do pico de cada plano, calibrado separadamente, já com o atraso corrigido). "
-            "Corrige desalinhamento de montagem/tecido mole **dessa gravação específica** — não é uma "
-            "calibração permanente do sensor."
-        )
-
-        gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start_sag, cal_end_sag)
-        if gain_sagital is not None and angle_phone_sagital is not None:
-            angle_phone_sagital = angle_phone_sagital * gain_sagital
-        gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start_front, cal_end_front)
-        if gain_frontal is not None and angle_phone_frontal is not None:
-            angle_phone_frontal = angle_phone_frontal * gain_frontal
-
-        gain_hip_sagital = fit_scale_gain(angle_hip_kinem_sagital, angle_hip_phone_sagital, x_axis, cal_start_hip_sag, cal_end_hip_sag)
-        if gain_hip_sagital is not None and angle_hip_phone_sagital is not None:
-            angle_hip_phone_sagital = angle_hip_phone_sagital * gain_hip_sagital
-
-        gain_hip_frontal = fit_scale_gain(angle_hip_kinem_frontal, angle_hip_phone_frontal, x_axis, cal_start_hip_front, cal_end_hip_front)
-        if gain_hip_frontal is not None and angle_hip_phone_frontal is not None:
-            angle_hip_phone_frontal = angle_hip_phone_frontal * gain_hip_frontal
-
-        gain_msgs = []
-        if gain_sagital is not None:
-            gain_msgs.append(f"joelho sagital ×{gain_sagital:.2f}")
-        if gain_frontal is not None:
-            gain_msgs.append(f"joelho frontal ×{gain_frontal:.2f}")
-        if gain_hip_sagital is not None:
-            gain_msgs.append(f"quadril sagital ×{gain_hip_sagital:.2f}")
-        if gain_hip_frontal is not None:
-            gain_msgs.append(f"quadril frontal ×{gain_hip_frontal:.2f}")
-        if gain_msgs:
-            st.caption(f"📐 Fator de calibração aplicado ao celular: {', '.join(gain_msgs)} (não mexe no Kinem).")
-        else:
-            st.caption("⚠️ Não deu pra calibrar — confira se há dados de ambas as fontes nessa janela.")
-    else:
-        st.caption("📴 Mostrando a estimativa bruta do celular, sem correção de atraso nem calibração de amplitude.")
 
     # ── Velocidade angular (derivada dos ângulos já corrigidos/calibrados) —
     # métrica de qualidade de movimento: quão rápido o joelho flexiona/desvia,

@@ -27,6 +27,7 @@ from signal_utils import (
     col_default,
     compute_derivative,
     compute_path_length,
+    compute_mean,
     compute_peak,
     compute_rms,
     compute_rom,
@@ -914,35 +915,57 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             st.plotly_chart(fig_front, use_container_width=True)
             st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
 
-        # --- Calibração funcional (goniômetro no Trial 1) ---
-        # Trial 1 sempre como referência; você digita o ângulo real medido
-        # ali (ex.: joelho a 90° com goniômetro) — cada fonte (Kinem,
-        # celular) ganha seu próprio offset simples (soma/subtrai um número
-        # fixo), sem ganho/escala. Mesma lógica usada com sucesso no script
-        # do cotovelo. Depois de calibrar, o gráfico sagital é mostrado de
-        # novo, já calibrado.
+        # --- Calibração funcional (goniômetro numa janela específica) ---
+        # Você escolhe (ou ajusta) a janela exata de calibração — por
+        # padrão, os limites do Trial 1, mas totalmente editável, já que o
+        # Trial 1 pode incluir mais de um evento (ex.: platô de calibração +
+        # primeiro step-down) e um "pico bruto" ali pode pegar pontos
+        # diferentes pro Kinem e pro celular. Usa a MÉDIA da janela (não o
+        # máximo), que é bem menos sensível a picos pontuais/ruído.
         st.divider()
-        st.subheader("🎯 Calibração funcional (Trial 1 = referência)")
+        st.subheader("🎯 Calibração funcional")
         if not trials:
             st.info("Nenhum trial detectado — não dá pra calibrar.")
         else:
-            angulo_calib_conhecido = st.number_input(
-                "Ângulo real conhecido no Trial 1 (°, medido com goniômetro)", value=90.0, step=1.0, key="angulo_calib_conhecido",
+            t_start_default, t_end_default = trials[0]
+            cw1, cw2, cw3 = st.columns(3)
+            angulo_calib_conhecido = cw1.number_input(
+                "Ângulo real conhecido (°, medido com goniômetro)", value=90.0, step=1.0, key="angulo_calib_conhecido",
             )
-            t_start_calib, t_end_calib = trials[0]
-            pico_kinem_calib = compute_peak(angle_kinem_sagital, x_axis, t_start_calib, t_end_calib)
-            pico_phone_calib = compute_peak(angle_phone_sagital, x_axis, t_start_calib, t_end_calib)
+            calib_win_start = cw2.number_input(
+                "Início da janela de calibração (s)", value=float(t_start_default), step=0.5, key="calib_win_start",
+            )
+            calib_win_end = cw3.number_input(
+                "Fim da janela de calibração (s)", value=float(t_end_default), step=0.5, key="calib_win_end",
+            )
+            st.caption(
+                f"Usando a **média** do ângulo entre {calib_win_start:+.2f}s e {calib_win_end:+.2f}s como referência bruta "
+                "(não o pico) — ajuste essa janela olhando o gráfico bruto acima, pra ela cobrir só o trecho de calibração "
+                "(ex.: o platô parado), sem misturar com nenhum step-down."
+            )
+
+            media_kinem_calib = compute_mean(angle_kinem_sagital, x_axis, calib_win_start, calib_win_end)
+            media_phone_calib = compute_mean(angle_phone_sagital, x_axis, calib_win_start, calib_win_end)
 
             angle_kinem_sagital_calib = angle_kinem_sagital
             angle_phone_sagital_calib = angle_phone_sagital
-            if pico_kinem_calib is not None:
-                offset_kinem_calib = angulo_calib_conhecido - pico_kinem_calib
+            if media_kinem_calib is not None:
+                offset_kinem_calib = angulo_calib_conhecido - media_kinem_calib
                 angle_kinem_sagital_calib = angle_kinem_sagital + offset_kinem_calib
-                st.caption(f"📐 Kinem: offset = {angulo_calib_conhecido:.1f}° − {pico_kinem_calib:.1f}° (pico bruto do Trial 1) = **{offset_kinem_calib:+.1f}°**")
-            if pico_phone_calib is not None:
-                offset_phone_calib = angulo_calib_conhecido - pico_phone_calib
+                st.caption(f"📐 Kinem: offset = {angulo_calib_conhecido:.1f}° − {media_kinem_calib:.1f}° (média bruta, {calib_win_start:+.1f}s a {calib_win_end:+.1f}s) = **{offset_kinem_calib:+.1f}°**")
+                if abs(offset_kinem_calib) > 20:
+                    st.warning(f"⚠️ Offset do Kinem é grande ({offset_kinem_calib:+.1f}°) — confira se a janela de calibração está cobrindo o trecho certo.")
+            if media_phone_calib is not None:
+                offset_phone_calib = angulo_calib_conhecido - media_phone_calib
                 angle_phone_sagital_calib = angle_phone_sagital + offset_phone_calib
-                st.caption(f"📐 Celular: offset = {angulo_calib_conhecido:.1f}° − {pico_phone_calib:.1f}° (pico bruto do Trial 1) = **{offset_phone_calib:+.1f}°**")
+                st.caption(f"📐 Celular: offset = {angulo_calib_conhecido:.1f}° − {media_phone_calib:.1f}° (média bruta, {calib_win_start:+.1f}s a {calib_win_end:+.1f}s) = **{offset_phone_calib:+.1f}°**")
+                if abs(offset_phone_calib) > 20:
+                    st.warning(
+                        f"⚠️ Offset do celular é grande ({offset_phone_calib:+.1f}°) — pode ser que ele não esteja "
+                        "captando bem esse ângulo estático (giroscópio não detecta rotação parada em torno do eixo da "
+                        "gravidade, e o acelerômetro sozinho pode não distinguir essa pose). Se isso persistir, "
+                        "considere não calibrar o celular (deixar sem offset) e calibrar só o Kinem."
+                    )
 
             st.markdown("**Sagital — flexão (↑) / extensão (↓) — calibrado**")
             render_sagital_chart(angle_kinem_sagital_calib, angle_phone_sagital_calib)

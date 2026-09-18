@@ -1156,6 +1156,20 @@ def normalize_trial_curve(series: np.ndarray | None, x_axis: np.ndarray,
     return np.interp(x_target, x_pct, y_w)
 
 
+def compute_mean(series: np.ndarray | None, x_axis: np.ndarray,
+                 window_start: float, window_end: float) -> float | None:
+    """Média de 'series' dentro de uma janela de tempo — menos sensível a picos/ruído pontual que compute_peak, bom pra referência de calibração num trecho estável."""
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    mask = (x_axis[:n] >= window_start) & (x_axis[:n] <= window_end)
+    seg = series[:n][mask]
+    seg = seg[~np.isnan(seg)]
+    if len(seg) == 0:
+        return None
+    return float(np.nanmean(seg))
+
+
 def compute_peak(series: np.ndarray | None, x_axis: np.ndarray,
                  window_start: float, window_end: float, signed: bool = False) -> float | None:
     """

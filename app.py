@@ -655,16 +655,16 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     )
     trial_search_start = None
     if ignorar_inicio:
-        margem_ignorar = st.number_input(
-            "Margem antes da estabilização (s)", value=5.0, min_value=0.0, step=0.5, key="margem_ignorar",
-            help="Detecta automaticamente onde o deslocamento vertical do L5 se estabiliza de volta perto do repouso, e começa a procurar trials essa quantidade de segundos antes disso.",
-        )
         drop_time = detect_first_drop(l5_vertical, x_axis)
+        sugestao = float(drop_time - 5.0) if drop_time is not None else float(x_min_data)
         if drop_time is not None:
-            trial_search_start = drop_time - margem_ignorar
-            st.caption(f"📉 L5 se estabiliza em t={drop_time:+.2f}s → buscando trials a partir de **{trial_search_start:+.2f}s**.")
+            st.caption(f"📉 Detecção automática: L5 se estabiliza em t={drop_time:+.2f}s. Sugestão abaixo já vem com 5s de margem — ajuste livremente se não bater com o que você vê no gráfico.")
         else:
-            st.caption("⚠️ Não detectei uma estabilização clara — os trials continuam sendo buscados na gravação inteira.")
+            st.caption("⚠️ Não detectei uma estabilização clara — ajuste o valor manualmente olhando o gráfico abaixo.")
+        trial_search_start = st.number_input(
+            "Início da busca de trials (s, relativo ao pico de flexão)", value=sugestao, step=0.5, key="trial_search_start",
+            help="Trials só são procurados a partir deste instante em diante — digite o valor que quiser, olhando onde o teste realmente começa no gráfico do L5 abaixo.",
+        )
 
     trials = detect_trial_windows(angle_kinem_sagital, x_axis, search_start=trial_search_start)
 

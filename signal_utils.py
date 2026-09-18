@@ -844,7 +844,8 @@ def fit_scale_gain(reference: np.ndarray | None, target: np.ndarray | None,
 
 
 def segment_trial_phases(vertical_pos: np.ndarray | None, x_axis: np.ndarray,
-                         t_start: float, t_end: float, onset_frac: float = 0.15) -> dict | None:
+                         t_start: float, t_end: float, onset_frac: float = 0.15,
+                         max_lookback_before: float | None = None) -> dict | None:
     """
     Segmenta um trial em 3 fases usando o deslocamento vertical de um ponto
     (tipicamente L5): 'preparacao' (parado, antes do movimento começar),
@@ -857,6 +858,13 @@ def segment_trial_phases(vertical_pos: np.ndarray | None, x_axis: np.ndarray,
     baixo) usada como limiar pra marcar o início do movimento e também o
     retorno à postura inicial — evita que pequenas oscilações de ruído no
     começo/fim do trial sejam contadas como parte do movimento.
+
+    max_lookback_before: limita a busca do "pico antes do fundo" (usado como
+    referência pro início da descida) a, no máximo, essa quantidade de
+    segundos antes do fundo — evita que um platô/trecho longo bem antes do
+    trial (ex.: resíduo de uma calibração ou evento anterior) vire a
+    referência errada de "onde a descida começa". None = sem limite (usa a
+    janela inteira do trial, como antes).
 
     Retorna {'preparacao': (t0,t1), 'descida': (t1,t2), 'subida': (t2,t3)}
     ou None se não der pra segmentar (dados insuficientes ou sem descida
@@ -879,8 +887,15 @@ def segment_trial_phases(vertical_pos: np.ndarray | None, x_axis: np.ndarray,
     # Início da descida: usa como referência o pico mais alto realmente
     # alcançado ANTES do fundo (não só a média do início da janela) — mesma
     # lógica simétrica usada pro fim da subida, mais robusta a pequenas
-    # diferenças de altura do platô de um trial pro outro.
-    before_bottom = y_w[: bottom_idx + 1]
+    # diferenças de altura do platô de um trial pro outro. A busca desse
+    # "pico antes do fundo" é limitada a max_lookback_before segundos, se
+    # informado.
+    if max_lookback_before is not None:
+        lookback_start_idx = int(np.searchsorted(x_w, t_bottom - max_lookback_before))
+        lookback_start_idx = max(0, min(lookback_start_idx, bottom_idx))
+    else:
+        lookback_start_idx = 0
+    before_bottom = y_w[lookback_start_idx: bottom_idx + 1]
     local_top_before = float(np.nanmax(before_bottom))
     descent_range = local_top_before - y_w[bottom_idx]
     if descent_range <= 0:
@@ -888,7 +903,7 @@ def segment_trial_phases(vertical_pos: np.ndarray | None, x_axis: np.ndarray,
     onset_thresh = onset_frac * descent_range
     departed = (local_top_before - before_bottom) >= onset_thresh
     onset_candidates = np.where(departed)[0]
-    t_onset = float(x_w[onset_candidates[0]]) if len(onset_candidates) else float(x_w[0])
+    t_onset = float(x_w[lookback_start_idx + onset_candidates[0]]) if len(onset_candidates) else float(x_w[lookback_start_idx])
 
     # Fim da subida: mesma lógica, usando o pico mais alto realmente
     # alcançado DEPOIS do fundo (não a linha de base medida no início da

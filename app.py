@@ -540,6 +540,14 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             "Fim (s) relativo ao pico", value=float(x_max_data), step=0.5, key="view_end",
         )
 
+    # A busca automática de janela (correção de atraso/amplitude, mais
+    # abaixo) passa a respeitar o "Início" escolhido aqui — evita que um
+    # platô/trecho estranho antes do início escolhido "roube" a âncora
+    # dessas buscas automáticas (mesmo problema que já vimos antes com
+    # trechos de calibração).
+    x_min_data = max(x_min_data, view_start)
+    x_max_data = min(x_max_data, view_end)
+
     st.divider()
 
     # ══════════════════════════════════════════
@@ -821,7 +829,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     trial_phases = []
     if trials and l5_vertical is not None:
         for t_start, t_end in trials:
-            phases = segment_trial_phases(l5_vertical, x_axis, t_start, t_end, onset_frac=onset_frac)
+            phases = segment_trial_phases(l5_vertical, x_axis, t_start, t_end, onset_frac=onset_frac, max_lookback_before=5.0)
             trial_phases.append(phases)
 
         if ignorar_primeiro_ciclo and len(trials) > 1:

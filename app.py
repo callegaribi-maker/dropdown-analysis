@@ -31,6 +31,7 @@ from signal_utils import (
     compute_rms,
     compute_rom,
     detect_time_axis,
+    detect_first_drop,
     detect_trial_windows,
     estimate_time_lag_from_peaks,
     find_highest_peak,
@@ -635,7 +636,37 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # ── Detecta trials e segmenta cada um em preparação/descida/subida,
     # usando o deslocamento vertical do L5 (mesma lógica usada no Y-Balance
     # pra marcar as fases do movimento) ──
-    trials = detect_trial_windows(angle_kinem_sagital, x_axis)
+    pos_l5_cols = position_xyz_cols(kdf_raw, "l5", "l 5") if not kdf_raw.empty else {}
+    l5_vertical = None
+    l5_lateral = None
+    if all(k in pos_l5_cols for k in "XYZ"):
+        l5_vertical = try_numeric(kdf_raw[pos_l5_cols["Z"]]).values.astype(float)
+        l5_lateral = try_numeric(kdf_raw[pos_l5_cols["X"]]).values.astype(float)
+
+    # ── Ignora um trecho inicial diferente (ex.: calibração, com o L5 num
+    # nível diferente do repouso normal) antes de procurar os trials —
+    # detecta automaticamente onde o L5 se estabiliza de volta perto do
+    # nível de repouso, e só busca trials a partir de alguns segundos antes
+    # disso. ──
+    st.subheader("🔎 Ignorar trecho inicial antes de segmentar (opcional)")
+    ignorar_inicio = st.checkbox(
+        "Ignorar um trecho inicial diferente (ex.: calibração) ao procurar os trials",
+        value=False, key="ignorar_inicio",
+    )
+    trial_search_start = None
+    if ignorar_inicio:
+        margem_ignorar = st.number_input(
+            "Margem antes da estabilização (s)", value=5.0, min_value=0.0, step=0.5, key="margem_ignorar",
+            help="Detecta automaticamente onde o deslocamento vertical do L5 se estabiliza de volta perto do repouso, e começa a procurar trials essa quantidade de segundos antes disso.",
+        )
+        drop_time = detect_first_drop(l5_vertical, x_axis)
+        if drop_time is not None:
+            trial_search_start = drop_time - margem_ignorar
+            st.caption(f"📉 L5 se estabiliza em t={drop_time:+.2f}s → buscando trials a partir de **{trial_search_start:+.2f}s**.")
+        else:
+            st.caption("⚠️ Não detectei uma estabilização clara — os trials continuam sendo buscados na gravação inteira.")
+
+    trials = detect_trial_windows(angle_kinem_sagital, x_axis, search_start=trial_search_start)
 
     # ── Calibração funcional (goniômetro num trial de teste real) ──
     # Você escolhe qual trial já detectado corresponde à pose de
@@ -669,13 +700,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 offset_phone_calib = angulo_calib_conhecido - pico_phone_calib
                 angle_phone_sagital = angle_phone_sagital + offset_phone_calib
                 st.caption(f"📐 Celular: offset = {angulo_calib_conhecido:.1f}° − {pico_phone_calib:.1f}° (pico bruto do {trial_calib_escolhido}) = **{offset_phone_calib:+.1f}°**")
-
-    pos_l5_cols = position_xyz_cols(kdf_raw, "l5", "l 5") if not kdf_raw.empty else {}
-    l5_vertical = None
-    l5_lateral = None
-    if all(k in pos_l5_cols for k in "XYZ"):
-        l5_vertical = try_numeric(kdf_raw[pos_l5_cols["Z"]]).values.astype(float)
-        l5_lateral = try_numeric(kdf_raw[pos_l5_cols["X"]]).values.astype(float)
 
     # ── Estabilidade de tronco: comparação Kinem × Celular via ACELERAÇÃO e
     # VELOCIDADE ANGULAR brutas (sem integrar nada) — testamos e essa é a

@@ -929,13 +929,18 @@ def segment_trial_phases(vertical_pos: np.ndarray | None, x_axis: np.ndarray,
 
 def detect_trial_windows(reference: np.ndarray | None, x_axis: np.ndarray,
                          min_distance_seconds: float = 2.0,
-                         prominence_frac: float = 0.3) -> list:
+                         prominence_frac: float = 0.3,
+                         search_start: float | None = None) -> list:
     """
     Detecta janelas de repetição (trials) a partir dos picos de um sinal de
     referência (tipicamente o ângulo sagital do Kinem, já zerado — cada pico
     de flexão = uma repetição). Cada janela vai do ponto médio entre um pico
     e o anterior até o ponto médio com o próximo (bordas da gravação para o
     primeiro/último pico).
+
+    search_start: se informado, ignora picos antes desse instante (em
+    segundos) — útil pra pular um trecho inicial que não é teste de
+    verdade (ex.: calibração, movimento preparatório).
 
     Retorna lista de tuplas (start_seconds, end_seconds), uma por trial
     detectado. Lista vazia se não achar pelo menos 1 pico.
@@ -945,15 +950,18 @@ def detect_trial_windows(reference: np.ndarray | None, x_axis: np.ndarray,
     n = min(len(reference), len(x_axis))
     seg = reference[:n]
     valid = ~np.isnan(seg)
+    if search_start is not None:
+        valid = valid & (x_axis[:n] >= search_start)
     if not np.any(valid):
         return []
-    max_val = np.nanmax(seg)
+    max_val = np.nanmax(seg[valid])
     if max_val <= 0:
         return []
     fs = 1.0 / np.median(np.diff(x_axis[:n])) if n > 1 else 100.0
     distance_samples = max(1, int(min_distance_seconds * fs))
+    seg_search = np.where(valid, seg, 0.0)
     peaks, _ = sp_signal.find_peaks(
-        np.nan_to_num(seg), distance=distance_samples, prominence=max_val * prominence_frac,
+        np.nan_to_num(seg_search), distance=distance_samples, prominence=max_val * prominence_frac,
     )
     if len(peaks) == 0:
         return []
@@ -965,6 +973,68 @@ def detect_trial_windows(reference: np.ndarray | None, x_axis: np.ndarray,
         end = x_axis[:n][-1] if i == len(peak_times) - 1 else (pt + peak_times[i + 1]) / 2
         windows.append((float(start), float(end)))
     return windows
+
+
+def detect_first_drop(series: np.ndarray | None, x_axis: np.ndarray,
+                      search_start: float | None = None,
+                      drop_frac: float = 0.15, sustain_seconds: float = 0.3) -> float | None:
+    """
+    Acha o instante em que 'series' (tipicamente deslocamento vertical de
+    um marcador) SE ESTABILIZA de volta perto do nível de repouso, depois
+    de um trecho inicial diferente (parado alto, ou um evento qualquer
+    antes do teste) — usado pra identificar onde o movimento de teste
+    realmente começa, ignorando um trecho de preparação/calibração antes.
+
+    A referência de "repouso" é a mediana da SEGUNDA METADE do trecho
+    analisado (assume que a maior parte da gravação já reflete o padrão
+    normal, e só um trecho inicial é diferente) — não assume se esse
+    trecho inicial fica acima ou abaixo do repouso, funciona nos dois casos.
+
+    drop_frac: fração do desvio-padrão total do sinal usada como limiar de
+    proximidade ao repouso. sustain_seconds: quanto tempo precisa
+    permanecer perto do repouso pra confirmar (evita confundir com um
+    cruzamento breve por ruído).
+
+    Retorna o instante (segundos) em que o sinal se estabiliza, ou None se
+    não achar.
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    x = x_axis[:n]
+    y = series[:n]
+    mask = np.ones(n, dtype=bool) if search_start is None else (x >= search_start)
+    if not np.any(mask):
+        return None
+    idx0 = np.where(mask)[0][0]
+    x_w, y_w = x[idx0:], y[idx0:]
+    valid = ~np.isnan(y_w)
+    if np.sum(valid) < 20:
+        return None
+
+    fs = 1.0 / np.median(np.diff(x_w)) if len(x_w) > 1 else 100.0
+    metade = len(y_w) // 2
+    repouso = float(np.nanmedian(y_w[metade:][valid[metade:]])) if np.any(valid[metade:]) else float(np.nanmedian(y_w[valid]))
+    total_range = float(np.nanmax(y_w[valid]) - np.nanmin(y_w[valid]))
+    if total_range <= 0:
+        return None
+    thresh = drop_frac * total_range
+
+    # Só procura o retorno DEPOIS que o sinal já tiver se afastado de forma
+    # significativa do repouso pelo menos uma vez — sem isso, se a gravação
+    # já começa perto do repouso (ex.: parado antes da calibração), a
+    # função "acha" logo o próprio início, sem pular o trecho diferente.
+    afastado = np.where(valid, np.abs(y_w - repouso) > 2 * thresh, False)
+    if not np.any(afastado):
+        return None
+    idx_afastou = int(np.argmax(afastado))
+
+    perto = np.where(valid, np.abs(y_w - repouso) <= thresh, False)
+    sustain_samples = max(1, int(sustain_seconds * fs))
+    for i in range(idx_afastou, len(perto) - sustain_samples):
+        if np.all(perto[i:i + sustain_samples]):
+            return float(x_w[i])
+    return None
 
 
 def compute_rom(series: np.ndarray | None, x_axis: np.ndarray,

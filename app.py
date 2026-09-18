@@ -647,59 +647,20 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # nível diferente do repouso normal) antes de procurar os trials —
     # detecta automaticamente onde o L5 se estabiliza de volta perto do
     # nível de repouso, e só busca trials a partir de alguns segundos antes
-    # disso. ──
-    st.subheader("🔎 Ignorar trecho inicial antes de segmentar (opcional)")
-    ignorar_inicio = st.checkbox(
-        "Ignorar um trecho inicial diferente (ex.: calibração) ao procurar os trials",
-        value=False, key="ignorar_inicio",
+    # disso. Sempre visível (não fica atrás de nenhuma caixinha). ──
+    st.subheader("🔎 A partir de quando procurar os trials")
+    drop_time = detect_first_drop(l5_vertical, x_axis)
+    sugestao = float(drop_time - 5.0) if drop_time is not None else float(x_min_data)
+    if drop_time is not None:
+        st.caption(f"📉 Detecção automática: L5 se estabiliza em t={drop_time:+.2f}s. Sugestão abaixo já vem com 5s de margem — ajuste livremente se não bater com o que você vê no gráfico do L5, logo abaixo.")
+    else:
+        st.caption("⚠️ Não detectei uma estabilização clara — ajuste o valor manualmente olhando o gráfico do L5, logo abaixo.")
+    trial_search_start = st.number_input(
+        "Início da busca de trials (s, relativo ao pico de flexão)", value=sugestao, step=0.5, key="trial_search_start",
+        help="Trials só são procurados a partir deste instante em diante — digite o valor que quiser, olhando onde o teste realmente começa no gráfico do L5 abaixo.",
     )
-    trial_search_start = None
-    if ignorar_inicio:
-        drop_time = detect_first_drop(l5_vertical, x_axis)
-        sugestao = float(drop_time - 5.0) if drop_time is not None else float(x_min_data)
-        if drop_time is not None:
-            st.caption(f"📉 Detecção automática: L5 se estabiliza em t={drop_time:+.2f}s. Sugestão abaixo já vem com 5s de margem — ajuste livremente se não bater com o que você vê no gráfico.")
-        else:
-            st.caption("⚠️ Não detectei uma estabilização clara — ajuste o valor manualmente olhando o gráfico abaixo.")
-        trial_search_start = st.number_input(
-            "Início da busca de trials (s, relativo ao pico de flexão)", value=sugestao, step=0.5, key="trial_search_start",
-            help="Trials só são procurados a partir deste instante em diante — digite o valor que quiser, olhando onde o teste realmente começa no gráfico do L5 abaixo.",
-        )
 
     trials = detect_trial_windows(angle_kinem_sagital, x_axis, search_start=trial_search_start)
-
-    # ── Calibração funcional (goniômetro num trial de teste real) ──
-    # Você escolhe qual trial já detectado corresponde à pose de
-    # calibração (ex.: joelho mantido a 90° com goniômetro) e o ângulo
-    # real medido ali — cada fonte (Kinem, celular) ganha seu próprio
-    # offset simples (soma/subtrai um número fixo), sem ganho/escala e
-    # sem depender de detectar um platô separado. Mesma lógica usada com
-    # sucesso no script do cotovelo.
-    if trials:
-        st.subheader("🎯 Calibração funcional (opcional)")
-        usar_calib_funcional = st.checkbox(
-            "Usar calibração funcional (um trial detectado é a pose de calibração)",
-            value=False, key="usar_calib_funcional",
-        )
-        if usar_calib_funcional:
-            cal1, cal2 = st.columns(2)
-            opcoes_trial_cal = [f"Trial {i}" for i in range(1, len(trials) + 1)]
-            trial_calib_escolhido = cal1.selectbox("Trial de calibração", opcoes_trial_cal, index=0, key="trial_calib_escolhido")
-            angulo_calib_conhecido = cal2.number_input("Ângulo real conhecido nesse trial (°)", value=90.0, step=1.0, key="angulo_calib_conhecido")
-            idx_trial_calib = int(trial_calib_escolhido.replace("Trial ", "")) - 1
-            t_start_calib, t_end_calib = trials[idx_trial_calib]
-
-            pico_kinem_calib = compute_peak(angle_kinem_sagital, x_axis, t_start_calib, t_end_calib)
-            pico_phone_calib = compute_peak(angle_phone_sagital, x_axis, t_start_calib, t_end_calib)
-
-            if pico_kinem_calib is not None:
-                offset_kinem_calib = angulo_calib_conhecido - pico_kinem_calib
-                angle_kinem_sagital = angle_kinem_sagital + offset_kinem_calib
-                st.caption(f"📐 Kinem: offset = {angulo_calib_conhecido:.1f}° − {pico_kinem_calib:.1f}° (pico bruto do {trial_calib_escolhido}) = **{offset_kinem_calib:+.1f}°**")
-            if pico_phone_calib is not None:
-                offset_phone_calib = angulo_calib_conhecido - pico_phone_calib
-                angle_phone_sagital = angle_phone_sagital + offset_phone_calib
-                st.caption(f"📐 Celular: offset = {angulo_calib_conhecido:.1f}° − {pico_phone_calib:.1f}° (pico bruto do {trial_calib_escolhido}) = **{offset_phone_calib:+.1f}°**")
 
     # ── Estabilidade de tronco: comparação Kinem × Celular via ACELERAÇÃO e
     # VELOCIDADE ANGULAR brutas (sem integrar nada) — testamos e essa é a
@@ -908,23 +869,26 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             ))
             fig.update_layout(yaxis2=dict(title="L5 vertical (cm)", overlaying="y", side="right", showgrid=False))
 
-        # --- Plano sagital (flexão/extensão) ---
-        st.markdown("**Sagital — flexão (↑) / extensão (↓)**")
+        def render_sagital_chart(k_series, p_series, titulo_extra=""):
+            fig = go.Figure()
+            add_phase_shading(fig)
+            add_angle_trace(fig, k_series, "blue", "Kinem — sagital")
+            add_angle_trace(fig, p_series, "red", "Celular — sagital")
+            add_angle_trace(fig, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
+            add_l5_overlay(fig)
+            add_phase_markers(fig, k_series)
+            fig.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
+            fig.update_layout(
+                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+                yaxis_title="Ângulo (graus)", height=380, template="plotly_white", hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # --- Plano sagital (flexão/extensão) — bruto, sem calibração ---
+        st.markdown("**Sagital — flexão (↑) / extensão (↓) — bruto**")
         st.caption("Fundo cinza = preparação · laranja = descida · azul = subida · linha pontilhada cinza = deslocamento vertical do L5 (eixo direito, cm).")
-        fig_sag = go.Figure()
-        add_phase_shading(fig_sag)
-        add_angle_trace(fig_sag, angle_kinem_sagital, "blue", "Kinem — sagital")
-        add_angle_trace(fig_sag, angle_phone_sagital, "red", "Celular — sagital")
-        add_angle_trace(fig_sag, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
-        add_l5_overlay(fig_sag)
-        add_phase_markers(fig_sag, angle_kinem_sagital)
-        fig_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
-        fig_sag.update_layout(
-            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-            yaxis_title="Ângulo (graus)", height=380, template="plotly_white", hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
-        )
-        st.plotly_chart(fig_sag, use_container_width=True)
+        render_sagital_chart(angle_kinem_sagital, angle_phone_sagital)
 
         if angle_kinem_sagital is None:
             st.caption("⚠️ Ângulo do Kinem não calculado — verifique se as colunas de posição X/Y/Z de Trocânter, Côndilo e Tornozelo estão presentes.")
@@ -949,6 +913,44 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             )
             st.plotly_chart(fig_front, use_container_width=True)
             st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
+
+        # --- Calibração funcional (goniômetro no Trial 1) ---
+        # Trial 1 sempre como referência; você digita o ângulo real medido
+        # ali (ex.: joelho a 90° com goniômetro) — cada fonte (Kinem,
+        # celular) ganha seu próprio offset simples (soma/subtrai um número
+        # fixo), sem ganho/escala. Mesma lógica usada com sucesso no script
+        # do cotovelo. Depois de calibrar, o gráfico sagital é mostrado de
+        # novo, já calibrado.
+        st.divider()
+        st.subheader("🎯 Calibração funcional (Trial 1 = referência)")
+        if not trials:
+            st.info("Nenhum trial detectado — não dá pra calibrar.")
+        else:
+            angulo_calib_conhecido = st.number_input(
+                "Ângulo real conhecido no Trial 1 (°, medido com goniômetro)", value=90.0, step=1.0, key="angulo_calib_conhecido",
+            )
+            t_start_calib, t_end_calib = trials[0]
+            pico_kinem_calib = compute_peak(angle_kinem_sagital, x_axis, t_start_calib, t_end_calib)
+            pico_phone_calib = compute_peak(angle_phone_sagital, x_axis, t_start_calib, t_end_calib)
+
+            angle_kinem_sagital_calib = angle_kinem_sagital
+            angle_phone_sagital_calib = angle_phone_sagital
+            if pico_kinem_calib is not None:
+                offset_kinem_calib = angulo_calib_conhecido - pico_kinem_calib
+                angle_kinem_sagital_calib = angle_kinem_sagital + offset_kinem_calib
+                st.caption(f"📐 Kinem: offset = {angulo_calib_conhecido:.1f}° − {pico_kinem_calib:.1f}° (pico bruto do Trial 1) = **{offset_kinem_calib:+.1f}°**")
+            if pico_phone_calib is not None:
+                offset_phone_calib = angulo_calib_conhecido - pico_phone_calib
+                angle_phone_sagital_calib = angle_phone_sagital + offset_phone_calib
+                st.caption(f"📐 Celular: offset = {angulo_calib_conhecido:.1f}° − {pico_phone_calib:.1f}° (pico bruto do Trial 1) = **{offset_phone_calib:+.1f}°**")
+
+            st.markdown("**Sagital — flexão (↑) / extensão (↓) — calibrado**")
+            render_sagital_chart(angle_kinem_sagital_calib, angle_phone_sagital_calib)
+
+            # A partir daqui, o resto do app (tabelas, quadril, análises)
+            # usa a versão CALIBRADA do ângulo sagital do joelho.
+            angle_kinem_sagital = angle_kinem_sagital_calib
+            angle_phone_sagital = angle_phone_sagital_calib
 
         # --- Ângulo do quadril (tronco/L5 vs coxa) ---
         st.divider()

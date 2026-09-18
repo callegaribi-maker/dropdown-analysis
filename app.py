@@ -771,6 +771,40 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # usando o deslocamento vertical do L5 (mesma lógica usada no Y-Balance
     # pra marcar as fases do movimento) ──
     trials = detect_trial_windows(angle_kinem_sagital, x_axis)
+
+    # ── Calibração funcional (goniômetro num trial de teste real) ──
+    # Você escolhe qual trial já detectado corresponde à pose de
+    # calibração (ex.: joelho mantido a 90° com goniômetro) e o ângulo
+    # real medido ali — cada fonte (Kinem, celular) ganha seu próprio
+    # offset simples (soma/subtrai um número fixo), sem ganho/escala e
+    # sem depender de detectar um platô separado. Mesma lógica usada com
+    # sucesso no script do cotovelo.
+    if trials:
+        st.subheader("🎯 Calibração funcional (opcional)")
+        usar_calib_funcional = st.checkbox(
+            "Usar calibração funcional (um trial detectado é a pose de calibração)",
+            value=False, key="usar_calib_funcional",
+        )
+        if usar_calib_funcional:
+            cal1, cal2 = st.columns(2)
+            opcoes_trial_cal = [f"Trial {i}" for i in range(1, len(trials) + 1)]
+            trial_calib_escolhido = cal1.selectbox("Trial de calibração", opcoes_trial_cal, index=0, key="trial_calib_escolhido")
+            angulo_calib_conhecido = cal2.number_input("Ângulo real conhecido nesse trial (°)", value=90.0, step=1.0, key="angulo_calib_conhecido")
+            idx_trial_calib = int(trial_calib_escolhido.replace("Trial ", "")) - 1
+            t_start_calib, t_end_calib = trials[idx_trial_calib]
+
+            pico_kinem_calib = compute_peak(angle_kinem_sagital, x_axis, t_start_calib, t_end_calib)
+            pico_phone_calib = compute_peak(angle_phone_sagital, x_axis, t_start_calib, t_end_calib)
+
+            if pico_kinem_calib is not None:
+                offset_kinem_calib = angulo_calib_conhecido - pico_kinem_calib
+                angle_kinem_sagital = angle_kinem_sagital + offset_kinem_calib
+                st.caption(f"📐 Kinem: offset = {angulo_calib_conhecido:.1f}° − {pico_kinem_calib:.1f}° (pico bruto do {trial_calib_escolhido}) = **{offset_kinem_calib:+.1f}°**")
+            if pico_phone_calib is not None:
+                offset_phone_calib = angulo_calib_conhecido - pico_phone_calib
+                angle_phone_sagital = angle_phone_sagital + offset_phone_calib
+                st.caption(f"📐 Celular: offset = {angulo_calib_conhecido:.1f}° − {pico_phone_calib:.1f}° (pico bruto do {trial_calib_escolhido}) = **{offset_phone_calib:+.1f}°**")
+
     pos_l5_cols = position_xyz_cols(kdf_raw, "l5", "l 5") if not kdf_raw.empty else {}
     l5_vertical = None
     l5_lateral = None

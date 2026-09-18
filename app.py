@@ -664,30 +664,30 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
     if zero_baseline:
         if usar_calib_externa and calib_window is not None:
-            # Calibração externa por 2 pontos (goniômetro): início da gravação
-            # (em pé, 0° conhecido) + janela de calibração (ângulo conhecido,
-            # ex. 90°) — corrige VIÉS e ESCALA/GANHO juntos, não só o viés.
-            # Reta: corrigido = bruto * ganho + offset, resolvida pelos 2 pontos.
+            # Calibração externa (goniômetro): só corrige o KINEM, e só por
+            # GANHO (multiplicativo), não por offset — o erro do Kinem vem da
+            # geometria dos marcadores de pele (não muda com velocidade do
+            # movimento), então o ganho estático continua válido durante os
+            # ciclos dinâmicos. Já o celular tem uma parte do erro que só
+            # aparece em movimento rápido (tecido mole) — aplicar um ganho
+            # calibrado num trecho ESTÁTICO piorava o resultado nos ciclos
+            # dinâmicos (testamos e confirmamos isso com dados reais). Por
+            # isso o celular continua passando pelo pipeline de calibração de
+            # sempre (mais abaixo), agora contra esse Kinem já corrigido.
             c_start, c_end = calib_window
-
-            def _calibra_2pontos(series, label):
-                if series is None:
-                    return None, None, None
-                n_s = min(len(series), len(x_axis))
-                mask_base = (x_axis[:n_s] >= baseline_start) & (x_axis[:n_s] <= baseline_end)
-                mask_calib = (x_axis[:n_s] >= c_start) & (x_axis[:n_s] <= c_end)
-                raw_base = np.nanmean(series[:n_s][mask_base])
-                raw_calib = np.nanmean(series[:n_s][mask_calib])
-                if not np.isfinite(raw_base) or not np.isfinite(raw_calib) or raw_calib == raw_base:
-                    st.caption(f"⚠️ Não deu pra calibrar {label} — dados insuficientes na janela de base ou de calibração.")
-                    return series, None, None
-                ganho = angulo_calib_conhecido / (raw_calib - raw_base)
-                offset = -ganho * raw_base
-                st.caption(f"📐 {label}: 0° em pé = {raw_base:.1f}° bruto · {angulo_calib_conhecido:.0f}° na calibração = {raw_calib:.1f}° bruto → ganho ×{ganho:.2f}, offset {offset:+.1f}°.")
-                return series * ganho + offset, ganho, offset
-
-            angle_kinem_sagital, gain_calib_k, offset_calib_k = _calibra_2pontos(angle_kinem_sagital, "Kinem")
-            angle_phone_sagital, gain_calib_p, offset_calib_p = _calibra_2pontos(angle_phone_sagital, "Celular")
+            n_k = min(len(angle_kinem_sagital), len(x_axis))
+            mask_base_k = (x_axis[:n_k] >= baseline_start) & (x_axis[:n_k] <= baseline_end)
+            mask_calib_k = (x_axis[:n_k] >= c_start) & (x_axis[:n_k] <= c_end)
+            raw_base_k = np.nanmean(angle_kinem_sagital[:n_k][mask_base_k])
+            raw_calib_k = np.nanmean(angle_kinem_sagital[:n_k][mask_calib_k])
+            angle_kinem_sagital = zero_reference_angle(angle_kinem_sagital, x_axis, baseline_start, baseline_end)
+            if np.isfinite(raw_base_k) and np.isfinite(raw_calib_k) and raw_calib_k != raw_base_k:
+                gain_calib_k = angulo_calib_conhecido / (raw_calib_k - raw_base_k)
+                angle_kinem_sagital = angle_kinem_sagital * gain_calib_k
+                st.caption(f"📐 Kinem: 0° em pé = {raw_base_k:.1f}° bruto · {angulo_calib_conhecido:.0f}° na calibração = {raw_calib_k:.1f}° bruto → ganho ×{gain_calib_k:.2f} aplicado ao Kinem (o celular usa a calibração de amplitude de sempre, mais abaixo, contra esse Kinem corrigido).")
+            else:
+                st.caption("⚠️ Não deu pra calibrar o Kinem — dados insuficientes na janela de base ou de calibração.")
+            angle_phone_sagital = zero_reference_angle(angle_phone_sagital, x_axis, baseline_start, baseline_end)
         else:
             angle_kinem_sagital = zero_reference_angle(angle_kinem_sagital, x_axis, baseline_start, baseline_end)
             angle_phone_sagital = zero_reference_angle(angle_phone_sagital, x_axis, baseline_start, baseline_end)
@@ -729,6 +729,14 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         angle_hip_phone_frontal = _mask_calib(angle_hip_phone_frontal)
         st.caption(f"✂️ Trecho de {c_start-margin:+.1f}s a {c_end+margin:+.1f}s (calibração) excluído da análise — não conta como parte do teste.")
 
+        # Empurra o início da busca (atraso/calibração de amplitude) pra
+        # depois do fim da calibração — sem isso, a busca automática de
+        # janela (que varre de x_min_data até x_max_data) pode atravessar o
+        # buraco de NaN da máscara e se confundir. Testado com dados reais:
+        # sem esse ajuste, o ganho calculado sai completamente errado
+        # (bate no limite de segurança do algoritmo).
+        x_min_data = max(x_min_data, c_end + margin)
+
     apply_corrections = st.radio(
         "Ângulo do celular:", ["Com correções (atraso + calibração de amplitude)", "Sem correções (estimativa bruta)"],
         index=0, horizontal=True, key="apply_corrections",
@@ -746,7 +754,13 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         lag_win_hip_sag = auto_calibration_window(angle_hip_kinem_sagital, x_axis, x_min_data, x_max_data, half_width=1.6)
         lag_win_hip_front = auto_calibration_window(angle_hip_kinem_frontal, x_axis, x_min_data, x_max_data, signed=True, half_width=1.6)
 
-        lag_sagital = estimate_time_lag_from_peaks(angle_kinem_sagital, angle_phone_sagital, x_axis, *lag_win_sag)
+        if usar_calib_externa and calib_window is not None:
+            # Mesmo motivo do gain_sagital acima: a janela pós-calibração é
+            # curta e a busca automática de atraso ficou instável nos testes
+            # — pulamos a correção de atraso do sagital nesse caso.
+            lag_sagital = None
+        else:
+            lag_sagital = estimate_time_lag_from_peaks(angle_kinem_sagital, angle_phone_sagital, x_axis, *lag_win_sag)
         lag_frontal = estimate_time_lag_from_peaks(angle_kinem_frontal, angle_phone_frontal, x_axis, *lag_win_front, signed=True)
         lag_hip_sagital = estimate_time_lag_from_peaks(angle_hip_kinem_sagital, angle_hip_phone_sagital, x_axis, *lag_win_hip_sag)
         lag_hip_frontal = estimate_time_lag_from_peaks(angle_hip_kinem_frontal, angle_hip_phone_frontal, x_axis, *lag_win_hip_front, signed=True)
@@ -788,9 +802,21 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             "calibração permanente do sensor."
         )
 
-        gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start_sag, cal_end_sag)
-        if gain_sagital is not None and angle_phone_sagital is not None:
-            angle_phone_sagital = angle_phone_sagital * gain_sagital
+        if usar_calib_externa and calib_window is not None:
+            # Quando há calibração externa, o Kinem sagital já foi corrigido
+            # (ganho estático, goniômetro) — recalibrar o celular de novo em
+            # cima disso é arriscado: a janela pós-calibração é curta, e
+            # testamos com dados reais que essa recalibração dinâmica ficava
+            # instável (o algoritmo de busca de janela se confundia com o
+            # buraco deixado pela máscara da calibração). Sem essa camada
+            # extra, o celular (só zerado, sem escala) já concorda razoavelmente
+            # bem com o Kinem corrigido nos ciclos de teste.
+            gain_sagital = None
+            st.caption("📐 Joelho sagital: sem recalibração extra do celular — o Kinem já foi corrigido pelo goniômetro, e o celular entra com sua amplitude bruta (zerada) contra esse Kinem corrigido.")
+        else:
+            gain_sagital = fit_scale_gain(angle_kinem_sagital, angle_phone_sagital, x_axis, cal_start_sag, cal_end_sag)
+            if gain_sagital is not None and angle_phone_sagital is not None:
+                angle_phone_sagital = angle_phone_sagital * gain_sagital
 
         gain_frontal = fit_scale_gain(angle_kinem_frontal, angle_phone_frontal, x_axis, cal_start_front, cal_end_front)
         if gain_frontal is not None and angle_phone_frontal is not None:

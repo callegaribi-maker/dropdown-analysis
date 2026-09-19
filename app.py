@@ -795,9 +795,32 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 if angulo_frontal_kinem_alt is None:
                     st.error("❌ Não deu pra calcular o frontal funcional do Kinem — confira as janelas (precisam ter dados suficientes e um movimento de flexão claro na janela de calibração). Mantendo o método antigo.")
                 else:
-                    st.caption(f"📐 Kinem frontal (alt.): eixo funcional girado {rotacao_func:.1f}° em relação ao eixo bruto da câmera (variância explicada: {variancia_func*100:.0f}%).")
+                    # Mostra o antes/depois da correção de cross-talk no platô
+                    # (deveria ficar perto de 0°, já que é um movimento de
+                    # flexão pura, sem valgo/varo intencional) — confirma
+                    # visualmente que a correção funcionou.
+                    platô_antes = compute_mean(angle_kinem_frontal, x_axis, t_calib_ini, t_calib_fim) if angle_kinem_frontal is not None else None
+                    platô_depois = compute_mean(angulo_frontal_kinem_alt, x_axis, t_calib_ini, t_calib_fim)
+                    if platô_antes is not None and platô_depois is not None:
+                        st.caption(f"📐 Kinem frontal: cross-talk corrigido por calibração funcional — no platô, {platô_antes:+.1f}° (plano bruto da câmera) → {platô_depois:+.1f}° (plano funcional, eixo girado {rotacao_func:.1f}°, variância explicada {variancia_func*100:.0f}%). Deveria ficar perto de 0° (é um movimento de flexão pura).")
                     if _checa_faixa("Kinem frontal (alt.)", angulo_frontal_kinem_alt):
                         angle_kinem_frontal = angulo_frontal_kinem_alt
+
+                        # Corrige a convenção de sinal do celular, se
+                        # necessário: compara a correlação com o Kinem já
+                        # corrigido dentro da janela de calibração e inverte
+                        # o sinal do celular se estiver invertido.
+                        if angle_phone_frontal is not None:
+                            n_sc = min(len(angle_phone_frontal), len(angle_kinem_frontal), len(x_axis))
+                            mask_sc = (x_axis[:n_sc] >= t_calib_ini) & (x_axis[:n_sc] <= t_calib_fim)
+                            k_seg = angle_kinem_frontal[:n_sc][mask_sc]
+                            p_seg = angle_phone_frontal[:n_sc][mask_sc]
+                            valid_sc = ~np.isnan(k_seg) & ~np.isnan(p_seg)
+                            if np.sum(valid_sc) > 10 and np.std(k_seg[valid_sc]) > 0 and np.std(p_seg[valid_sc]) > 0:
+                                corr_sinal = float(np.corrcoef(k_seg[valid_sc], p_seg[valid_sc])[0, 1])
+                                if np.isfinite(corr_sinal) and corr_sinal < 0:
+                                    angle_phone_frontal = -angle_phone_frontal
+                                    st.caption(f"🔄 Celular frontal: sinal invertido (correlação com o Kinem estava negativa, r={corr_sinal:.2f}) — mesma convenção de agora em diante (negativo = valgo, positivo = varo).")
 
     # ── Estabilidade de tronco: comparação Kinem × Celular via ACELERAÇÃO e
     # VELOCIDADE ANGULAR brutas (sem integrar nada) — testamos e essa é a
@@ -1043,6 +1066,11 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             st.markdown("**Frontal — valgo (↑ ou ↓, ver nota) / varo (sentido oposto)**")
             fig_front = go.Figure()
             add_phase_shading(fig_front)
+            fig_front.add_vrect(
+                x0=t_calib_ini, x1=t_calib_fim,
+                fillcolor="rgba(255, 99, 71, 0.18)", line_width=0,
+                annotation_text="janela de calibração", annotation_position="top left",
+            )
             add_angle_trace(fig_front, angle_kinem_frontal, "green", "Kinem — frontal")
             add_angle_trace(fig_front, angle_phone_frontal, "darkorange", "Celular — frontal")
             add_l5_overlay(fig_front)

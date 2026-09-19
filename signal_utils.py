@@ -1387,7 +1387,8 @@ def calibrate_two_point(series: np.ndarray | None, x_axis: np.ndarray,
 
 def knee_angle_frontal_functional(vetor_coxa: np.ndarray, vetor_perna: np.ndarray, x_axis: np.ndarray,
                                   t_neutral_start: float, t_neutral_end: float,
-                                  t_calib_start: float, t_calib_end: float) -> tuple:
+                                  t_calib_start: float, t_calib_end: float,
+                                  normalize_valgus_sign: bool = True) -> tuple:
     """
     Ângulo frontal do joelho (Kinem) com correção de "cross-talk" por
     calibração funcional: em vez de assumir que o eixo X bruto do Kinem já
@@ -1406,6 +1407,18 @@ def knee_angle_frontal_functional(vetor_coxa: np.ndarray, vetor_perna: np.ndarra
     t_calib_*: janela do movimento usado pra achar o plano funcional
     (precisa ter uma variação de flexão clara — ex.: do início da
     gravação até o platô/pico).
+
+    normalize_valgus_sign: a direção mediolateral vem de um PCA/SVD, cujo
+    sinal é matematicamente ARBITRÁRIO (a mesma "linha" pode sair
+    orientada pra qualquer lado) — isso significa que o resultado pode
+    sair com o sinal invertido (valgo lido como positivo, ou vice-versa),
+    sem nenhum erro na lógica do cálculo. Quando True (padrão), assume a
+    convenção clínica mais comum pra esse tipo de teste — valgo dinâmico
+    (negativo) predominando sobre varo durante os ciclos de teste (depois
+    de t_calib_end) — e inverte o sinal se a maior excursão observada ali
+    for positiva. É uma SUPOSIÇÃO sobre o padrão esperado, não uma certeza
+    — se a pessoa realmente fizer varo em vez de valgo, essa normalização
+    vai inverter errado; desligue (False) se isso for um problema.
 
     Retorna (angulo_frontal_corrigido, rotacao_funcional_graus,
     variancia_explicada) — os 2 últimos são só informativos (quanto o
@@ -1455,6 +1468,17 @@ def knee_angle_frontal_functional(vetor_coxa: np.ndarray, vetor_perna: np.ndarra
     baseline = np.nanmean(angulo[mask_neutra])
     if np.isfinite(baseline):
         angulo = angulo - baseline
+
+    if normalize_valgus_sign:
+        mask_pos_calib = x >= t_calib_end
+        if np.sum(mask_pos_calib) > 10:
+            seg = angulo[mask_pos_calib]
+            seg_valid = seg[~np.isnan(seg)]
+            if len(seg_valid) > 0:
+                p_baixo, p_alto = np.nanpercentile(seg_valid, [2, 98])
+                if abs(p_alto) > abs(p_baixo):
+                    angulo = -angulo
+
     return angulo, rotacao_graus, variancia
 
 

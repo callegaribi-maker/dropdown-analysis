@@ -768,6 +768,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
             angulo_frontal_bruto = knee_angle_gyro_relative_integration(
                 aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs, axis=eixo_frontal_gyro, lowpass_hz=5.0, sign=1.0,
+                x_axis=x_axis, lag_seconds=lag_giro_sagital,
             )
             if angulo_frontal_bruto is not None:
                 n_af = min(len(angulo_frontal_bruto), len(x_axis))
@@ -821,6 +822,26 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                                 if np.isfinite(corr_sinal) and corr_sinal < 0:
                                     angle_phone_frontal = -angle_phone_frontal
                                     st.caption(f"🔄 Celular frontal: sinal invertido (correlação com o Kinem estava negativa, r={corr_sinal:.2f}) — mesma convenção de agora em diante (negativo = valgo, positivo = varo).")
+
+                        # Novo zero bem antes do primeiro ciclo real de
+                        # teste — reduz o efeito da deriva acumulada do
+                        # giroscópio (o celular integra sem acelerômetro,
+                        # então qualquer deriva desde o início da gravação
+                        # se acumula; zerar de novo logo antes do teste
+                        # deixa o zero mais preciso pros ciclos que
+                        # realmente importam, mesmo que a gravação inteira
+                        # tenha desviado um pouco).
+                        if trials:
+                            t_prezero_ini = trials[0][0]
+                            t_prezero_fim = min(trials[0][0] + 1.0, trials[0][1])
+                            base_k_prezero = compute_mean(angle_kinem_frontal, x_axis, t_prezero_ini, t_prezero_fim)
+                            base_p_prezero = compute_mean(angle_phone_frontal, x_axis, t_prezero_ini, t_prezero_fim) if angle_phone_frontal is not None else None
+                            if base_k_prezero is not None:
+                                angle_kinem_frontal = angle_kinem_frontal - base_k_prezero
+                            if base_p_prezero is not None:
+                                angle_phone_frontal = angle_phone_frontal - base_p_prezero
+                            if base_k_prezero is not None or base_p_prezero is not None:
+                                st.caption(f"↕️ Novo zero definido bem antes do 1º ciclo real ({t_prezero_ini:+.1f}s a {t_prezero_fim:+.1f}s) — reduz o efeito de deriva acumulada até ali.")
 
     # ── Estabilidade de tronco: comparação Kinem × Celular via ACELERAÇÃO e
     # VELOCIDADE ANGULAR brutas (sem integrar nada) — testamos e essa é a

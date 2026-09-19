@@ -975,6 +975,75 @@ def detect_trial_windows(reference: np.ndarray | None, x_axis: np.ndarray,
     return windows
 
 
+def find_stable_plateau(series: np.ndarray | None, x_axis: np.ndarray,
+                        search_start: float | None = None,
+                        min_duration: float = 3.0, tol_frac: float = 0.08,
+                        win_seconds: float = 1.0) -> tuple | None:
+    """
+    Acha o maior trecho contíguo, a partir de search_start, onde 'series'
+    fica dentro de uma banda estreita (platô estável) — usado pra detectar
+    automaticamente uma janela de calibração (ex.: joelho mantido num
+    ângulo conhecido por alguns segundos), sem precisar que o usuário
+    digite os instantes na mão.
+
+    tol_frac: variação máxima tolerada dentro de uma janela deslizante de
+    win_seconds, como fração da amplitude TOTAL da série (a partir de
+    search_start) — se adapta à escala de cada sinal, em vez de um valor
+    fixo em graus.
+    min_duration: duração mínima (s) do platô pra ser considerado válido.
+
+    Retorna (t_start, t_end) do platô mais longo encontrado, ou None se
+    não achar nenhum trecho estável o bastante.
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    mask_search = np.ones(n, dtype=bool) if search_start is None else (x_axis[:n] >= search_start)
+    if not np.any(mask_search):
+        return None
+    idx0 = np.where(mask_search)[0][0]
+    y = series[idx0:n]
+    x = x_axis[idx0:n]
+    valid = ~np.isnan(y)
+    if np.sum(valid) < 10:
+        return None
+
+    fs_local = 1.0 / np.median(np.diff(x)) if len(x) > 1 else 100.0
+    win = max(3, int(win_seconds * fs_local))
+    total_range = float(np.nanmax(y[valid]) - np.nanmin(y[valid]))
+    if total_range <= 0:
+        return None
+    tol = tol_frac * total_range
+
+    m = len(y)
+    roll_range = np.full(m, np.inf)
+    for i in range(0, max(0, m - win)):
+        seg = y[i:i + win]
+        if np.all(np.isnan(seg)):
+            continue
+        roll_range[i] = np.nanmax(seg) - np.nanmin(seg)
+    stable = roll_range < tol
+
+    best_start, best_len, cur_start, cur_len = None, 0, None, 0
+    for i, v in enumerate(stable):
+        if v:
+            if cur_start is None:
+                cur_start = i
+            cur_len += 1
+        else:
+            if cur_len > best_len:
+                best_len, best_start = cur_len, cur_start
+            cur_start, cur_len = None, 0
+    if cur_len > best_len:
+        best_len, best_start = cur_len, cur_start
+    if best_start is None:
+        return None
+    dur = best_len / fs_local
+    if dur < min_duration:
+        return None
+    return float(x[best_start]), float(x[min(best_start + best_len, m - 1)])
+
+
 def detect_first_drop(series: np.ndarray | None, x_axis: np.ndarray,
                       search_start: float | None = None,
                       drop_frac: float = 0.15, sustain_seconds: float = 0.3) -> float | None:

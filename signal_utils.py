@@ -1156,6 +1156,144 @@ def normalize_trial_curve(series: np.ndarray | None, x_axis: np.ndarray,
     return np.interp(x_target, x_pct, y_w)
 
 
+def knee_angle_gyro_relative_integration(thigh_gyro: pd.DataFrame | None, shank_gyro: pd.DataFrame | None,
+                                         fs: float, axis: str = "Z", lowpass_hz: float | None = 5.0,
+                                         sign: float = -1.0) -> np.ndarray | None:
+    """
+    Ângulo (BRUTO, não calibrado) por integração DIRETA da velocidade
+    angular relativa entre dois segmentos (ex.: perna − coxa), num eixo
+    bruto do celular (não mapeado por papel AP/ML/Vertical — usa a coluna
+    do jeito que veio do sensor). Diferente do filtro complementar (que
+    funde giroscópio + acelerômetro em CADA segmento separadamente antes
+    de subtrair), aqui a diferença é calculada ANTES de integrar — na
+    prática isso tende a cancelar uma parte do erro/deriva comum aos dois
+    sensores (testado com dados reais: seguiu a forma do Kinem bem melhor
+    que o filtro complementar nessa gravação).
+
+    Sem acelerômetro nenhum — não corrige deriva de longo prazo; precisa
+    de calibração (ex.: calibrate_two_point) pra virar um ângulo com
+    escala real, e tende a "andar" (drift) em gravações muito longas.
+
+    axis: qual coluna bruta (X/Y/Z) do giroscópio usar — depende de como o
+    celular foi montado; teste qual eixo acompanha melhor o movimento
+    esperado (comparando visualmente com o Kinem).
+    sign: +1 ou -1, ajusta o sentido do ângulo resultante.
+    """
+    if thigh_gyro is None or shank_gyro is None:
+        return None
+    if axis not in thigh_gyro.columns or axis not in shank_gyro.columns:
+        return None
+    g_thigh = try_numeric(thigh_gyro[axis]).values.astype(float)
+    g_shank = try_numeric(shank_gyro[axis]).values.astype(float)
+    n = min(len(g_thigh), len(g_shank))
+    if n < 2:
+        return None
+    gyro_rel = g_shank[:n] - g_thigh[:n]
+    bias_n = max(1, min(n, int(fs)))
+    bias = float(np.median(gyro_rel[:bias_n]))
+    gyro_rel = gyro_rel - bias
+    angle = sign * np.degrees(np.cumsum(gyro_rel) / fs)
+    if lowpass_hz:
+        angle = lowpass_array(angle, fs, lowpass_hz)
+    return angle
+
+
+def calibrate_two_point(series: np.ndarray | None, x_axis: np.ndarray,
+                        t0_start: float, t0_end: float, t1_start: float, t1_end: float,
+                        val0: float = 0.0, val1: float = 90.0) -> tuple:
+    """
+    Transformação linear de 2 pontos: a média de 'series' na janela
+    [t0_start,t0_end] passa a valer val0, e a média em [t1_start,t1_end]
+    passa a valer val1 — corrige viés E ganho juntos (ao contrário de um
+    offset simples, que só corrige viés).
+
+    Retorna (serie_calibrada, valor_bruto_ponto0, valor_bruto_ponto1) —
+    os dois últimos são só pra exibir na tela; se não der pra calibrar
+    (dados insuficientes ou os dois pontos iguais), retorna a série sem
+    mudar e (None, None).
+    """
+    v0 = compute_mean(series, x_axis, t0_start, t0_end)
+    v1 = compute_mean(series, x_axis, t1_start, t1_end)
+    if v0 is None or v1 is None or v1 == v0:
+        return series, v0, v1
+    ganho = (val1 - val0) / (v1 - v0)
+    calibrado = (series - v0) * ganho + val0
+    return calibrado, v0, v1
+
+
+def knee_angle_frontal_functional(vetor_coxa: np.ndarray, vetor_perna: np.ndarray, x_axis: np.ndarray,
+                                  t_neutral_start: float, t_neutral_end: float,
+                                  t_calib_start: float, t_calib_end: float) -> tuple:
+    """
+    Ângulo frontal do joelho (Kinem) com correção de "cross-talk" por
+    calibração funcional: em vez de assumir que o eixo X bruto do Kinem já
+    é exatamente o eixo mediolateral anatômico (o que raramente é
+    verdade — o corpo nunca fica perfeitamente alinhado com os eixos da
+    câmera), acha o plano sagital FUNCIONAL de verdade por PCA na
+    variação horizontal (X,Y) dos vetores de coxa/perna durante um
+    movimento de calibração conhecido (ex.: a flexão até o platô), e
+    projeta o ângulo frontal na direção perpendicular a esse plano — a
+    direção mediolateral REAL, não a assumida.
+
+    vetor_coxa, vetor_perna: arrays (N,3) — tipicamente
+    (quadril − joelho) e (tornozelo − joelho), na mesma convenção de
+    eixos do Kinem (X,Y horizontais, Z vertical).
+    t_neutral_*: janela parada, em pé (referência de zero).
+    t_calib_*: janela do movimento usado pra achar o plano funcional
+    (precisa ter uma variação de flexão clara — ex.: do início da
+    gravação até o platô/pico).
+
+    Retorna (angulo_frontal_corrigido, rotacao_funcional_graus,
+    variancia_explicada) — os 2 últimos são só informativos (quanto o
+    eixo "verdadeiro" está girado em relação ao eixo bruto da câmera, e
+    quão bem definida ficou essa direção).
+    """
+    norm_c = np.linalg.norm(vetor_coxa, axis=1, keepdims=True)
+    norm_p = np.linalg.norm(vetor_perna, axis=1, keepdims=True)
+    norm_c[norm_c == 0] = np.nan
+    norm_p[norm_p == 0] = np.nan
+    vc = vetor_coxa / norm_c
+    vp = vetor_perna / norm_p
+
+    n = min(len(vc), len(vp), len(x_axis))
+    vc, vp = vc[:n], vp[:n]
+    x = x_axis[:n]
+    mask_neutra = (x >= t_neutral_start) & (x <= t_neutral_end)
+    mask_calib = (x >= t_calib_start) & (x <= t_calib_end)
+    if np.sum(mask_neutra) < 3 or np.sum(mask_calib) < 10:
+        return None, None, None
+
+    coxa_inicial = np.nanmean(vc[mask_neutra], axis=0)
+    perna_inicial = np.nanmean(vp[mask_neutra], axis=0)
+    mudanca_coxa = vc - coxa_inicial
+    mudanca_perna = vp - perna_inicial
+
+    mudancas_h = np.vstack([mudanca_coxa[mask_calib, :2], mudanca_perna[mask_calib, :2]])
+    valid_h = ~np.any(np.isnan(mudancas_h), axis=1)
+    mudancas_h = mudancas_h[valid_h]
+    if len(mudancas_h) < 10:
+        return None, None, None
+    mudancas_h = mudancas_h - np.nanmean(mudancas_h, axis=0)
+    try:
+        _, sv, vt = np.linalg.svd(mudancas_h, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return None, None, None
+    direcao_sagital_xy = vt[0]
+    direcao_ml_xy = np.array([-direcao_sagital_xy[1], direcao_sagital_xy[0]])
+    rotacao_graus = float(np.degrees(np.arctan2(direcao_sagital_xy[1], direcao_sagital_xy[0])))
+    variancia = float(sv[0] ** 2 / np.sum(sv ** 2)) if np.sum(sv ** 2) > 0 else None
+
+    coxa_ml = vc[:, :2] @ direcao_ml_xy
+    perna_ml = vp[:, :2] @ direcao_ml_xy
+    inc_coxa = np.unwrap(np.arctan2(coxa_ml, vc[:, 2]))
+    inc_perna = np.unwrap(np.arctan2(perna_ml, vp[:, 2]))
+    angulo = np.degrees(inc_perna - inc_coxa)
+    baseline = np.nanmean(angulo[mask_neutra])
+    if np.isfinite(baseline):
+        angulo = angulo - baseline
+    return angulo, rotacao_graus, variancia
+
+
 def compute_mean(series: np.ndarray | None, x_axis: np.ndarray,
                  window_start: float, window_end: float) -> float | None:
     """Média de 'series' dentro de uma janela de tempo — menos sensível a picos/ruído pontual que compute_peak, bom pra referência de calibração num trecho estável."""

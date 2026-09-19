@@ -43,15 +43,20 @@ def col_default(cols: list[str], keywords: list[str]) -> int:
     return 0
 
 
-def best_match(names: list[str], *kw_sets: tuple[str, ...]) -> int:
+def best_match(names: list[str], *kw_sets: tuple[str, ...], exclude: tuple[str, ...] = ()) -> int:
     """
     Índice (1-based, deslocado por NONE_LABEL na frente da lista) do primeiro
     nome que contém todas as palavras-chave de algum kw_set, em ordem de
-    prioridade dos kw_sets.
+    prioridade dos kw_sets — pulando qualquer nome que contenha alguma
+    palavra de 'exclude' (evita, por exemplo, que um arquivo do L5 chamado
+    por engano com "perna" no nome seja sugerido pro grupo Tornozelo).
     """
     for kws in kw_sets:
         for i, n in enumerate(names):
-            if all(k in n.lower() for k in kws):
+            nl = n.lower()
+            if any(x in nl for x in exclude):
+                continue
+            if all(k in nl for k in kws):
                 return i + 1
     return 0
 

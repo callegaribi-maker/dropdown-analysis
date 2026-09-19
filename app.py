@@ -189,7 +189,7 @@ with st.sidebar:
 
         acc = st.selectbox(
             f"ACC {gdef['label']}", [NONE] + others,
-            index=best_match(others, *gdef["file_kw"]), key=f"{gkey}_acc",
+            index=best_match(others, *gdef["file_kw"], exclude=() if gkey == "l5" else ("l5", "l 5")), key=f"{gkey}_acc",
         )
         acc_col = None
         if acc != NONE:
@@ -200,7 +200,7 @@ with st.sidebar:
             )
         gyr = st.selectbox(
             f"GYR {gdef['label']}  ← offset = ACC", [NONE] + others,
-            index=best_match(others, *GYR_FILE_KW[gkey]), key=f"{gkey}_gyr",
+            index=best_match(others, *GYR_FILE_KW[gkey], exclude=() if gkey == "l5" else ("l5", "l 5")), key=f"{gkey}_gyr",
         )
         phone_files[gkey] = {"acc": acc, "acc_col": acc_col, "gyr": gyr}
 

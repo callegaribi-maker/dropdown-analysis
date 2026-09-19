@@ -614,75 +614,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             pfs, plane="frontal", alpha=cf_alpha,
         )
 
-    # ── Métodos alternativos (opcional): integração direta da velocidade
-    # angular relativa (celular, sem acelerômetro) + calibração de 2 pontos
-    # pro sagital; calibração funcional por PCA (corrige cross-talk) pro
-    # frontal do Kinem, com o celular também via integração direta. Testado
-    # com dados reais: segue melhor a FORMA do Kinem no sagital, e reduz
-    # bastante o vazamento do sagital pro frontal (cross-talk) no Kinem.
-    st.subheader("🧪 Métodos alternativos (opcional)")
-    usar_metodo_alt = st.checkbox(
-        "Usar integração direta do giroscópio (sagital) + calibração funcional (frontal)",
-        value=False, key="usar_metodo_alt",
-        help="Em vez do filtro complementar de sempre: sagital do celular = integra direto a velocidade angular relativa (perna − coxa), calibrada por 2 pontos; frontal do Kinem = corrige o cross-talk (vazamento da flexão pro plano frontal) achando o plano sagital funcional de verdade por PCA.",
-    )
-    if usar_metodo_alt:
-        ma1, ma2, ma3, ma4 = st.columns(4)
-        t_neutro_ini = ma1.number_input("Início postura neutra (s)", value=float(x_min_data), step=0.5, key="ma_t_neutro_ini")
-        t_neutro_fim = ma2.number_input("Fim postura neutra (s)", value=float(x_min_data) + 1.0, step=0.5, key="ma_t_neutro_fim")
-        t_calib_ini = ma3.number_input("Início janela de calibração (s)", value=float(x_min_data), step=0.5, key="ma_t_calib_ini")
-        t_calib_fim = ma4.number_input("Fim janela de calibração (s)", value=float(x_min_data) + 10.0, step=0.5, key="ma_t_calib_fim")
-        st.caption(
-            "'Postura neutra' = trecho parado em pé (referência de 0°). 'Janela de calibração' precisa cobrir um "
-            "movimento de flexão claro (ex.: do início até o platô ou pico) — é usada pra achar o eixo funcional "
-            "(frontal) e, junto com a postura neutra, pra calibrar a escala (sagital)."
-        )
-        eixo_sagital_gyro = st.selectbox("Eixo bruto do giroscópio p/ sagital", ["Z", "Y", "X"], index=0, key="ma_eixo_sagital")
-        eixo_frontal_gyro = st.selectbox("Eixo bruto do giroscópio p/ frontal", ["X", "Y", "Z"], index=0, key="ma_eixo_frontal")
-        angulo_calib_sagital_alt = st.number_input("Ângulo conhecido na janela de calibração, sagital (°)", value=90.0, step=1.0, key="ma_angulo_calib_sagital")
-
-        if phone_ready:
-            angulo_sagital_bruto = knee_angle_gyro_relative_integration(
-                aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs, axis=eixo_sagital_gyro, lowpass_hz=5.0, sign=-1.0,
-            )
-            if angulo_sagital_bruto is not None:
-                angle_phone_sagital_alt, v0_sag, v1_sag = calibrate_two_point(
-                    angulo_sagital_bruto, x_axis, t_neutro_ini, t_neutro_fim, t_calib_ini, t_calib_fim,
-                    val0=0.0, val1=angulo_calib_sagital_alt,
-                )
-                if v0_sag is not None:
-                    st.caption(f"📐 Celular sagital (alt.): postura neutra = {v0_sag:.1f}° bruto → 0°; janela de calibração = {v1_sag:.1f}° bruto → {angulo_calib_sagital_alt:.0f}°.")
-                    angle_phone_sagital = angle_phone_sagital_alt
-
-            angulo_frontal_bruto = knee_angle_gyro_relative_integration(
-                aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs, axis=eixo_frontal_gyro, lowpass_hz=5.0, sign=1.0,
-            )
-            if angulo_frontal_bruto is not None:
-                n_af = min(len(angulo_frontal_bruto), len(x_axis))
-                base_af = compute_mean(angulo_frontal_bruto[:n_af], x_axis[:n_af], t_neutro_ini, t_neutro_fim)
-                if base_af is not None:
-                    angulo_frontal_bruto = angulo_frontal_bruto - base_af
-                angle_phone_frontal = angulo_frontal_bruto
-
-        if not kdf_raw.empty:
-            pos_troc_alt = position_xyz_cols(kdf_raw, "trocanter")
-            pos_cond_alt = position_xyz_cols(kdf_raw, "condilo")
-            pos_mal_alt = position_xyz_cols(kdf_raw, "maleolo")
-            if all(k in pos_troc_alt for k in "XYZ") and all(k in pos_cond_alt for k in "XYZ") and all(k in pos_mal_alt for k in "XYZ"):
-                quadril_alt = np.column_stack([try_numeric(kdf_raw[pos_troc_alt[a]]).values for a in "XYZ"])
-                joelho_alt = np.column_stack([try_numeric(kdf_raw[pos_cond_alt[a]]).values for a in "XYZ"])
-                tornozelo_alt = np.column_stack([try_numeric(kdf_raw[pos_mal_alt[a]]).values for a in "XYZ"])
-                vetor_coxa_alt = quadril_alt - joelho_alt
-                vetor_perna_alt = joelho_alt - tornozelo_alt  # invertido em relação ao sagital — convenção própria do frontal
-                angulo_frontal_kinem_alt, rotacao_func, variancia_func = knee_angle_frontal_functional(
-                    vetor_coxa_alt, vetor_perna_alt, x_axis, t_neutro_ini, t_neutro_fim, t_calib_ini, t_calib_fim,
-                )
-                if angulo_frontal_kinem_alt is not None:
-                    st.caption(f"📐 Kinem frontal (alt.): eixo funcional girado {rotacao_func:.1f}° em relação ao eixo bruto da câmera (variância explicada: {variancia_func*100:.0f}%).")
-                    angle_kinem_frontal = angulo_frontal_kinem_alt
-                else:
-                    st.caption("⚠️ Não deu pra calcular o frontal funcional — confira as janelas (precisam ter dados suficientes e um movimento de flexão claro na janela de calibração).")
-
     # ── Velocidade angular (derivada dos ângulos já corrigidos/calibrados) —
     # métrica de qualidade de movimento: quão rápido o joelho flexiona/desvia,
     # não só o quanto. Filtra o ângulo (passa-baixa 10Hz) ANTES de derivar —
@@ -734,6 +665,101 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     )
 
     trials = detect_trial_windows(angle_kinem_sagital, x_axis, search_start=trial_search_start)
+
+    # ── Métodos alternativos (opcional): integração direta da velocidade
+    # angular relativa (celular, sem acelerômetro) + calibração de 2 pontos
+    # pro sagital; calibração funcional por PCA (corrige cross-talk) pro
+    # frontal do Kinem, com o celular também via integração direta. Testado
+    # com dados reais: segue melhor a FORMA do Kinem no sagital, e reduz
+    # bastante o vazamento do sagital pro frontal (cross-talk) no Kinem.
+    #
+    # As janelas padrão vêm dos limites do Trial 1 já detectado (não de
+    # x_min_data cru) — sem isso, se as janelas caírem fora de dados reais,
+    # a calibração falha silenciosamente e sobra o ângulo bruto (que sem
+    # calibração pode chegar a milhares de graus, por deriva pura da
+    # integração) — isso já aconteceu e o aviso abaixo evita repetir.
+    st.subheader("🧪 Métodos alternativos (opcional)")
+    usar_metodo_alt = st.checkbox(
+        "Usar integração direta do giroscópio (sagital) + calibração funcional (frontal)",
+        value=False, key="usar_metodo_alt",
+        help="Em vez do filtro complementar de sempre: sagital do celular = integra direto a velocidade angular relativa (perna − coxa), calibrada por 2 pontos; frontal do Kinem = corrige o cross-talk (vazamento da flexão pro plano frontal) achando o plano sagital funcional de verdade por PCA.",
+    )
+    if usar_metodo_alt:
+        if not trials:
+            st.warning("⚠️ Nenhum trial detectado ainda — ajuste 'A partir de quando procurar os trials' acima antes de usar os métodos alternativos (as janelas padrão dependem disso).")
+        else:
+            t_start_default, t_end_default = trials[0]
+            ma1, ma2, ma3, ma4 = st.columns(4)
+            t_neutro_ini = ma1.number_input("Início postura neutra (s)", value=float(x_min_data), step=0.5, key="ma_t_neutro_ini")
+            t_neutro_fim = ma2.number_input("Fim postura neutra (s)", value=float(x_min_data) + 0.5, step=0.5, key="ma_t_neutro_fim")
+            t_calib_ini = ma3.number_input("Início janela de calibração (s)", value=float(t_start_default), step=0.5, key="ma_t_calib_ini")
+            t_calib_fim = ma4.number_input("Fim janela de calibração (s)", value=float(t_end_default), step=0.5, key="ma_t_calib_fim")
+            st.caption(
+                "'Postura neutra' = trecho parado em pé (referência de 0°). 'Janela de calibração' precisa cobrir um "
+                "movimento de flexão claro (ex.: do início até o platô ou pico) — por padrão já vem com os limites do "
+                "Trial 1 detectado, mas ajuste livremente olhando o gráfico bruto abaixo."
+            )
+            eixo_sagital_gyro = st.selectbox("Eixo bruto do giroscópio p/ sagital", ["Z", "Y", "X"], index=0, key="ma_eixo_sagital")
+            eixo_frontal_gyro = st.selectbox("Eixo bruto do giroscópio p/ frontal", ["X", "Y", "Z"], index=0, key="ma_eixo_frontal")
+            angulo_calib_sagital_alt = st.number_input("Ângulo conhecido na janela de calibração, sagital (°)", value=90.0, step=1.0, key="ma_angulo_calib_sagital")
+
+            def _checa_faixa(nome, serie):
+                if serie is None:
+                    return
+                amplitude = float(np.nanmax(serie) - np.nanmin(serie))
+                if amplitude > 150:
+                    st.error(f"❌ {nome} ficou com amplitude de {amplitude:.0f}° — isso não é fisiologicamente plausível pra esse teste. A janela de calibração provavelmente está cortando no meio do platô/movimento (não cobrindo o trecho estável inteiro), ou o eixo do giroscópio está errado. Ajuste as janelas acima olhando o gráfico bruto abaixo — alargue a 'janela de calibração' até cobrir o trecho INTEIRO e estável do movimento de referência. Mantendo o método antigo pra essa curva por enquanto.")
+                    return False
+                return True
+
+            if phone_ready:
+                angulo_sagital_bruto = knee_angle_gyro_relative_integration(
+                    aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs, axis=eixo_sagital_gyro, lowpass_hz=5.0, sign=-1.0,
+                )
+                if angulo_sagital_bruto is not None:
+                    angle_phone_sagital_alt, v0_sag, v1_sag = calibrate_two_point(
+                        angulo_sagital_bruto, x_axis, t_neutro_ini, t_neutro_fim, t_calib_ini, t_calib_fim,
+                        val0=0.0, val1=angulo_calib_sagital_alt,
+                    )
+                    if v0_sag is None or v1_sag is None:
+                        st.error("❌ Não deu pra calibrar o sagital (alt.) — não há dados suficientes numa das duas janelas. Mantendo o método antigo.")
+                    else:
+                        st.caption(f"📐 Celular sagital (alt.): postura neutra = {v0_sag:.1f}° bruto → 0°; janela de calibração = {v1_sag:.1f}° bruto → {angulo_calib_sagital_alt:.0f}°.")
+                        if _checa_faixa("Celular sagital (alt.)", angle_phone_sagital_alt):
+                            angle_phone_sagital = angle_phone_sagital_alt
+
+                angulo_frontal_bruto = knee_angle_gyro_relative_integration(
+                    aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs, axis=eixo_frontal_gyro, lowpass_hz=5.0, sign=1.0,
+                )
+                if angulo_frontal_bruto is not None:
+                    n_af = min(len(angulo_frontal_bruto), len(x_axis))
+                    base_af = compute_mean(angulo_frontal_bruto[:n_af], x_axis[:n_af], t_neutro_ini, t_neutro_fim)
+                    if base_af is None:
+                        st.error("❌ Não deu pra zerar o frontal do celular (alt.) na janela de postura neutra — não há dados ali. Mantendo o método antigo.")
+                    else:
+                        angulo_frontal_bruto = angulo_frontal_bruto - base_af
+                        if _checa_faixa("Celular frontal (alt.)", angulo_frontal_bruto):
+                            angle_phone_frontal = angulo_frontal_bruto
+
+            if not kdf_raw.empty:
+                pos_troc_alt = position_xyz_cols(kdf_raw, "trocanter")
+                pos_cond_alt = position_xyz_cols(kdf_raw, "condilo")
+                pos_mal_alt = position_xyz_cols(kdf_raw, "maleolo")
+                if all(k in pos_troc_alt for k in "XYZ") and all(k in pos_cond_alt for k in "XYZ") and all(k in pos_mal_alt for k in "XYZ"):
+                    quadril_alt = np.column_stack([try_numeric(kdf_raw[pos_troc_alt[a]]).values for a in "XYZ"])
+                    joelho_alt = np.column_stack([try_numeric(kdf_raw[pos_cond_alt[a]]).values for a in "XYZ"])
+                    tornozelo_alt = np.column_stack([try_numeric(kdf_raw[pos_mal_alt[a]]).values for a in "XYZ"])
+                    vetor_coxa_alt = quadril_alt - joelho_alt
+                    vetor_perna_alt = joelho_alt - tornozelo_alt  # invertido em relação ao sagital — convenção própria do frontal
+                    angulo_frontal_kinem_alt, rotacao_func, variancia_func = knee_angle_frontal_functional(
+                        vetor_coxa_alt, vetor_perna_alt, x_axis, t_neutro_ini, t_neutro_fim, t_calib_ini, t_calib_fim,
+                    )
+                    if angulo_frontal_kinem_alt is None:
+                        st.error("❌ Não deu pra calcular o frontal funcional do Kinem — confira as janelas (precisam ter dados suficientes e um movimento de flexão claro na janela de calibração). Mantendo o método antigo.")
+                    else:
+                        st.caption(f"📐 Kinem frontal (alt.): eixo funcional girado {rotacao_func:.1f}° em relação ao eixo bruto da câmera (variância explicada: {variancia_func*100:.0f}%).")
+                        if _checa_faixa("Kinem frontal (alt.)", angulo_frontal_kinem_alt):
+                            angle_kinem_frontal = angulo_frontal_kinem_alt
 
     # ── Estabilidade de tronco: comparação Kinem × Celular via ACELERAÇÃO e
     # VELOCIDADE ANGULAR brutas (sem integrar nada) — testamos e essa é a

@@ -1230,9 +1230,103 @@ def normalize_trial_curve(series: np.ndarray | None, x_axis: np.ndarray,
     return np.interp(x_target, x_pct, y_w)
 
 
+def gyro_relative_velocity(thigh_gyro: pd.DataFrame | None, shank_gyro: pd.DataFrame | None,
+                           fs: float, axis: str = "Z", sign: float = -1.0) -> np.ndarray | None:
+    """
+    Velocidade angular relativa entre dois segmentos (ex.: perna − coxa),
+    BRUTA (num eixo cru do celular, não mapeado por papel AP/ML/Vertical),
+    já com o bias removido (mediana do primeiro segundo) — sem integrar.
+    Usada tanto pra estimar o ângulo (integrando depois) quanto pra
+    sincronizar contra a velocidade angular da cinemática.
+    """
+    if thigh_gyro is None or shank_gyro is None:
+        return None
+    if axis not in thigh_gyro.columns or axis not in shank_gyro.columns:
+        return None
+    g_thigh = try_numeric(thigh_gyro[axis]).values.astype(float)
+    g_shank = try_numeric(shank_gyro[axis]).values.astype(float)
+    n = min(len(g_thigh), len(g_shank))
+    if n < 2:
+        return None
+    gyro_rel = g_shank[:n] - g_thigh[:n]
+    bias_n = max(1, min(n, int(fs)))
+    bias = float(np.median(gyro_rel[:bias_n]))
+    gyro_rel = gyro_rel - bias
+    return sign * gyro_rel
+
+
+def angular_velocity_from_angle(angle: np.ndarray | None, x_axis: np.ndarray) -> np.ndarray | None:
+    """Velocidade angular (°/s) por derivação numérica do ângulo — pra comparar/sincronizar com a velocidade angular bruta do giroscópio."""
+    if angle is None:
+        return None
+    n = min(len(angle), len(x_axis))
+    if n < 2:
+        return None
+    return np.gradient(angle[:n], x_axis[:n])
+
+
+def estimate_gyro_lag(kinem_velocity: np.ndarray | None, gyro_velocity: np.ndarray | None,
+                      x_axis: np.ndarray, t_start: float, t_end: float,
+                      max_lag: float = 3.0, lag_step: float = 0.01) -> tuple:
+    """
+    Acha o atraso (segundos) que maximiza a correlação entre a velocidade
+    angular da cinemática (kinem_velocity, já derivada) e a velocidade
+    angular relativa BRUTA do giroscópio (gyro_velocity, mesma grade de
+    tempo x_axis) — testando uma faixa de atrasos de -max_lag a +max_lag,
+    em passos de lag_step. Só usa a janela [t_start, t_end] (tipicamente a
+    janela de calibração) pra achar o atraso — evita "forçar" a
+    concordância usando os ciclos de teste.
+
+    Positivo = giroscópio precisa ser adiantado nesse tanto pra alinhar
+    (equivalente a: o celular estava atrasado em relação à cinemática).
+
+    Retorna (melhor_atraso, melhor_correlacao), ou (None, None) se não
+    der pra calcular (dados insuficientes na janela).
+    """
+    if kinem_velocity is None or gyro_velocity is None:
+        return None, None
+    n = min(len(kinem_velocity), len(gyro_velocity), len(x_axis))
+    x = x_axis[:n]
+    kv = kinem_velocity[:n]
+    gv = gyro_velocity[:n]
+    mask = (x >= t_start) & (x <= t_end)
+    if np.sum(mask) < 10:
+        return None, None
+
+    melhor_corr = -np.inf
+    melhor_atraso = None
+    for atraso in np.arange(-max_lag, max_lag + lag_step, lag_step):
+        gv_shifted = np.interp(x + atraso, x, gv, left=np.nan, right=np.nan)
+        seg_k = kv[mask]
+        seg_g = gv_shifted[mask]
+        valid = ~np.isnan(seg_k) & ~np.isnan(seg_g)
+        if np.sum(valid) < 10:
+            continue
+        std_k, std_g = np.std(seg_k[valid]), np.std(seg_g[valid])
+        if std_k == 0 or std_g == 0:
+            continue
+        corr = float(np.corrcoef(seg_k[valid], seg_g[valid])[0, 1])
+        if np.isfinite(corr) and corr > melhor_corr:
+            melhor_corr = corr
+            melhor_atraso = float(atraso)
+    if melhor_atraso is None:
+        return None, None
+    return melhor_atraso, melhor_corr
+
+
+def apply_lag_to_series(series: np.ndarray | None, x_axis: np.ndarray, atraso: float | None) -> np.ndarray | None:
+    """Desloca 'series' no tempo por 'atraso' segundos (interpolando na mesma grade x_axis) — usa o atraso encontrado por estimate_gyro_lag."""
+    if series is None or atraso is None:
+        return series
+    n = min(len(series), len(x_axis))
+    x = x_axis[:n]
+    return np.interp(x + atraso, x, series[:n], left=np.nan, right=np.nan)
+
+
 def knee_angle_gyro_relative_integration(thigh_gyro: pd.DataFrame | None, shank_gyro: pd.DataFrame | None,
                                          fs: float, axis: str = "Z", lowpass_hz: float | None = 5.0,
-                                         sign: float = -1.0) -> np.ndarray | None:
+                                         sign: float = -1.0, x_axis: np.ndarray | None = None,
+                                         lag_seconds: float | None = None) -> np.ndarray | None:
     """
     Ângulo (BRUTO, não calibrado) por integração DIRETA da velocidade
     angular relativa entre dois segmentos (ex.: perna − coxa), num eixo
@@ -1252,21 +1346,17 @@ def knee_angle_gyro_relative_integration(thigh_gyro: pd.DataFrame | None, shank_
     celular foi montado; teste qual eixo acompanha melhor o movimento
     esperado (comparando visualmente com o Kinem).
     sign: +1 ou -1, ajusta o sentido do ângulo resultante.
+    x_axis, lag_seconds: se os dois forem informados, desloca a
+    velocidade angular relativa por lag_seconds (ex.: achado por
+    estimate_gyro_lag) antes de integrar — refina a sincronização
+    especificamente pra esse cálculo.
     """
-    if thigh_gyro is None or shank_gyro is None:
+    gyro_rel = gyro_relative_velocity(thigh_gyro, shank_gyro, fs, axis=axis, sign=sign)
+    if gyro_rel is None:
         return None
-    if axis not in thigh_gyro.columns or axis not in shank_gyro.columns:
-        return None
-    g_thigh = try_numeric(thigh_gyro[axis]).values.astype(float)
-    g_shank = try_numeric(shank_gyro[axis]).values.astype(float)
-    n = min(len(g_thigh), len(g_shank))
-    if n < 2:
-        return None
-    gyro_rel = g_shank[:n] - g_thigh[:n]
-    bias_n = max(1, min(n, int(fs)))
-    bias = float(np.median(gyro_rel[:bias_n]))
-    gyro_rel = gyro_rel - bias
-    angle = sign * np.degrees(np.cumsum(gyro_rel) / fs)
+    if x_axis is not None and lag_seconds is not None:
+        gyro_rel = apply_lag_to_series(gyro_rel, x_axis, lag_seconds)
+    angle = np.degrees(np.nancumsum(np.nan_to_num(gyro_rel)) / fs)
     if lowpass_hz:
         angle = lowpass_array(angle, fs, lowpass_hz)
     return angle

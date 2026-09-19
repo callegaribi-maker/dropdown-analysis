@@ -47,6 +47,10 @@ from signal_utils import (
     knee_angle_gyro_relative_integration,
     knee_angle_frontal_functional,
     calibrate_two_point,
+    gyro_relative_velocity,
+    angular_velocity_from_angle,
+    estimate_gyro_lag,
+    apply_lag_to_series,
     knee_angle_from_phone,
     knee_angle_from_phone_plane,
     load_file,
@@ -717,6 +721,23 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         eixo_frontal_gyro = st.selectbox("Eixo bruto do giroscópio p/ frontal", ["X", "Y", "Z"], index=0, key="ma_eixo_frontal")
         angulo_calib_sagital_alt = st.number_input("Ângulo conhecido na janela de calibração, sagital (°)", value=90.0, step=1.0, key="ma_angulo_calib_sagital")
 
+        usar_sync_giro = st.checkbox(
+            "Refinar sincronização comparando velocidade angular (giroscópio vs. cinemática)",
+            value=True, key="ma_usar_sync_giro",
+            help="Deriva o ângulo do Kinem pra virar velocidade angular, e testa uma faixa de atrasos no giroscópio até achar o que maximiza a correlação entre os dois, só dentro da janela de calibração — evita 'forçar' a concordância usando os ciclos de teste. Refina a sincronização que o resto do app já fez, especificamente pra esse cálculo.",
+        )
+        lag_giro_sagital = None
+        if usar_sync_giro and phone_ready:
+            kinem_vel = angular_velocity_from_angle(angle_kinem_sagital, x_axis)
+            gyro_vel = gyro_relative_velocity(aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs, axis=eixo_sagital_gyro, sign=-1.0)
+            lag_giro_sagital, corr_giro = estimate_gyro_lag(
+                kinem_vel, gyro_vel, x_axis, t_calib_ini - 5.0, t_calib_fim + 2.0, max_lag=3.0, lag_step=0.01,
+            )
+            if lag_giro_sagital is not None:
+                st.caption(f"⏱️ Sincronização por velocidade angular: atraso encontrado = {lag_giro_sagital:+.2f}s (correlação r={corr_giro:.3f}) — aplicado só no cálculo sagital do giroscópio, abaixo.")
+            else:
+                st.caption("⚠️ Não deu pra estimar o atraso por velocidade angular (dados insuficientes na janela de calibração) — usando a sincronização normal do app.")
+
         def _checa_faixa(nome, serie):
             if serie is None:
                 return
@@ -729,6 +750,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         if phone_ready:
             angulo_sagital_bruto = knee_angle_gyro_relative_integration(
                 aligned_raw[pf_coxa["gyr"]], aligned_raw[pf_torn["gyr"]], pfs, axis=eixo_sagital_gyro, lowpass_hz=5.0, sign=-1.0,
+                x_axis=x_axis, lag_seconds=lag_giro_sagital,
             )
             if angulo_sagital_bruto is not None:
                 angle_phone_sagital_alt, v0_sag, v1_sag = calibrate_two_point(

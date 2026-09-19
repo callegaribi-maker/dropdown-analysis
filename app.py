@@ -683,30 +683,32 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # a calibração falha silenciosamente e sobra o ângulo bruto (que sem
     # calibração pode chegar a milhares de graus, por deriva pura da
     # integração) — isso já aconteceu e o aviso abaixo evita repetir.
-    st.subheader("🧪 Métodos alternativos (opcional)")
-    usar_metodo_alt = st.checkbox(
-        "Usar integração direta do giroscópio (sagital) + calibração funcional (frontal)",
-        value=False, key="usar_metodo_alt",
-        help="Em vez do filtro complementar de sempre: sagital do celular = integra direto a velocidade angular relativa (perna − coxa), calibrada por 2 pontos; frontal do Kinem = corrige o cross-talk (vazamento da flexão pro plano frontal) achando o plano sagital funcional de verdade por PCA.",
-    )
-    if usar_metodo_alt:
-        # Detecta automaticamente o platô de calibração (maior trecho
-        # estável do ângulo sagital do Kinem) — sem precisar que você ache
-        # os instantes na mão. 'Postura neutra' é sempre o começo da
-        # gravação (mesmo padrão usado no resto do app).
-        plato_detectado = find_stable_plateau(angle_kinem_sagital, x_axis, search_start=x_min_data, min_duration=3.0, tol_frac=0.08)
-        t_neutro_ini_sugerido = float(x_min_data)
-        t_neutro_fim_sugerido = float(x_min_data) + 0.5
-        if plato_detectado is not None:
-            t_calib_ini_sugerido, t_calib_fim_sugerido = plato_detectado
-            st.caption(f"🎯 Platô de calibração detectado automaticamente: {t_calib_ini_sugerido:+.2f}s a {t_calib_fim_sugerido:+.2f}s — ajuste abaixo se não bater com o que você vê no gráfico bruto.")
-        elif trials:
-            t_calib_ini_sugerido, t_calib_fim_sugerido = trials[0]
-            st.caption("⚠️ Não consegui detectar um platô estável automaticamente — usando os limites do Trial 1 como sugestão inicial. Ajuste olhando o gráfico bruto abaixo.")
-        else:
-            t_calib_ini_sugerido, t_calib_fim_sugerido = float(x_min_data), float(x_min_data) + 5.0
-            st.caption("⚠️ Não consegui detectar um platô estável nem um Trial 1 — ajuste a janela de calibração manualmente olhando o gráfico bruto abaixo.")
+    st.subheader("🦵 Calibração do ângulo (goniômetro)")
+    # Detecta automaticamente o platô de calibração (maior trecho estável
+    # do ângulo sagital do Kinem) — sem precisar que você ache os
+    # instantes na mão. 'Postura neutra' é sempre o começo da gravação.
+    plato_detectado = find_stable_plateau(angle_kinem_sagital, x_axis, search_start=x_min_data, min_duration=3.0, tol_frac=0.08)
+    t_neutro_ini_sugerido = float(x_min_data)
+    t_neutro_fim_sugerido = float(x_min_data) + 0.5
+    if plato_detectado is not None:
+        t_calib_ini_sugerido, t_calib_fim_sugerido = plato_detectado
+        st.caption(f"🎯 Platô de calibração detectado automaticamente: {t_calib_ini_sugerido:+.2f}s a {t_calib_fim_sugerido:+.2f}s — a região colorida no gráfico abaixo mostra esse trecho. Se não bater com o platô real, abra 'Ajustar detecção manualmente' logo abaixo.")
+    elif trials:
+        t_calib_ini_sugerido, t_calib_fim_sugerido = trials[0]
+        st.caption("⚠️ Não consegui detectar um platô estável automaticamente — usando os limites do Trial 1 como sugestão inicial. Confira a região colorida no gráfico abaixo; se não bater, ajuste manualmente logo abaixo.")
+    else:
+        t_calib_ini_sugerido, t_calib_fim_sugerido = float(x_min_data), float(x_min_data) + 5.0
+        st.caption("⚠️ Não consegui detectar um platô estável nem um Trial 1 — abra 'Ajustar detecção manualmente' abaixo e informe a janela na mão.")
 
+    angulo_calib_sagital_alt = st.number_input(
+        "Ângulo de referência conhecido (°, medido com goniômetro no platô)", value=90.0, step=1.0, key="ma_angulo_calib_sagital",
+    )
+
+    with st.expander("⚙️ Ajustar detecção manualmente (só se tiver erro)", expanded=False):
+        usar_metodo_alt = not st.checkbox(
+            "Desligar esse método e usar o filtro complementar antigo (não recomendado)",
+            value=False, key="ma_desligar_metodo_alt",
+        )
         ma1, ma2, ma3, ma4 = st.columns(4)
         t_neutro_ini = ma1.number_input("Início postura neutra (s)", value=t_neutro_ini_sugerido, step=0.5, key="ma_t_neutro_ini")
         t_neutro_fim = ma2.number_input("Fim postura neutra (s)", value=t_neutro_fim_sugerido, step=0.5, key="ma_t_neutro_fim")
@@ -719,7 +721,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         )
         eixo_sagital_gyro = st.selectbox("Eixo bruto do giroscópio p/ sagital", ["Z", "Y", "X"], index=0, key="ma_eixo_sagital")
         eixo_frontal_gyro = st.selectbox("Eixo bruto do giroscópio p/ frontal", ["X", "Y", "Z"], index=0, key="ma_eixo_frontal")
-        angulo_calib_sagital_alt = st.number_input("Ângulo conhecido na janela de calibração, sagital (°)", value=90.0, step=1.0, key="ma_angulo_calib_sagital")
 
         usar_sync_giro = st.checkbox(
             "Refinar sincronização comparando velocidade angular (giroscópio vs. cinemática)",
@@ -738,6 +739,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             else:
                 st.caption("⚠️ Não deu pra estimar o atraso por velocidade angular (dados insuficientes na janela de calibração) — usando a sincronização normal do app.")
 
+    if usar_metodo_alt:
         def _checa_faixa(nome, serie):
             if serie is None:
                 return
@@ -1004,9 +1006,15 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             ))
             fig.update_layout(yaxis2=dict(title="L5 vertical (cm)", overlaying="y", side="right", showgrid=False))
 
-        def render_sagital_chart(k_series, p_series, titulo_extra=""):
+        def render_sagital_chart(k_series, p_series, titulo_extra="", highlight_window=None):
             fig = go.Figure()
             add_phase_shading(fig)
+            if highlight_window is not None:
+                fig.add_vrect(
+                    x0=highlight_window[0], x1=highlight_window[1],
+                    fillcolor="rgba(255, 99, 71, 0.18)", line_width=0,
+                    annotation_text="janela de calibração", annotation_position="top left",
+                )
             add_angle_trace(fig, k_series, "blue", "Kinem — sagital")
             add_angle_trace(fig, p_series, "red", "Celular — sagital")
             add_angle_trace(fig, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
@@ -1022,8 +1030,8 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
         # --- Plano sagital (flexão/extensão) — bruto, sem calibração ---
         st.markdown("**Sagital — flexão (↑) / extensão (↓) — bruto**")
-        st.caption("Fundo cinza = preparação · laranja = descida · azul = subida · linha pontilhada cinza = deslocamento vertical do L5 (eixo direito, cm).")
-        render_sagital_chart(angle_kinem_sagital, angle_phone_sagital)
+        st.caption("Fundo cinza = preparação · laranja = descida · azul = subida · linha pontilhada cinza = deslocamento vertical do L5 (eixo direito, cm) · faixa vermelha = janela de calibração usada.")
+        render_sagital_chart(angle_kinem_sagital, angle_phone_sagital, highlight_window=(t_calib_ini, t_calib_fim))
 
         if angle_kinem_sagital is None:
             st.caption("⚠️ Ângulo do Kinem não calculado — verifique se as colunas de posição X/Y/Z de Trocânter, Côndilo e Tornozelo estão presentes.")
@@ -1048,66 +1056,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             )
             st.plotly_chart(fig_front, use_container_width=True)
             st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
-
-        # --- Calibração funcional (goniômetro numa janela específica) ---
-        # Você escolhe (ou ajusta) a janela exata de calibração — por
-        # padrão, os limites do Trial 1, mas totalmente editável, já que o
-        # Trial 1 pode incluir mais de um evento (ex.: platô de calibração +
-        # primeiro step-down) e um "pico bruto" ali pode pegar pontos
-        # diferentes pro Kinem e pro celular. Usa a MÉDIA da janela (não o
-        # máximo), que é bem menos sensível a picos pontuais/ruído.
-        st.divider()
-        st.subheader("🎯 Calibração funcional")
-        if not trials:
-            st.info("Nenhum trial detectado — não dá pra calibrar.")
-        else:
-            t_start_default, t_end_default = trials[0]
-            cw1, cw2, cw3 = st.columns(3)
-            angulo_calib_conhecido = cw1.number_input(
-                "Ângulo real conhecido (°, medido com goniômetro)", value=90.0, step=1.0, key="angulo_calib_conhecido",
-            )
-            calib_win_start = cw2.number_input(
-                "Início da janela de calibração (s)", value=float(t_start_default), step=0.5, key="calib_win_start",
-            )
-            calib_win_end = cw3.number_input(
-                "Fim da janela de calibração (s)", value=float(t_end_default), step=0.5, key="calib_win_end",
-            )
-            st.caption(
-                f"Usando a **média** do ângulo entre {calib_win_start:+.2f}s e {calib_win_end:+.2f}s como referência bruta "
-                "(não o pico) — ajuste essa janela olhando o gráfico bruto acima, pra ela cobrir só o trecho de calibração "
-                "(ex.: o platô parado), sem misturar com nenhum step-down."
-            )
-
-            media_kinem_calib = compute_mean(angle_kinem_sagital, x_axis, calib_win_start, calib_win_end)
-            media_phone_calib = compute_mean(angle_phone_sagital, x_axis, calib_win_start, calib_win_end)
-
-            angle_kinem_sagital_calib = angle_kinem_sagital
-            angle_phone_sagital_calib = angle_phone_sagital
-            if media_kinem_calib is not None:
-                offset_kinem_calib = angulo_calib_conhecido - media_kinem_calib
-                angle_kinem_sagital_calib = angle_kinem_sagital + offset_kinem_calib
-                st.caption(f"📐 Kinem: offset = {angulo_calib_conhecido:.1f}° − {media_kinem_calib:.1f}° (média bruta, {calib_win_start:+.1f}s a {calib_win_end:+.1f}s) = **{offset_kinem_calib:+.1f}°**")
-                if abs(offset_kinem_calib) > 20:
-                    st.warning(f"⚠️ Offset do Kinem é grande ({offset_kinem_calib:+.1f}°) — confira se a janela de calibração está cobrindo o trecho certo.")
-            if media_phone_calib is not None:
-                offset_phone_calib = angulo_calib_conhecido - media_phone_calib
-                angle_phone_sagital_calib = angle_phone_sagital + offset_phone_calib
-                st.caption(f"📐 Celular: offset = {angulo_calib_conhecido:.1f}° − {media_phone_calib:.1f}° (média bruta, {calib_win_start:+.1f}s a {calib_win_end:+.1f}s) = **{offset_phone_calib:+.1f}°**")
-                if abs(offset_phone_calib) > 20:
-                    st.warning(
-                        f"⚠️ Offset do celular é grande ({offset_phone_calib:+.1f}°) — pode ser que ele não esteja "
-                        "captando bem esse ângulo estático (giroscópio não detecta rotação parada em torno do eixo da "
-                        "gravidade, e o acelerômetro sozinho pode não distinguir essa pose). Se isso persistir, "
-                        "considere não calibrar o celular (deixar sem offset) e calibrar só o Kinem."
-                    )
-
-            st.markdown("**Sagital — flexão (↑) / extensão (↓) — calibrado**")
-            render_sagital_chart(angle_kinem_sagital_calib, angle_phone_sagital_calib)
-
-            # A partir daqui, o resto do app (tabelas, quadril, análises)
-            # usa a versão CALIBRADA do ângulo sagital do joelho.
-            angle_kinem_sagital = angle_kinem_sagital_calib
-            angle_phone_sagital = angle_phone_sagital_calib
 
         # --- Ângulo do quadril (tronco/L5 vs coxa) ---
         st.divider()

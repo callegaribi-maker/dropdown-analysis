@@ -731,6 +731,8 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     else:
         trial_phases = [None] * len(trials)
 
+    valid_trials_summary = [(t, p) for t, p in zip(trials, trial_phases) if p]
+
     # --- Validação da segmentação: deslocamento vertical do L5 ---
     st.subheader("📐 Deslocamento vertical do L5 (validação da segmentação)")
     if l5_vertical is None:
@@ -1663,7 +1665,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # ══════════════════════════════════════════
     # Quadro-resumo do resultado do teste
     # ══════════════════════════════════════════
-    valid_trials_summary = [(t, p) for t, p in zip(trials, trial_phases) if p]
     if valid_trials_summary:
         adm_sag_k, adm_sag_p = [], []
         peak_valgo_k, peak_valgo_p = [], []

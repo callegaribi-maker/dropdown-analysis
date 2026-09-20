@@ -1116,319 +1116,319 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         ).values.astype(float)
         trunk_angvel_phone = np.degrees(gyr_ap_raw)
 
-        st.markdown("**Sagital — flexão (↑) / extensão (↓) — bruto**")
-        st.caption("Fundo cinza = preparação · laranja = descida · azul = subida · linha pontilhada cinza = deslocamento vertical do L5 (eixo direito, cm) · faixa vermelha = janela de calibração usada.")
-        render_sagital_chart(angle_kinem_sagital, angle_phone_sagital, highlight_window=(t_calib_ini, t_calib_fim))
+    st.markdown("**Sagital — flexão (↑) / extensão (↓) — bruto**")
+    st.caption("Fundo cinza = preparação · laranja = descida · azul = subida · linha pontilhada cinza = deslocamento vertical do L5 (eixo direito, cm) · faixa vermelha = janela de calibração usada.")
+    render_sagital_chart(angle_kinem_sagital, angle_phone_sagital, highlight_window=(t_calib_ini, t_calib_fim))
 
-        if angle_kinem_sagital is None:
-            st.caption("⚠️ Ângulo do Kinem não calculado — verifique se as colunas de posição X/Y/Z de Trocânter, Côndilo e Tornozelo estão presentes.")
-        if angle_phone_sagital is None:
-            st.caption("⚠️ Ângulo do celular não calculado — selecione ACC e GYR de Coxa e Tornozelo na barra lateral.")
+    if angle_kinem_sagital is None:
+        st.caption("⚠️ Ângulo do Kinem não calculado — verifique se as colunas de posição X/Y/Z de Trocânter, Côndilo e Tornozelo estão presentes.")
+    if angle_phone_sagital is None:
+        st.caption("⚠️ Ângulo do celular não calculado — selecione ACC e GYR de Coxa e Tornozelo na barra lateral.")
 
-        # --- Plano frontal ---
-        if True:
-            st.markdown("**Frontal — valgo (↑ ou ↓, ver nota) / varo (sentido oposto)**")
-            fig_front = go.Figure()
-            add_phase_shading(fig_front)
-            fig_front.add_vrect(
-                x0=t_calib_ini, x1=t_calib_fim,
-                fillcolor="rgba(255, 99, 71, 0.18)", line_width=0,
-                annotation_text="janela de calibração", annotation_position="bottom left",
-            )
-            add_angle_trace(fig_front, angle_kinem_frontal, "green", "Kinem — frontal")
-            add_angle_trace(fig_front, angle_phone_frontal, "darkorange", "Celular — frontal")
-            add_l5_overlay(fig_front)
-            add_phase_markers(fig_front, angle_kinem_frontal)
-            fig_front.add_hline(y=0, line_dash="dot", line_color="lightgray")
-            fig_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
-            fig_front.update_layout(
-                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-                yaxis_title="Ângulo (°)  —  ↑ varo · ↓ valgo", height=340, template="plotly_white", hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
-            )
-            st.plotly_chart(fig_front, use_container_width=True)
-            st.caption(
-                "ℹ️ Convenção adotada: **negativo = valgo, positivo = varo**. O sinal do Kinem é ajustado "
-                "automaticamente pra manter essa convenção (assumindo valgo dinâmico como padrão predominante "
-                "nesse tipo de teste — ver nota técnica no código se precisar desativar essa correção)."
-            )
-
-        # --- Ângulo do quadril (tronco/L5 vs coxa) ---
-        st.divider()
-        st.markdown("#### 🦴 Ângulo do quadril (tronco vs coxa)")
-        st.caption("Mesma lógica do joelho, agora usando L5 (tronco) e Coxa — flexão/extensão de quadril.")
-        if angle_hip_phone_sagital is None and angle_hip_kinem_sagital is None:
-            st.info("Selecione ACC + GYR de L5 e Coxa (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do quadril.")
-        else:
-            st.markdown("**Sagital — flexão (↑) / extensão (↓)**")
-            fig_hip_sag = go.Figure()
-            add_phase_shading(fig_hip_sag)
-            add_angle_trace(fig_hip_sag, angle_hip_kinem_sagital, "teal", "Kinem — quadril sagital")
-            add_angle_trace(fig_hip_sag, angle_hip_phone_sagital, "crimson", "Celular — quadril sagital")
-            add_l5_overlay(fig_hip_sag)
-            add_phase_markers(fig_hip_sag, angle_hip_kinem_sagital)
-            fig_hip_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
-            fig_hip_sag.update_layout(
-                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-                yaxis_title="Ângulo (°)  —  ↑ flexão · ↓ extensão", height=340, template="plotly_white", hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
-            )
-            st.plotly_chart(fig_hip_sag, use_container_width=True)
-
-        # --- Ver análise: trials sobrepostos (ciclo inteiro 0-1, com fases) por métrica ---
-        st.divider()
-        ver_analise_overlay = st.button("🔍 Ver análise", type="primary", use_container_width=True, key="btn_ver_analise_overlay")
-        if ver_analise_overlay:
-            st.session_state.mostrar_analise_overlay = True
-        if st.session_state.get("mostrar_analise_overlay"):
-            valid_trial_phases = [p for p in trial_phases if p]
-            if not valid_trial_phases:
-                st.info("Não há trials segmentados pra sobrepor.")
-            else:
-                st.markdown("#### 📊 Trials sobrepostos (ciclo inteiro normalizado: 0 = início da preparação, 1 = fim da subida)")
-                st.caption(
-                    f"{len(valid_trial_phases)} trials sobrepostos por métrica. Linhas finas = cada trial individual · "
-                    "linha grossa = resultante (média). Fundo cinza/laranja/azul = preparação/descida/subida (posição média entre os trials)."
-                )
-
-                # Fração média (0-1) de onde cada fase termina, pra pintar o fundo
-                prep_fracs, desc_fracs = [], []
-                for phases in valid_trial_phases:
-                    t0 = phases["preparacao"][0]
-                    t_onset = phases["descida"][0]
-                    t_bottom = phases["descida"][1]
-                    t_fim = phases["subida"][1]
-                    total = t_fim - t0
-                    if total > 0:
-                        prep_fracs.append((t_onset - t0) / total)
-                        desc_fracs.append((t_bottom - t0) / total)
-                avg_prep_frac = float(np.mean(prep_fracs)) if prep_fracs else 0.3
-                avg_desc_frac = float(np.mean(desc_fracs)) if desc_fracs else 0.6
-
-                def render_overlay_chart(title, kinem_series, phone_series, color_k, color_p, yaxis_title="Ângulo (graus)"):
-                    fig = go.Figure()
-                    fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
-                    fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
-                    fig.add_vrect(x0=avg_desc_frac, x1=1, fillcolor="steelblue", opacity=0.12, line_width=0)
-
-                    x_norm = np.linspace(0, 1, 101)
-                    kinem_curves, phone_curves = [], []
-                    for phases in valid_trial_phases:
-                        t0, t1 = phases["preparacao"][0], phases["subida"][1]
-                        yk = normalize_trial_curve(kinem_series, x_axis, t0, t1)
-                        yp = normalize_trial_curve(phone_series, x_axis, t0, t1)
-                        if yk is not None:
-                            kinem_curves.append(yk)
-                            fig.add_trace(go.Scatter(x=x_norm, y=yk, mode="lines", line=dict(color=color_k, width=1), opacity=0.30, showlegend=False))
-                        if yp is not None:
-                            phone_curves.append(yp)
-                            fig.add_trace(go.Scatter(x=x_norm, y=yp, mode="lines", line=dict(color=color_p, width=1), opacity=0.30, showlegend=False))
-                    if kinem_curves:
-                        mean_k = np.nanmean(np.array(kinem_curves), axis=0)
-                        fig.add_trace(go.Scatter(x=x_norm, y=mean_k, mode="lines", line=dict(color=color_k, width=3), name="Kinem"))
-                    if phone_curves:
-                        mean_p = np.nanmean(np.array(phone_curves), axis=0)
-                        fig.add_trace(go.Scatter(x=x_norm, y=mean_p, mode="lines", line=dict(color=color_p, width=3), name="Celular"))
-                    fig.update_layout(
-                        title=dict(text=title, x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=13)),
-                        xaxis_title="Ciclo normalizado (0 = início · 1 = fim)",
-                        yaxis_title=yaxis_title,
-                        height=460, width=420, template="plotly_white", hovermode="x unified",
-                        legend=dict(orientation="h", yanchor="top", y=-0.22, x=0.5, xanchor="center", font=dict(size=10)),
-                        margin=dict(t=55, b=95, l=55, r=15),
-                    )
-                    st.plotly_chart(fig, use_container_width=False)
-
-                def render_overlay_chart_single(title, series, color, yaxis_title="Posição vertical L5 (m)"):
-                    fig = go.Figure()
-                    fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
-                    fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
-                    fig.add_vrect(x0=avg_desc_frac, x1=1, fillcolor="steelblue", opacity=0.12, line_width=0)
-                    x_norm = np.linspace(0, 1, 101)
-                    curves = []
-                    for phases in valid_trial_phases:
-                        t0, t1 = phases["preparacao"][0], phases["subida"][1]
-                        y = normalize_trial_curve(series, x_axis, t0, t1)
-                        if y is not None:
-                            curves.append(y)
-                            fig.add_trace(go.Scatter(x=x_norm, y=y, mode="lines", line=dict(color=color, width=1), opacity=0.30, showlegend=False))
-                    if curves:
-                        mean_y = np.nanmean(np.array(curves), axis=0)
-                        fig.add_trace(go.Scatter(x=x_norm, y=mean_y, mode="lines", line=dict(color=color, width=3), name="Resultante"))
-                    fig.update_layout(
-                        title=dict(text=title, x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=13)),
-                        xaxis_title="Ciclo normalizado (0 = início · 1 = fim)",
-                        yaxis_title=yaxis_title,
-                        height=460, width=420, template="plotly_white", hovermode="x unified",
-                        legend=dict(orientation="h", yanchor="top", y=-0.22, x=0.5, xanchor="center", font=dict(size=10)),
-                        margin=dict(t=55, b=95, l=55, r=15),
-                    )
-                    st.plotly_chart(fig, use_container_width=False)
-
-                oc1, oc2 = st.columns(2)
-                with oc1:
-                    render_overlay_chart("Joelho — Sagital", angle_kinem_sagital, angle_phone_sagital, "blue", "red")
-                with oc2:
-                    render_overlay_chart("Joelho — Frontal", angle_kinem_frontal, angle_phone_frontal, "green", "darkorange")
-                oc3, oc4 = st.columns(2)
-                with oc3:
-                    render_overlay_chart("Quadril — Sagital", angle_hip_kinem_sagital, angle_hip_phone_sagital, "teal", "crimson")
-                with oc4:
-                    render_overlay_chart("Quadril — Frontal", angle_hip_kinem_frontal, angle_hip_phone_frontal, "darkcyan", "deeppink")
-                oc5, oc6 = st.columns(2)
-                with oc5:
-                    render_overlay_chart("Vel. Angular — Joelho Sagital", vel_kinem_sagital, vel_phone_sagital, "blue", "red", yaxis_title="Velocidade (°/s)")
-                with oc6:
-                    render_overlay_chart("Vel. Angular — Joelho Frontal", vel_kinem_frontal, vel_phone_frontal, "green", "darkorange", yaxis_title="Velocidade (°/s)")
-                oc7, oc8 = st.columns(2)
-                with oc7:
-                    render_overlay_chart_single("L5 — Deslocamento vertical", l5_vertical, "black", yaxis_title="Posição vertical (m)")
-                with oc8:
-                    render_overlay_chart_single("L5 — Deslocamento lateral", l5_lateral, "purple", yaxis_title="Posição lateral / ML (m)")
-                oc9, oc10 = st.columns(2)
-                with oc9:
-                    render_overlay_chart("Tronco — Acel. Lateral (estabilidade)", acc_ml_kinem_trunk, acc_ml_phone_trunk, "black", "purple", yaxis_title="Aceleração (m/s²)")
-                with oc10:
-                    render_overlay_chart("Tronco — Vel. Angular (estabilidade)", trunk_angvel_kinem, trunk_angvel_phone, "black", "purple", yaxis_title="Velocidade (°/s)")
-
-        # --- Avaliação clínica: nota + análise completa por trial ---
-        st.divider()
-        st.markdown("#### 🩺 Avaliação clínica")
-        nota_clinica = st.radio(
-            "Nota clínica do teste (avaliação visual)", ["1", "2", "3"],
-            index=None, horizontal=True, key="nota_clinica",
-            help="Classificação visual do teste, pra comparar depois com as métricas quantitativas do celular/Kinem (grau 1 = melhor, 3 = pior, ou a escala que você usa clinicamente).",
+    # --- Plano frontal ---
+    if True:
+        st.markdown("**Frontal — valgo (↑ ou ↓, ver nota) / varo (sentido oposto)**")
+        fig_front = go.Figure()
+        add_phase_shading(fig_front)
+        fig_front.add_vrect(
+            x0=t_calib_ini, x1=t_calib_fim,
+            fillcolor="rgba(255, 99, 71, 0.18)", line_width=0,
+            annotation_text="janela de calibração", annotation_position="bottom left",
         )
-        ver_analise = st.button("📋 Ver variáveis", type="primary", use_container_width=True, key="btn_ver_analise")
+        add_angle_trace(fig_front, angle_kinem_frontal, "green", "Kinem — frontal")
+        add_angle_trace(fig_front, angle_phone_frontal, "darkorange", "Celular — frontal")
+        add_l5_overlay(fig_front)
+        add_phase_markers(fig_front, angle_kinem_frontal)
+        fig_front.add_hline(y=0, line_dash="dot", line_color="lightgray")
+        fig_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
+        fig_front.update_layout(
+            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+            yaxis_title="Ângulo (°)  —  ↑ varo · ↓ valgo", height=340, template="plotly_white", hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
+        )
+        st.plotly_chart(fig_front, use_container_width=True)
+        st.caption(
+            "ℹ️ Convenção adotada: **negativo = valgo, positivo = varo**. O sinal do Kinem é ajustado "
+            "automaticamente pra manter essa convenção (assumindo valgo dinâmico como padrão predominante "
+            "nesse tipo de teste — ver nota técnica no código se precisar desativar essa correção)."
+        )
 
-        if ver_analise:
-            st.session_state.mostrar_analise_clinica = True
-        if st.session_state.get("mostrar_analise_clinica"):
-            if not trials:
-                st.info("Não consegui detectar repetições — não dá pra montar a tabela de análise.")
-            else:
-                analise_rows = []
-                for i, (t_start, t_end) in enumerate(trials, start=1):
-                    phases = trial_phases[i - 1] if i - 1 < len(trial_phases) else None
-                    d_start, d_end = phases["descida"] if phases else (t_start, t_start)
-                    s_start, s_end = phases["subida"] if phases else (t_end, t_end)
+    # --- Ângulo do quadril (tronco/L5 vs coxa) ---
+    st.divider()
+    st.markdown("#### 🦴 Ângulo do quadril (tronco vs coxa)")
+    st.caption("Mesma lógica do joelho, agora usando L5 (tronco) e Coxa — flexão/extensão de quadril.")
+    if angle_hip_phone_sagital is None and angle_hip_kinem_sagital is None:
+        st.info("Selecione ACC + GYR de L5 e Coxa (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do quadril.")
+    else:
+        st.markdown("**Sagital — flexão (↑) / extensão (↓)**")
+        fig_hip_sag = go.Figure()
+        add_phase_shading(fig_hip_sag)
+        add_angle_trace(fig_hip_sag, angle_hip_kinem_sagital, "teal", "Kinem — quadril sagital")
+        add_angle_trace(fig_hip_sag, angle_hip_phone_sagital, "crimson", "Celular — quadril sagital")
+        add_l5_overlay(fig_hip_sag)
+        add_phase_markers(fig_hip_sag, angle_hip_kinem_sagital)
+        fig_hip_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
+        fig_hip_sag.update_layout(
+            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+            yaxis_title="Ângulo (°)  —  ↑ flexão · ↓ extensão", height=340, template="plotly_white", hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
+        )
+        st.plotly_chart(fig_hip_sag, use_container_width=True)
 
-                    t_flex_k, v_flex_k = time_to_peak(angle_kinem_sagital, x_axis, t_start, t_end)
-                    t_flex_p, v_flex_p = time_to_peak(angle_phone_sagital, x_axis, t_start, t_end)
-                    t_valgo_k, v_valgo_k = time_to_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True)
-                    t_valgo_p, v_valgo_p = time_to_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True)
-                    diff_t_k = (t_valgo_k - t_flex_k) if (t_valgo_k is not None and t_flex_k is not None) else None
-                    diff_t_p = (t_valgo_p - t_flex_p) if (t_valgo_p is not None and t_flex_p is not None) else None
-                    razao_k = (abs(v_valgo_k) / v_flex_k) if (v_valgo_k is not None and v_flex_k not in (None, 0)) else None
-                    razao_p = (abs(v_valgo_p) / v_flex_p) if (v_valgo_p is not None and v_flex_p not in (None, 0)) else None
+    # --- Ver análise: trials sobrepostos (ciclo inteiro 0-1, com fases) por métrica ---
+    st.divider()
+    ver_analise_overlay = st.button("🔍 Ver análise", type="primary", use_container_width=True, key="btn_ver_analise_overlay")
+    if ver_analise_overlay:
+        st.session_state.mostrar_analise_overlay = True
+    if st.session_state.get("mostrar_analise_overlay"):
+        valid_trial_phases = [p for p in trial_phases if p]
+        if not valid_trial_phases:
+            st.info("Não há trials segmentados pra sobrepor.")
+        else:
+            st.markdown("#### 📊 Trials sobrepostos (ciclo inteiro normalizado: 0 = início da preparação, 1 = fim da subida)")
+            st.caption(
+                f"{len(valid_trial_phases)} trials sobrepostos por métrica. Linhas finas = cada trial individual · "
+                "linha grossa = resultante (média). Fundo cinza/laranja/azul = preparação/descida/subida (posição média entre os trials)."
+            )
 
-                    rms_l5_lateral = compute_rms(l5_lateral, x_axis, t_start, t_end)
-                    path_l5_lateral = compute_path_length(l5_lateral, x_axis, t_start, t_end)
-                    rom_l5_lateral = compute_rom(l5_lateral, x_axis, t_start, t_end)
-                    razao_path_rom = (path_l5_lateral / rom_l5_lateral) if (path_l5_lateral is not None and rom_l5_lateral not in (None, 0)) else None
+            # Fração média (0-1) de onde cada fase termina, pra pintar o fundo
+            prep_fracs, desc_fracs = [], []
+            for phases in valid_trial_phases:
+                t0 = phases["preparacao"][0]
+                t_onset = phases["descida"][0]
+                t_bottom = phases["descida"][1]
+                t_fim = phases["subida"][1]
+                total = t_fim - t0
+                if total > 0:
+                    prep_fracs.append((t_onset - t0) / total)
+                    desc_fracs.append((t_bottom - t0) / total)
+            avg_prep_frac = float(np.mean(prep_fracs)) if prep_fracs else 0.3
+            avg_desc_frac = float(np.mean(desc_fracs)) if desc_fracs else 0.6
 
-                    jerk_rms_k = compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end)
-                    jerk_rms_p = compute_rms(jerk_phone_sagital, x_axis, t_start, t_end)
+            def render_overlay_chart(title, kinem_series, phone_series, color_k, color_p, yaxis_title="Ângulo (graus)"):
+                fig = go.Figure()
+                fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
+                fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
+                fig.add_vrect(x0=avg_desc_frac, x1=1, fillcolor="steelblue", opacity=0.12, line_width=0)
 
-                    rms_accel_trunk_k = compute_rms(acc_ml_kinem_trunk, x_axis, d_start, s_end)
-                    rms_accel_trunk_p = compute_rms(acc_ml_phone_trunk, x_axis, d_start, s_end)
-                    razao_accel_trunk = (rms_accel_trunk_p / rms_accel_trunk_k) if (rms_accel_trunk_p is not None and rms_accel_trunk_k not in (None, 0)) else None
-
-                    rms_angvel_trunk_k = compute_rms(trunk_angvel_kinem, x_axis, d_start, s_end)
-                    rms_angvel_trunk_p = compute_rms(trunk_angvel_phone, x_axis, d_start, s_end)
-                    razao_angvel_trunk = (rms_angvel_trunk_p / rms_angvel_trunk_k) if (rms_angvel_trunk_p is not None and rms_angvel_trunk_k not in (None, 0)) else None
-
-                    prep_dur = (phases["preparacao"][1] - phases["preparacao"][0]) if phases else None
-                    desc_dur = (phases["descida"][1] - phases["descida"][0]) if phases else None
-                    sub_dur = (phases["subida"][1] - phases["subida"][0]) if phases else None
-
-                    analise_rows.append({
-                        "Trial": str(i),
-                        "Nota clínica": nota_clinica if nota_clinica else "—",
-                        "Duração Preparação (s)": prep_dur,
-                        "Duração Descida (s)": desc_dur,
-                        "Duração Subida (s)": sub_dur,
-                        "ADM Joelho Sagital — Kinem": compute_rom(angle_kinem_sagital, x_axis, t_start, t_end),
-                        "ADM Joelho Sagital — Celular": compute_rom(angle_phone_sagital, x_axis, t_start, t_end),
-                        "Pico Flexão Joelho — Kinem": compute_peak(angle_kinem_sagital, x_axis, t_start, t_end),
-                        "Pico Flexão Joelho — Celular": compute_peak(angle_phone_sagital, x_axis, t_start, t_end),
-                        "Vel. Pico Flexão (°/s) — Kinem": compute_peak(vel_kinem_sagital, x_axis, t_start, t_end),
-                        "Vel. Pico Flexão (°/s) — Celular": compute_peak(vel_phone_sagital, x_axis, t_start, t_end),
-                        "ADM Joelho Frontal — Kinem": compute_rom(angle_kinem_frontal, x_axis, t_start, t_end),
-                        "ADM Joelho Frontal — Celular": compute_rom(angle_phone_frontal, x_axis, t_start, t_end),
-                        "Pico Valgo Joelho — Kinem": compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True),
-                        "Pico Valgo Joelho — Celular": compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True),
-                        "Vel. Pico Valgo (°/s) — Kinem": compute_peak(vel_kinem_frontal, x_axis, t_start, t_end, signed=True),
-                        "Vel. Pico Valgo (°/s) — Celular": compute_peak(vel_phone_frontal, x_axis, t_start, t_end, signed=True),
-                        "Pico Valgo (Descida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, d_start, d_end, signed=True),
-                        "Pico Valgo (Descida) — Celular": compute_peak(angle_phone_frontal, x_axis, d_start, d_end, signed=True),
-                        "Pico Valgo (Subida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, s_start, s_end, signed=True),
-                        "Pico Valgo (Subida) — Celular": compute_peak(angle_phone_frontal, x_axis, s_start, s_end, signed=True),
-                        "Tempo até Pico Valgo − Flexão (s) — Kinem": diff_t_k,
-                        "Tempo até Pico Valgo − Flexão (s) — Celular": diff_t_p,
-                        "Razão |Valgo|/Flexão — Kinem": razao_k,
-                        "Razão |Valgo|/Flexão — Celular": razao_p,
-                        "ADM Quadril Sagital — Kinem": compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end),
-                        "ADM Quadril Sagital — Celular": compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end),
-                        "ADM Quadril Frontal — Kinem": compute_rom(angle_hip_kinem_frontal, x_axis, t_start, t_end),
-                        "ADM Quadril Frontal — Celular": compute_rom(angle_hip_phone_frontal, x_axis, t_start, t_end),
-                        "Estabilidade Tronco — RMS lateral L5 (m)": rms_l5_lateral,
-                        "Estabilidade Tronco — Razão caminho/deslocamento": razao_path_rom,
-                        "Estabilidade Tronco — RMS Acel. Lateral (Kinem)": rms_accel_trunk_k,
-                        "Estabilidade Tronco — RMS Acel. Lateral (Celular)": rms_accel_trunk_p,
-                        "Estabilidade Tronco — Razão Acel. Celular/Kinem": razao_accel_trunk,
-                        "Estabilidade Tronco — RMS Vel.Ang. (Kinem)": rms_angvel_trunk_k,
-                        "Estabilidade Tronco — RMS Vel.Ang. (Celular)": rms_angvel_trunk_p,
-                        "Estabilidade Tronco — Razão Vel.Ang. Celular/Kinem": razao_angvel_trunk,
-                        "Suavidade (Jerk RMS) Joelho Sagital — Kinem": jerk_rms_k,
-                        "Suavidade (Jerk RMS) Joelho Sagital — Celular": jerk_rms_p,
-                    })
-                analise_df = pd.DataFrame(analise_rows)
-
-                resultante_analise = {"Trial": "Resultante (média)", "Nota clínica": nota_clinica if nota_clinica else "—"}
-                desvio_analise = {"Trial": "Desvio padrão (variabilidade)", "Nota clínica": "—"}
-                for col in analise_df.columns:
-                    if col in ("Trial", "Nota clínica"):
-                        continue
-                    resultante_analise[col] = analise_df[col].mean()
-                    desvio_analise[col] = analise_df[col].std()
-                analise_df_full = pd.concat(
-                    [analise_df, pd.DataFrame([resultante_analise]), pd.DataFrame([desvio_analise])],
-                    ignore_index=True,
+                x_norm = np.linspace(0, 1, 101)
+                kinem_curves, phone_curves = [], []
+                for phases in valid_trial_phases:
+                    t0, t1 = phases["preparacao"][0], phases["subida"][1]
+                    yk = normalize_trial_curve(kinem_series, x_axis, t0, t1)
+                    yp = normalize_trial_curve(phone_series, x_axis, t0, t1)
+                    if yk is not None:
+                        kinem_curves.append(yk)
+                        fig.add_trace(go.Scatter(x=x_norm, y=yk, mode="lines", line=dict(color=color_k, width=1), opacity=0.30, showlegend=False))
+                    if yp is not None:
+                        phone_curves.append(yp)
+                        fig.add_trace(go.Scatter(x=x_norm, y=yp, mode="lines", line=dict(color=color_p, width=1), opacity=0.30, showlegend=False))
+                if kinem_curves:
+                    mean_k = np.nanmean(np.array(kinem_curves), axis=0)
+                    fig.add_trace(go.Scatter(x=x_norm, y=mean_k, mode="lines", line=dict(color=color_k, width=3), name="Kinem"))
+                if phone_curves:
+                    mean_p = np.nanmean(np.array(phone_curves), axis=0)
+                    fig.add_trace(go.Scatter(x=x_norm, y=mean_p, mode="lines", line=dict(color=color_p, width=3), name="Celular"))
+                fig.update_layout(
+                    title=dict(text=title, x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=13)),
+                    xaxis_title="Ciclo normalizado (0 = início · 1 = fim)",
+                    yaxis_title=yaxis_title,
+                    height=460, width=420, template="plotly_white", hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="top", y=-0.22, x=0.5, xanchor="center", font=dict(size=10)),
+                    margin=dict(t=55, b=95, l=55, r=15),
                 )
+                st.plotly_chart(fig, use_container_width=False)
 
-                with st.container(border=True):
-                    def fmt_for_col(col):
-                        if "Razão" in col:
-                            return "{:.2f}×"
-                        if "Duração" in col:
-                            return "{:.2f}s"
-                        if "Tempo até" in col:
-                            return "{:+.2f}s"
-                        if "Jerk" in col:
-                            return "{:.0f}°/s³"
-                        if "RMS Acel" in col:
-                            return "{:.3f}m/s²"
-                        if "RMS Vel" in col or "Vel." in col:
-                            return "{:.0f}°/s"
-                        if "RMS lateral" in col:
-                            return "{:.4f}m"
-                        return "{:.1f}°"
-                    fmt_cols = {c: fmt_for_col(c) for c in analise_df_full.columns if c not in ("Trial", "Nota clínica")}
-                    st.dataframe(analise_df_full.style.format(fmt_cols), hide_index=True, use_container_width=True)
-
-                st.caption(
-                    "Pico = maior valor atingido no trial (não a variação total). Pico de valgo preserva o sinal "
-                    "(positivo/negativo indicam o lado — ver nota do plano frontal)."
+            def render_overlay_chart_single(title, series, color, yaxis_title="Posição vertical L5 (m)"):
+                fig = go.Figure()
+                fig.add_vrect(x0=0, x1=avg_prep_frac, fillcolor="lightgray", opacity=0.25, line_width=0)
+                fig.add_vrect(x0=avg_prep_frac, x1=avg_desc_frac, fillcolor="orange", opacity=0.12, line_width=0)
+                fig.add_vrect(x0=avg_desc_frac, x1=1, fillcolor="steelblue", opacity=0.12, line_width=0)
+                x_norm = np.linspace(0, 1, 101)
+                curves = []
+                for phases in valid_trial_phases:
+                    t0, t1 = phases["preparacao"][0], phases["subida"][1]
+                    y = normalize_trial_curve(series, x_axis, t0, t1)
+                    if y is not None:
+                        curves.append(y)
+                        fig.add_trace(go.Scatter(x=x_norm, y=y, mode="lines", line=dict(color=color, width=1), opacity=0.30, showlegend=False))
+                if curves:
+                    mean_y = np.nanmean(np.array(curves), axis=0)
+                    fig.add_trace(go.Scatter(x=x_norm, y=mean_y, mode="lines", line=dict(color=color, width=3), name="Resultante"))
+                fig.update_layout(
+                    title=dict(text=title, x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=13)),
+                    xaxis_title="Ciclo normalizado (0 = início · 1 = fim)",
+                    yaxis_title=yaxis_title,
+                    height=460, width=420, template="plotly_white", hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="top", y=-0.22, x=0.5, xanchor="center", font=dict(size=10)),
+                    margin=dict(t=55, b=95, l=55, r=15),
                 )
+                st.plotly_chart(fig, use_container_width=False)
 
-                csv_bytes = analise_df_full.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    "📥 Exportar análise (CSV)", csv_bytes,
-                    file_name="analise_clinica_step_down.csv", mime="text/csv",
-                    use_container_width=True,
-                )
-        # --- Fases do movimento por trial: duração já incluída na tabela "Ver variáveis" acima ---
+            oc1, oc2 = st.columns(2)
+            with oc1:
+                render_overlay_chart("Joelho — Sagital", angle_kinem_sagital, angle_phone_sagital, "blue", "red")
+            with oc2:
+                render_overlay_chart("Joelho — Frontal", angle_kinem_frontal, angle_phone_frontal, "green", "darkorange")
+            oc3, oc4 = st.columns(2)
+            with oc3:
+                render_overlay_chart("Quadril — Sagital", angle_hip_kinem_sagital, angle_hip_phone_sagital, "teal", "crimson")
+            with oc4:
+                render_overlay_chart("Quadril — Frontal", angle_hip_kinem_frontal, angle_hip_phone_frontal, "darkcyan", "deeppink")
+            oc5, oc6 = st.columns(2)
+            with oc5:
+                render_overlay_chart("Vel. Angular — Joelho Sagital", vel_kinem_sagital, vel_phone_sagital, "blue", "red", yaxis_title="Velocidade (°/s)")
+            with oc6:
+                render_overlay_chart("Vel. Angular — Joelho Frontal", vel_kinem_frontal, vel_phone_frontal, "green", "darkorange", yaxis_title="Velocidade (°/s)")
+            oc7, oc8 = st.columns(2)
+            with oc7:
+                render_overlay_chart_single("L5 — Deslocamento vertical", l5_vertical, "black", yaxis_title="Posição vertical (m)")
+            with oc8:
+                render_overlay_chart_single("L5 — Deslocamento lateral", l5_lateral, "purple", yaxis_title="Posição lateral / ML (m)")
+            oc9, oc10 = st.columns(2)
+            with oc9:
+                render_overlay_chart("Tronco — Acel. Lateral (estabilidade)", acc_ml_kinem_trunk, acc_ml_phone_trunk, "black", "purple", yaxis_title="Aceleração (m/s²)")
+            with oc10:
+                render_overlay_chart("Tronco — Vel. Angular (estabilidade)", trunk_angvel_kinem, trunk_angvel_phone, "black", "purple", yaxis_title="Velocidade (°/s)")
+
+    # --- Avaliação clínica: nota + análise completa por trial ---
+    st.divider()
+    st.markdown("#### 🩺 Avaliação clínica")
+    nota_clinica = st.radio(
+        "Nota clínica do teste (avaliação visual)", ["1", "2", "3"],
+        index=None, horizontal=True, key="nota_clinica",
+        help="Classificação visual do teste, pra comparar depois com as métricas quantitativas do celular/Kinem (grau 1 = melhor, 3 = pior, ou a escala que você usa clinicamente).",
+    )
+    ver_analise = st.button("📋 Ver variáveis", type="primary", use_container_width=True, key="btn_ver_analise")
+
+    if ver_analise:
+        st.session_state.mostrar_analise_clinica = True
+    if st.session_state.get("mostrar_analise_clinica"):
+        if not trials:
+            st.info("Não consegui detectar repetições — não dá pra montar a tabela de análise.")
+        else:
+            analise_rows = []
+            for i, (t_start, t_end) in enumerate(trials, start=1):
+                phases = trial_phases[i - 1] if i - 1 < len(trial_phases) else None
+                d_start, d_end = phases["descida"] if phases else (t_start, t_start)
+                s_start, s_end = phases["subida"] if phases else (t_end, t_end)
+
+                t_flex_k, v_flex_k = time_to_peak(angle_kinem_sagital, x_axis, t_start, t_end)
+                t_flex_p, v_flex_p = time_to_peak(angle_phone_sagital, x_axis, t_start, t_end)
+                t_valgo_k, v_valgo_k = time_to_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True)
+                t_valgo_p, v_valgo_p = time_to_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True)
+                diff_t_k = (t_valgo_k - t_flex_k) if (t_valgo_k is not None and t_flex_k is not None) else None
+                diff_t_p = (t_valgo_p - t_flex_p) if (t_valgo_p is not None and t_flex_p is not None) else None
+                razao_k = (abs(v_valgo_k) / v_flex_k) if (v_valgo_k is not None and v_flex_k not in (None, 0)) else None
+                razao_p = (abs(v_valgo_p) / v_flex_p) if (v_valgo_p is not None and v_flex_p not in (None, 0)) else None
+
+                rms_l5_lateral = compute_rms(l5_lateral, x_axis, t_start, t_end)
+                path_l5_lateral = compute_path_length(l5_lateral, x_axis, t_start, t_end)
+                rom_l5_lateral = compute_rom(l5_lateral, x_axis, t_start, t_end)
+                razao_path_rom = (path_l5_lateral / rom_l5_lateral) if (path_l5_lateral is not None and rom_l5_lateral not in (None, 0)) else None
+
+                jerk_rms_k = compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end)
+                jerk_rms_p = compute_rms(jerk_phone_sagital, x_axis, t_start, t_end)
+
+                rms_accel_trunk_k = compute_rms(acc_ml_kinem_trunk, x_axis, d_start, s_end)
+                rms_accel_trunk_p = compute_rms(acc_ml_phone_trunk, x_axis, d_start, s_end)
+                razao_accel_trunk = (rms_accel_trunk_p / rms_accel_trunk_k) if (rms_accel_trunk_p is not None and rms_accel_trunk_k not in (None, 0)) else None
+
+                rms_angvel_trunk_k = compute_rms(trunk_angvel_kinem, x_axis, d_start, s_end)
+                rms_angvel_trunk_p = compute_rms(trunk_angvel_phone, x_axis, d_start, s_end)
+                razao_angvel_trunk = (rms_angvel_trunk_p / rms_angvel_trunk_k) if (rms_angvel_trunk_p is not None and rms_angvel_trunk_k not in (None, 0)) else None
+
+                prep_dur = (phases["preparacao"][1] - phases["preparacao"][0]) if phases else None
+                desc_dur = (phases["descida"][1] - phases["descida"][0]) if phases else None
+                sub_dur = (phases["subida"][1] - phases["subida"][0]) if phases else None
+
+                analise_rows.append({
+                    "Trial": str(i),
+                    "Nota clínica": nota_clinica if nota_clinica else "—",
+                    "Duração Preparação (s)": prep_dur,
+                    "Duração Descida (s)": desc_dur,
+                    "Duração Subida (s)": sub_dur,
+                    "ADM Joelho Sagital — Kinem": compute_rom(angle_kinem_sagital, x_axis, t_start, t_end),
+                    "ADM Joelho Sagital — Celular": compute_rom(angle_phone_sagital, x_axis, t_start, t_end),
+                    "Pico Flexão Joelho — Kinem": compute_peak(angle_kinem_sagital, x_axis, t_start, t_end),
+                    "Pico Flexão Joelho — Celular": compute_peak(angle_phone_sagital, x_axis, t_start, t_end),
+                    "Vel. Pico Flexão (°/s) — Kinem": compute_peak(vel_kinem_sagital, x_axis, t_start, t_end),
+                    "Vel. Pico Flexão (°/s) — Celular": compute_peak(vel_phone_sagital, x_axis, t_start, t_end),
+                    "ADM Joelho Frontal — Kinem": compute_rom(angle_kinem_frontal, x_axis, t_start, t_end),
+                    "ADM Joelho Frontal — Celular": compute_rom(angle_phone_frontal, x_axis, t_start, t_end),
+                    "Pico Valgo Joelho — Kinem": compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True),
+                    "Pico Valgo Joelho — Celular": compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True),
+                    "Vel. Pico Valgo (°/s) — Kinem": compute_peak(vel_kinem_frontal, x_axis, t_start, t_end, signed=True),
+                    "Vel. Pico Valgo (°/s) — Celular": compute_peak(vel_phone_frontal, x_axis, t_start, t_end, signed=True),
+                    "Pico Valgo (Descida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, d_start, d_end, signed=True),
+                    "Pico Valgo (Descida) — Celular": compute_peak(angle_phone_frontal, x_axis, d_start, d_end, signed=True),
+                    "Pico Valgo (Subida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, s_start, s_end, signed=True),
+                    "Pico Valgo (Subida) — Celular": compute_peak(angle_phone_frontal, x_axis, s_start, s_end, signed=True),
+                    "Tempo até Pico Valgo − Flexão (s) — Kinem": diff_t_k,
+                    "Tempo até Pico Valgo − Flexão (s) — Celular": diff_t_p,
+                    "Razão |Valgo|/Flexão — Kinem": razao_k,
+                    "Razão |Valgo|/Flexão — Celular": razao_p,
+                    "ADM Quadril Sagital — Kinem": compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end),
+                    "ADM Quadril Sagital — Celular": compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end),
+                    "ADM Quadril Frontal — Kinem": compute_rom(angle_hip_kinem_frontal, x_axis, t_start, t_end),
+                    "ADM Quadril Frontal — Celular": compute_rom(angle_hip_phone_frontal, x_axis, t_start, t_end),
+                    "Estabilidade Tronco — RMS lateral L5 (m)": rms_l5_lateral,
+                    "Estabilidade Tronco — Razão caminho/deslocamento": razao_path_rom,
+                    "Estabilidade Tronco — RMS Acel. Lateral (Kinem)": rms_accel_trunk_k,
+                    "Estabilidade Tronco — RMS Acel. Lateral (Celular)": rms_accel_trunk_p,
+                    "Estabilidade Tronco — Razão Acel. Celular/Kinem": razao_accel_trunk,
+                    "Estabilidade Tronco — RMS Vel.Ang. (Kinem)": rms_angvel_trunk_k,
+                    "Estabilidade Tronco — RMS Vel.Ang. (Celular)": rms_angvel_trunk_p,
+                    "Estabilidade Tronco — Razão Vel.Ang. Celular/Kinem": razao_angvel_trunk,
+                    "Suavidade (Jerk RMS) Joelho Sagital — Kinem": jerk_rms_k,
+                    "Suavidade (Jerk RMS) Joelho Sagital — Celular": jerk_rms_p,
+                })
+            analise_df = pd.DataFrame(analise_rows)
+
+            resultante_analise = {"Trial": "Resultante (média)", "Nota clínica": nota_clinica if nota_clinica else "—"}
+            desvio_analise = {"Trial": "Desvio padrão (variabilidade)", "Nota clínica": "—"}
+            for col in analise_df.columns:
+                if col in ("Trial", "Nota clínica"):
+                    continue
+                resultante_analise[col] = analise_df[col].mean()
+                desvio_analise[col] = analise_df[col].std()
+            analise_df_full = pd.concat(
+                [analise_df, pd.DataFrame([resultante_analise]), pd.DataFrame([desvio_analise])],
+                ignore_index=True,
+            )
+
+            with st.container(border=True):
+                def fmt_for_col(col):
+                    if "Razão" in col:
+                        return "{:.2f}×"
+                    if "Duração" in col:
+                        return "{:.2f}s"
+                    if "Tempo até" in col:
+                        return "{:+.2f}s"
+                    if "Jerk" in col:
+                        return "{:.0f}°/s³"
+                    if "RMS Acel" in col:
+                        return "{:.3f}m/s²"
+                    if "RMS Vel" in col or "Vel." in col:
+                        return "{:.0f}°/s"
+                    if "RMS lateral" in col:
+                        return "{:.4f}m"
+                    return "{:.1f}°"
+                fmt_cols = {c: fmt_for_col(c) for c in analise_df_full.columns if c not in ("Trial", "Nota clínica")}
+                st.dataframe(analise_df_full.style.format(fmt_cols), hide_index=True, use_container_width=True)
+
+            st.caption(
+                "Pico = maior valor atingido no trial (não a variação total). Pico de valgo preserva o sinal "
+                "(positivo/negativo indicam o lado — ver nota do plano frontal)."
+            )
+
+            csv_bytes = analise_df_full.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "📥 Exportar análise (CSV)", csv_bytes,
+                file_name="analise_clinica_step_down.csv", mime="text/csv",
+                use_container_width=True,
+            )
+    # --- Fases do movimento por trial: duração já incluída na tabela "Ver variáveis" acima ---
 
     st.divider()
 

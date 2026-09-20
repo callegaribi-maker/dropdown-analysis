@@ -1516,6 +1516,177 @@ def knee_angle_frontal_functional(vetor_coxa: np.ndarray, vetor_perna: np.ndarra
     return angulo, rotacao_graus, variancia
 
 
+def compute_auc_abs(series: np.ndarray | None, x_axis: np.ndarray,
+                    t_start: float, t_end: float) -> float | None:
+    """
+    Integral de |série| (área sob a curva do valor absoluto) dentro de uma
+    janela — representa a "exposição acumulada" ao desvio (ex.: quanto
+    tempo x quanta inclinação, não só o pico) — dois trials com o mesmo
+    pico podem ter exposição bem diferente se um ficou lá mais tempo.
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    mask = (x_axis[:n] >= t_start) & (x_axis[:n] <= t_end)
+    x_w = x_axis[:n][mask]
+    y_w = np.abs(series[:n][mask])
+    valid = ~np.isnan(y_w)
+    if np.sum(valid) < 2:
+        return None
+    return float(np.trapezoid(y_w[valid], x_w[valid]))
+
+
+def resultant_magnitude(*components: np.ndarray | None) -> np.ndarray | None:
+    """sqrt(soma dos quadrados) dos componentes informados — combina eixos (ex.: velocidade angular resultante AP+ML+V) num único sinal de magnitude."""
+    validos = [c for c in components if c is not None]
+    if not validos:
+        return None
+    n = min(len(c) for c in validos)
+    soma_quad = np.zeros(n)
+    for c in validos:
+        soma_quad += c[:n] ** 2
+    return np.sqrt(soma_quad)
+
+
+def compute_jerk_rms(series: np.ndarray | None, x_axis: np.ndarray,
+                     t_start: float, t_end: float, lowpass_hz: float | None = 5.0,
+                     fs: float | None = None) -> float | None:
+    """
+    Deriva 'series' (já uma velocidade, ex.: velocidade angular ou linear)
+    mais uma vez pra obter o jerk, filtra (passa-baixa, evita amplificar
+    ruído da derivação) e calcula o RMS dentro da janela — quanto menor,
+    mais suave/controlado o movimento.
+    """
+    if series is None:
+        return None
+    jerk = compute_derivative(series, x_axis)
+    if jerk is None:
+        return None
+    if lowpass_hz:
+        fs_local = fs if fs else 1.0 / np.median(np.diff(x_axis[:len(jerk)]))
+        jerk = lowpass_array(jerk, fs_local, lowpass_hz)
+    return compute_rms(jerk, x_axis, t_start, t_end)
+
+
+def compute_jerk_normalized(series: np.ndarray | None, x_axis: np.ndarray,
+                            t_start: float, t_end: float, lowpass_hz: float | None = 5.0,
+                            fs: float | None = None) -> float | None:
+    """
+    Jerk RMS normalizado pela duração e pela amplitude do trecho — permite
+    comparar suavidade entre trials/pessoas com durações e amplitudes
+    diferentes (um jerk RMS bruto maior pode só refletir um movimento mais
+    rápido ou maior, não necessariamente menos suave).
+    """
+    jerk_rms = compute_jerk_rms(series, x_axis, t_start, t_end, lowpass_hz, fs)
+    if jerk_rms is None:
+        return None
+    duracao = t_end - t_start
+    amplitude = compute_rom(series, x_axis, t_start, t_end)
+    if not duracao or not amplitude:
+        return None
+    return float(jerk_rms * (duracao ** 3) / amplitude) if amplitude else None
+
+
+def compute_stabilization_time(series: np.ndarray | None, x_axis: np.ndarray,
+                               t_baseline_start: float, t_baseline_end: float,
+                               t_search_start: float, t_search_end: float,
+                               n_sd: float = 3.0, sustain_seconds: float = 0.5) -> float | None:
+    """
+    Tempo (s, a partir de t_search_start) até 'series' voltar pra dentro de
+    [média_basal − n_sd·DP_basal, média_basal + n_sd·DP_basal] e permanecer
+    lá por pelo menos sustain_seconds — mede quanto tempo o tronco leva pra
+    "assentar" de volta perto do repouso depois da subida.
+
+    Retorna None se não achar estabilização dentro da janela de busca.
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    x = x_axis[:n]
+    y = series[:n]
+    mask_base = (x >= t_baseline_start) & (x <= t_baseline_end)
+    base_vals = y[mask_base]
+    base_vals = base_vals[~np.isnan(base_vals)]
+    if len(base_vals) < 3:
+        return None
+    media_basal = float(np.mean(base_vals))
+    dp_basal = float(np.std(base_vals))
+    limite = n_sd * dp_basal if dp_basal > 0 else 1e-6
+
+    mask_busca = (x >= t_search_start) & (x <= t_search_end)
+    x_b = x[mask_busca]
+    y_b = y[mask_busca]
+    if len(x_b) < 2:
+        return None
+    fs_local = 1.0 / np.median(np.diff(x_b))
+    sustain_samples = max(1, int(sustain_seconds * fs_local))
+
+    dentro = np.abs(y_b - media_basal) <= limite
+    for i in range(len(dentro) - sustain_samples):
+        janela = dentro[i:i + sustain_samples]
+        if np.all(janela[~np.isnan(y_b[i:i + sustain_samples])]) and np.sum(~np.isnan(y_b[i:i + sustain_samples])) > 0:
+            return float(x_b[i] - t_search_start)
+    return None
+
+
+def compute_relative_coordination(series_a: np.ndarray | None, series_b: np.ndarray | None,
+                                  x_axis: np.ndarray, t_start: float, t_end: float,
+                                  max_lag: float = 1.0, lag_step: float = 0.01) -> dict:
+    """
+    Métricas de coordenação entre dois segmentos (ex.: tronco e coxa):
+    correlação (na defasagem que maximiza r) e o atraso encontrado — 'a'
+    tipicamente o tronco/lombar, 'b' a coxa. Retorna um dict com
+    'correlacao' e 'atraso_s' (None em qualquer um se não der pra calcular).
+    """
+    if series_a is None or series_b is None:
+        return {"correlacao": None, "atraso_s": None}
+    n = min(len(series_a), len(series_b), len(x_axis))
+    x = x_axis[:n]
+    a = series_a[:n]
+    b = series_b[:n]
+    mask = (x >= t_start) & (x <= t_end)
+    if np.sum(mask) < 10:
+        return {"correlacao": None, "atraso_s": None}
+
+    melhor_corr, melhor_atraso = -np.inf, None
+    for atraso in np.arange(-max_lag, max_lag + lag_step, lag_step):
+        b_deslocado = np.interp(x + atraso, x, b, left=np.nan, right=np.nan)
+        seg_a, seg_b = a[mask], b_deslocado[mask]
+        valid = ~np.isnan(seg_a) & ~np.isnan(seg_b)
+        if np.sum(valid) < 10:
+            continue
+        std_a, std_b = np.std(seg_a[valid]), np.std(seg_b[valid])
+        if std_a == 0 or std_b == 0:
+            continue
+        corr = float(np.corrcoef(seg_a[valid], seg_b[valid])[0, 1])
+        if np.isfinite(corr) and corr > melhor_corr:
+            melhor_corr, melhor_atraso = corr, float(atraso)
+    if melhor_atraso is None:
+        return {"correlacao": None, "atraso_s": None}
+    return {"correlacao": melhor_corr, "atraso_s": melhor_atraso}
+
+
+def compute_cv_across_trials(valores: list) -> dict:
+    """
+    Coeficiente de variação (%) e estatísticas entre repetições, pra uma
+    lista de valores (um por trial) de uma mesma métrica — mede
+    consistência entre ciclos.
+    Retorna dict: media, desvio_padrao, cv_pct, diferenca_primeira_ultima,
+    pior_valor (maior em módulo) — ou tudo None se não houver dados válidos.
+    """
+    vals = [v for v in valores if v is not None and np.isfinite(v)]
+    if len(vals) < 2:
+        return {"media": None, "desvio_padrao": None, "cv_pct": None,
+                "diferenca_primeira_ultima": None, "pior_valor": None}
+    media = float(np.mean(vals))
+    dp = float(np.std(vals, ddof=1))
+    cv = float(dp / media * 100) if media != 0 else None
+    diff = float(vals[-1] - vals[0])
+    pior = float(max(vals, key=abs))
+    return {"media": media, "desvio_padrao": dp, "cv_pct": cv,
+            "diferenca_primeira_ultima": diff, "pior_valor": pior}
+
+
 def compute_mean(series: np.ndarray | None, x_axis: np.ndarray,
                  window_start: float, window_end: float) -> float | None:
     """Média de 'series' dentro de uma janela de tempo — menos sensível a picos/ruído pontual que compute_peak, bom pra referência de calibração num trecho estável."""

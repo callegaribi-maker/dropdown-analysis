@@ -68,8 +68,8 @@ from signal_utils import (
     zero_reference_angle,
 )
 
-st.set_page_config(page_title="Visualizador de Sinais", layout="wide")
-st.title("📊 Visualizador de Sinais — Y-Balance & Step-Down")
+st.set_page_config(page_title="Lateral Step-Down test data processing", layout="wide")
+st.title("📊 Lateral Step-Down test data processing")
 
 NONE = NONE_LABEL
 
@@ -597,6 +597,14 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         kdf_raw, *hip_angle_kw, plane="frontal", signed=True,
     ) if not kdf_raw.empty else None
 
+    # Zera os dois no mesmo ponto (início da gravação) — sem isso, cada
+    # fonte fica na sua própria escala bruta (geometria do Kinem vs.
+    # convenção do filtro complementar), difícil de comparar visualmente.
+    # Só offset (soma/subtrai), sem ganho — não muda a amplitude de
+    # nenhum dos dois, só onde "zero" fica.
+    angle_hip_kinem_sagital = zero_reference_angle(angle_hip_kinem_sagital, x_axis, x_min_data, x_min_data + 0.5)
+    angle_hip_phone_sagital = zero_reference_angle(angle_hip_phone_sagital, x_axis, x_min_data, x_min_data + 0.5)
+
     kinem_angle_kw = (GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"])
     angle_kinem_sagital = knee_angle_from_kinem_plane(
         kdf_raw, *kinem_angle_kw, plane="sagittal",
@@ -666,6 +674,201 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
     trials = detect_trial_windows(angle_kinem_sagital, x_axis, search_start=trial_search_start)
 
+    st.subheader("🎚️ Sensibilidade da segmentação")
+    onset_frac = st.slider(
+        "Sensibilidade do início do movimento (segmentação)", 0.005, 0.40, value=0.15, step=0.005,
+        key="onset_frac",
+        help="Fração do deslocamento total do L5 usada pra marcar onde a descida realmente começa. "
+             "Baixo = mais sensível (marca o início mais cedo, mas pode pegar ruído). Alto = mais "
+             "conservador (só marca quando o movimento já está bem claro). Ajuste e confira no gráfico abaixo.",
+    )
+    ignorar_primeiro_ciclo = st.checkbox(
+        "Ignorar o primeiro ciclo detectado (ex.: movimento preparatório antes do teste, não uma repetição de verdade)",
+        value=False, key="ignorar_primeiro_ciclo",
+        help="Descarta o primeiro trial detectado por completo — sem sombra, sem bolinha, sem entrar nas tabelas/análise. Use se o primeiro pico não for uma repetição real do teste.",
+    )
+    trial_phases = []
+    if trials and l5_vertical is not None:
+        for t_start, t_end in trials:
+            phases = segment_trial_phases(l5_vertical, x_axis, t_start, t_end, onset_frac=onset_frac, max_lookback_before=5.0)
+            trial_phases.append(phases)
+
+        if ignorar_primeiro_ciclo and len(trials) > 1:
+            trials = trials[1:]
+            trial_phases = trial_phases[1:]
+
+        # Emenda: a preparação de cada trial passa a começar exatamente onde a
+        # subida do trial anterior terminou (em vez do limite arbitrário da
+        # janela do trial) — elimina a lacuna sem fase entre um ciclo e outro.
+        for i in range(1, len(trial_phases)):
+            if trial_phases[i] and trial_phases[i - 1]:
+                prev_return = trial_phases[i - 1]["subida"][1]
+                this_onset = trial_phases[i]["preparacao"][1]
+                trial_phases[i]["preparacao"] = (prev_return, this_onset)
+
+        # O primeiro trial (o que sobrar depois do descarte acima, se marcado)
+        # não tem um trial anterior pra emendar — a janela dele geralmente
+        # pega sobra de antes da gravação/movimento real começar. Em vez
+        # disso, usa a duração MÉDIA das preparações dos outros trials,
+        # posicionada logo antes do início da descida; tudo antes disso fica
+        # sem fase nenhuma (sem sombra, sem bolinha, sem entrar na análise).
+        if trial_phases and trial_phases[0]:
+            outras_duracoes = [
+                tp["preparacao"][1] - tp["preparacao"][0]
+                for tp in trial_phases[1:] if tp
+            ]
+            if outras_duracoes:
+                dur_media = float(np.mean(outras_duracoes))
+                onset0 = trial_phases[0]["preparacao"][1]
+                trial_phases[0]["preparacao"] = (onset0 - dur_media, onset0)
+    else:
+        trial_phases = [None] * len(trials)
+
+    # --- Validação da segmentação: deslocamento vertical do L5 ---
+    st.subheader("📐 Deslocamento vertical do L5 (validação da segmentação)")
+    if l5_vertical is None:
+        st.info("Não encontrei as colunas de posição X/Y/Z do L5 no Kinem — não dá pra segmentar por deslocamento vertical.")
+    else:
+        n_l5 = min(len(l5_vertical), len(x_axis))
+        mask_l5 = (x_axis[:n_l5] >= view_start) & (x_axis[:n_l5] <= view_end)
+        fig_l5v = go.Figure()
+        fig_l5v.add_trace(go.Scatter(
+            x=x_axis[:n_l5][mask_l5], y=l5_vertical[:n_l5][mask_l5], mode="lines",
+            line=dict(color="black", width=1.5), name="L5 — posição vertical (Kinem)",
+        ))
+        def y_at(x_target):
+            idx = int(np.argmin(np.abs(x_axis[:n_l5] - x_target)))
+            return l5_vertical[idx]
+
+        marker_x, marker_y, marker_color = [], [], []
+        for phases in trial_phases:
+            if not phases:
+                continue
+            d_start, d_end = phases["descida"]
+            s_start, s_end = phases["subida"]
+            p_start, p_end = phases["preparacao"]
+            if p_end > p_start:
+                fig_l5v.add_vrect(x0=p_start, x1=p_end, fillcolor="lightgray", opacity=0.30, line_width=0)
+            if d_end > d_start:
+                fig_l5v.add_vrect(x0=d_start, x1=d_end, fillcolor="orange", opacity=0.15, line_width=0)
+            if s_end > s_start:
+                fig_l5v.add_vrect(x0=s_start, x1=s_end, fillcolor="steelblue", opacity=0.15, line_width=0)
+            # bolinhas exatamente nas transições de cor: início da descida,
+            # ponto mais baixo (descida→subida) e fim da subida
+            marker_x += [d_start, d_end, s_end]
+            marker_y += [y_at(d_start), y_at(d_end), y_at(s_end)]
+            marker_color += ["orange", "black", "steelblue"]
+        if marker_x:
+            fig_l5v.add_trace(go.Scatter(
+                x=marker_x, y=marker_y, mode="markers",
+                marker=dict(color=marker_color, size=9, line=dict(color="black", width=1)),
+                name="Transições de fase", showlegend=False,
+            ))
+        fig_l5v.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
+        fig_l5v.update_layout(
+            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+            yaxis_title="Posição vertical L5", height=340, template="plotly_white", hovermode="x unified",
+            margin=dict(t=30, b=40),
+        )
+        st.plotly_chart(fig_l5v, use_container_width=True)
+        st.caption(
+            "Cinza = preparação · laranja = descida · azul = subida. Bolinhas laranja = início da descida · "
+            "bolinha preta = ponto mais baixo (transição descida→subida) · bolinha azul = fim da subida."
+        )
+        st.divider()
+
+    nota_clinica = None
+    if angle_phone_sagital is None and angle_kinem_sagital is None:
+        st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")
+    else:
+        mask_ang = (x_axis >= view_start) & (x_axis <= view_end)
+
+        def add_angle_trace(fig, series, color, name, dash=None):
+            if series is None:
+                return
+            n = min(len(series), len(x_axis))
+            y = series[:n]
+            m = mask_ang[:n]
+            fig.add_trace(go.Scatter(
+                x=x_axis[:n][m], y=y[m], mode="lines",
+                line=dict(color=color, width=2, dash=dash), name=name,
+            ))
+
+        def add_phase_shading(fig):
+            """Sombreia preparação (cinza), descida (laranja) e subida (azul) de cada trial — mesmas cores do gráfico de validação do L5."""
+            for phases in trial_phases:
+                if not phases:
+                    continue
+                p_start, p_end = phases["preparacao"]
+                d_start, d_end = phases["descida"]
+                s_start, s_end = phases["subida"]
+                if p_end > p_start:
+                    fig.add_vrect(x0=p_start, x1=p_end, fillcolor="lightgray", opacity=0.20, line_width=0)
+                if d_end > d_start:
+                    fig.add_vrect(x0=d_start, x1=d_end, fillcolor="orange", opacity=0.10, line_width=0)
+                if s_end > s_start:
+                    fig.add_vrect(x0=s_start, x1=s_end, fillcolor="steelblue", opacity=0.10, line_width=0)
+
+        def add_phase_markers(fig, series):
+            """Bolinhas nas transições de fase (início da descida, ponto mais baixo, fim da subida), na curva 'series' desse gráfico."""
+            if series is None:
+                return
+            n_s = min(len(series), len(x_axis))
+            mx, my, mc = [], [], []
+            for phases in trial_phases:
+                if not phases:
+                    continue
+                d_start, d_end = phases["descida"]
+                s_start, s_end = phases["subida"]
+                for xt, color in [(d_start, "orange"), (d_end, "black"), (s_end, "steelblue")]:
+                    idx = int(np.argmin(np.abs(x_axis[:n_s] - xt)))
+                    mx.append(xt)
+                    my.append(series[idx])
+                    mc.append(color)
+            if mx:
+                fig.add_trace(go.Scatter(
+                    x=mx, y=my, mode="markers",
+                    marker=dict(color=mc, size=8, line=dict(color="black", width=1)),
+                    name="Transições de fase", showlegend=False,
+                ))
+
+        def add_l5_overlay(fig):
+            """Sobrepõe o deslocamento vertical do L5 num eixo Y secundário (direita, em cm)."""
+            if l5_vertical is None:
+                return
+            n = min(len(l5_vertical), len(x_axis))
+            y_cm = l5_vertical[:n] * 100
+            m = mask_ang[:n]
+            fig.add_trace(go.Scatter(
+                x=x_axis[:n][m], y=y_cm[m], mode="lines",
+                line=dict(color="rgba(0,0,0,0.35)", width=1.5, dash="dot"),
+                name="L5 vertical (cm)", yaxis="y2",
+            ))
+            fig.update_layout(yaxis2=dict(title="L5 vertical (cm)", overlaying="y", side="right", showgrid=False))
+
+        def render_sagital_chart(k_series, p_series, titulo_extra="", highlight_window=None):
+            fig = go.Figure()
+            add_phase_shading(fig)
+            if highlight_window is not None:
+                fig.add_vrect(
+                    x0=highlight_window[0], x1=highlight_window[1],
+                    fillcolor="rgba(255, 99, 71, 0.18)", line_width=0,
+                    annotation_text="janela de calibração", annotation_position="bottom left",
+                )
+            add_angle_trace(fig, k_series, "blue", "Kinem — sagital")
+            add_angle_trace(fig, p_series, "red", "Celular — sagital")
+            add_angle_trace(fig, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
+            add_l5_overlay(fig)
+            add_phase_markers(fig, k_series)
+            fig.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
+            fig.update_layout(
+                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+                yaxis_title="Ângulo (°)  —  ↑ flexão · ↓ extensão", height=380, template="plotly_white", hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # --- Plano sagital (flexão/extensão) — bruto, sem calibração ---
     # ── Métodos alternativos (opcional): integração direta da velocidade
     # angular relativa (celular, sem acelerômetro) + calibração de 2 pontos
     # pro sagital; calibração funcional por PCA (corrige cross-talk) pro
@@ -913,200 +1116,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         ).values.astype(float)
         trunk_angvel_phone = np.degrees(gyr_ap_raw)
 
-    onset_frac = st.slider(
-        "Sensibilidade do início do movimento (segmentação)", 0.005, 0.40, value=0.15, step=0.005,
-        key="onset_frac",
-        help="Fração do deslocamento total do L5 usada pra marcar onde a descida realmente começa. "
-             "Baixo = mais sensível (marca o início mais cedo, mas pode pegar ruído). Alto = mais "
-             "conservador (só marca quando o movimento já está bem claro). Ajuste e confira no gráfico abaixo.",
-    )
-    ignorar_primeiro_ciclo = st.checkbox(
-        "Ignorar o primeiro ciclo detectado (ex.: movimento preparatório antes do teste, não uma repetição de verdade)",
-        value=False, key="ignorar_primeiro_ciclo",
-        help="Descarta o primeiro trial detectado por completo — sem sombra, sem bolinha, sem entrar nas tabelas/análise. Use se o primeiro pico não for uma repetição real do teste.",
-    )
-    trial_phases = []
-    if trials and l5_vertical is not None:
-        for t_start, t_end in trials:
-            phases = segment_trial_phases(l5_vertical, x_axis, t_start, t_end, onset_frac=onset_frac, max_lookback_before=5.0)
-            trial_phases.append(phases)
-
-        if ignorar_primeiro_ciclo and len(trials) > 1:
-            trials = trials[1:]
-            trial_phases = trial_phases[1:]
-
-        # Emenda: a preparação de cada trial passa a começar exatamente onde a
-        # subida do trial anterior terminou (em vez do limite arbitrário da
-        # janela do trial) — elimina a lacuna sem fase entre um ciclo e outro.
-        for i in range(1, len(trial_phases)):
-            if trial_phases[i] and trial_phases[i - 1]:
-                prev_return = trial_phases[i - 1]["subida"][1]
-                this_onset = trial_phases[i]["preparacao"][1]
-                trial_phases[i]["preparacao"] = (prev_return, this_onset)
-
-        # O primeiro trial (o que sobrar depois do descarte acima, se marcado)
-        # não tem um trial anterior pra emendar — a janela dele geralmente
-        # pega sobra de antes da gravação/movimento real começar. Em vez
-        # disso, usa a duração MÉDIA das preparações dos outros trials,
-        # posicionada logo antes do início da descida; tudo antes disso fica
-        # sem fase nenhuma (sem sombra, sem bolinha, sem entrar na análise).
-        if trial_phases and trial_phases[0]:
-            outras_duracoes = [
-                tp["preparacao"][1] - tp["preparacao"][0]
-                for tp in trial_phases[1:] if tp
-            ]
-            if outras_duracoes:
-                dur_media = float(np.mean(outras_duracoes))
-                onset0 = trial_phases[0]["preparacao"][1]
-                trial_phases[0]["preparacao"] = (onset0 - dur_media, onset0)
-    else:
-        trial_phases = [None] * len(trials)
-
-    # --- Validação da segmentação: deslocamento vertical do L5 ---
-    st.subheader("📐 Deslocamento vertical do L5 (validação da segmentação)")
-    if l5_vertical is None:
-        st.info("Não encontrei as colunas de posição X/Y/Z do L5 no Kinem — não dá pra segmentar por deslocamento vertical.")
-    else:
-        n_l5 = min(len(l5_vertical), len(x_axis))
-        mask_l5 = (x_axis[:n_l5] >= view_start) & (x_axis[:n_l5] <= view_end)
-        fig_l5v = go.Figure()
-        fig_l5v.add_trace(go.Scatter(
-            x=x_axis[:n_l5][mask_l5], y=l5_vertical[:n_l5][mask_l5], mode="lines",
-            line=dict(color="black", width=1.5), name="L5 — posição vertical (Kinem)",
-        ))
-        def y_at(x_target):
-            idx = int(np.argmin(np.abs(x_axis[:n_l5] - x_target)))
-            return l5_vertical[idx]
-
-        marker_x, marker_y, marker_color = [], [], []
-        for phases in trial_phases:
-            if not phases:
-                continue
-            d_start, d_end = phases["descida"]
-            s_start, s_end = phases["subida"]
-            p_start, p_end = phases["preparacao"]
-            if p_end > p_start:
-                fig_l5v.add_vrect(x0=p_start, x1=p_end, fillcolor="lightgray", opacity=0.30, line_width=0)
-            if d_end > d_start:
-                fig_l5v.add_vrect(x0=d_start, x1=d_end, fillcolor="orange", opacity=0.15, line_width=0)
-            if s_end > s_start:
-                fig_l5v.add_vrect(x0=s_start, x1=s_end, fillcolor="steelblue", opacity=0.15, line_width=0)
-            # bolinhas exatamente nas transições de cor: início da descida,
-            # ponto mais baixo (descida→subida) e fim da subida
-            marker_x += [d_start, d_end, s_end]
-            marker_y += [y_at(d_start), y_at(d_end), y_at(s_end)]
-            marker_color += ["orange", "black", "steelblue"]
-        if marker_x:
-            fig_l5v.add_trace(go.Scatter(
-                x=marker_x, y=marker_y, mode="markers",
-                marker=dict(color=marker_color, size=9, line=dict(color="black", width=1)),
-                name="Transições de fase", showlegend=False,
-            ))
-        fig_l5v.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
-        fig_l5v.update_layout(
-            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-            yaxis_title="Posição vertical L5", height=340, template="plotly_white", hovermode="x unified",
-            margin=dict(t=30, b=40),
-        )
-        st.plotly_chart(fig_l5v, use_container_width=True)
-        st.caption(
-            "Cinza = preparação · laranja = descida · azul = subida. Bolinhas laranja = início da descida · "
-            "bolinha preta = ponto mais baixo (transição descida→subida) · bolinha azul = fim da subida."
-        )
-        st.divider()
-
-    nota_clinica = None
-    if angle_phone_sagital is None and angle_kinem_sagital is None:
-        st.info("Selecione ACC + GYR de Coxa e Tornozelo (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do joelho.")
-    else:
-        mask_ang = (x_axis >= view_start) & (x_axis <= view_end)
-
-        def add_angle_trace(fig, series, color, name, dash=None):
-            if series is None:
-                return
-            n = min(len(series), len(x_axis))
-            y = series[:n]
-            m = mask_ang[:n]
-            fig.add_trace(go.Scatter(
-                x=x_axis[:n][m], y=y[m], mode="lines",
-                line=dict(color=color, width=2, dash=dash), name=name,
-            ))
-
-        def add_phase_shading(fig):
-            """Sombreia preparação (cinza), descida (laranja) e subida (azul) de cada trial — mesmas cores do gráfico de validação do L5."""
-            for phases in trial_phases:
-                if not phases:
-                    continue
-                p_start, p_end = phases["preparacao"]
-                d_start, d_end = phases["descida"]
-                s_start, s_end = phases["subida"]
-                if p_end > p_start:
-                    fig.add_vrect(x0=p_start, x1=p_end, fillcolor="lightgray", opacity=0.20, line_width=0)
-                if d_end > d_start:
-                    fig.add_vrect(x0=d_start, x1=d_end, fillcolor="orange", opacity=0.10, line_width=0)
-                if s_end > s_start:
-                    fig.add_vrect(x0=s_start, x1=s_end, fillcolor="steelblue", opacity=0.10, line_width=0)
-
-        def add_phase_markers(fig, series):
-            """Bolinhas nas transições de fase (início da descida, ponto mais baixo, fim da subida), na curva 'series' desse gráfico."""
-            if series is None:
-                return
-            n_s = min(len(series), len(x_axis))
-            mx, my, mc = [], [], []
-            for phases in trial_phases:
-                if not phases:
-                    continue
-                d_start, d_end = phases["descida"]
-                s_start, s_end = phases["subida"]
-                for xt, color in [(d_start, "orange"), (d_end, "black"), (s_end, "steelblue")]:
-                    idx = int(np.argmin(np.abs(x_axis[:n_s] - xt)))
-                    mx.append(xt)
-                    my.append(series[idx])
-                    mc.append(color)
-            if mx:
-                fig.add_trace(go.Scatter(
-                    x=mx, y=my, mode="markers",
-                    marker=dict(color=mc, size=8, line=dict(color="black", width=1)),
-                    name="Transições de fase", showlegend=False,
-                ))
-
-        def add_l5_overlay(fig):
-            """Sobrepõe o deslocamento vertical do L5 num eixo Y secundário (direita, em cm)."""
-            if l5_vertical is None:
-                return
-            n = min(len(l5_vertical), len(x_axis))
-            y_cm = l5_vertical[:n] * 100
-            m = mask_ang[:n]
-            fig.add_trace(go.Scatter(
-                x=x_axis[:n][m], y=y_cm[m], mode="lines",
-                line=dict(color="rgba(0,0,0,0.35)", width=1.5, dash="dot"),
-                name="L5 vertical (cm)", yaxis="y2",
-            ))
-            fig.update_layout(yaxis2=dict(title="L5 vertical (cm)", overlaying="y", side="right", showgrid=False))
-
-        def render_sagital_chart(k_series, p_series, titulo_extra="", highlight_window=None):
-            fig = go.Figure()
-            add_phase_shading(fig)
-            if highlight_window is not None:
-                fig.add_vrect(
-                    x0=highlight_window[0], x1=highlight_window[1],
-                    fillcolor="rgba(255, 99, 71, 0.18)", line_width=0,
-                    annotation_text="janela de calibração", annotation_position="bottom left",
-                )
-            add_angle_trace(fig, k_series, "blue", "Kinem — sagital")
-            add_angle_trace(fig, p_series, "red", "Celular — sagital")
-            add_angle_trace(fig, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
-            add_l5_overlay(fig)
-            add_phase_markers(fig, k_series)
-            fig.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
-            fig.update_layout(
-                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-                yaxis_title="Ângulo (°)  —  ↑ flexão · ↓ extensão", height=380, template="plotly_white", hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        # --- Plano sagital (flexão/extensão) — bruto, sem calibração ---
         st.markdown("**Sagital — flexão (↑) / extensão (↓) — bruto**")
         st.caption("Fundo cinza = preparação · laranja = descida · azul = subida · linha pontilhada cinza = deslocamento vertical do L5 (eixo direito, cm) · faixa vermelha = janela de calibração usada.")
         render_sagital_chart(angle_kinem_sagital, angle_phone_sagital, highlight_window=(t_calib_ini, t_calib_fim))

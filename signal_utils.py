@@ -1825,6 +1825,8 @@ def trunk_thigh_fused_angles(l5_acc: np.ndarray, l5_gyr: np.ndarray,
         "lateral_absoluta": _finish(e_abs[:, 0]),
         "flexao_relativa": _finish(e_rel[:, 2]),
         "lateral_relativa": _finish(e_rel[:, 0]),
+        "flexao_absoluta_coxa": _finish(r_coxa_anat.as_euler("xyz", degrees=True)[:, 2]),
+        "lateral_absoluta_coxa": _finish(r_coxa_anat.as_euler("xyz", degrees=True)[:, 0]),
     }
 
 

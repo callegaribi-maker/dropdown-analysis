@@ -1135,6 +1135,27 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         dot_s = trunk_vec_sagital[:, 0] * vertical_ref_2d[:, 0] + trunk_vec_sagital[:, 1] * vertical_ref_2d[:, 1]
         trunk_lean_kinem_sagital = np.degrees(np.arctan2(cross_s, dot_s))
 
+    # Ângulo ABSOLUTO da coxa (Trocânter→Côndilo vs. vertical) — diferente
+    # do ângulo do joelho (coxa vs. perna) e do "quadril"/tronco-coxa (L5
+    # vs. coxa): aqui é só a orientação da própria coxa no espaço,
+    # separado por plano — usado pra "ADM sagital/frontal da coxa" na
+    # tabela final.
+    coxa_lean_kinem_sagital = None
+    coxa_lean_kinem_frontal = None
+    pos_cond_cols_trunk = position_xyz_cols(kdf_raw, "condilo") if not kdf_raw.empty else {}
+    if all(k in pos_troc_cols_trunk for k in "XYZ") and all(k in pos_cond_cols_trunk for k in "XYZ"):
+        cond_pos_arr = np.column_stack([try_numeric(kdf_raw[pos_cond_cols_trunk[a]]).values for a in "XYZ"]).astype(float)
+        coxa_vec = troc_pos_arr - cond_pos_arr
+        coxa_vec_frontal = coxa_vec[:, [0, 2]]
+        vertical_ref_2d_c = np.tile([0.0, -1.0], (len(coxa_vec_frontal), 1))
+        cross_c = coxa_vec_frontal[:, 0] * vertical_ref_2d_c[:, 1] - coxa_vec_frontal[:, 1] * vertical_ref_2d_c[:, 0]
+        dot_c = coxa_vec_frontal[:, 0] * vertical_ref_2d_c[:, 0] + coxa_vec_frontal[:, 1] * vertical_ref_2d_c[:, 1]
+        coxa_lean_kinem_frontal = np.degrees(np.unwrap(np.arctan2(cross_c, dot_c)))
+        coxa_vec_sagital = coxa_vec[:, [1, 2]]
+        cross_cs = coxa_vec_sagital[:, 0] * vertical_ref_2d_c[:, 1] - coxa_vec_sagital[:, 1] * vertical_ref_2d_c[:, 0]
+        dot_cs = coxa_vec_sagital[:, 0] * vertical_ref_2d_c[:, 0] + coxa_vec_sagital[:, 1] * vertical_ref_2d_c[:, 1]
+        coxa_lean_kinem_sagital = np.degrees(np.unwrap(np.arctan2(cross_cs, dot_cs)))
+
     trunk_lean_kinem_iso = trunk_lean_kinem_frontal  # nome antigo, mantido pra não quebrar referências existentes
 
     trunk_angvel_phone = None
@@ -1160,6 +1181,8 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
     trunk_lean_phone_relativa_flexao = None
     trunk_lean_phone_relativa_lateral = None
+    coxa_lean_phone_sagital = None
+    coxa_lean_phone_frontal = None
     if pf_l5["acc"] != NONE and pf_l5["acc"] in aligned_raw and pf_coxa["acc"] != NONE and pf_coxa["acc"] in aligned_raw \
        and pf_l5["gyr"] != NONE and pf_l5["gyr"] in aligned_raw and pf_coxa["gyr"] != NONE and pf_coxa["gyr"] in aligned_raw:
         # Ângulo do tronco (L5) e tronco-coxa pelos celulares, por FUSÃO DE
@@ -1186,6 +1209,8 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 trunk_lean_phone_frontal = fusao["lateral_absoluta"]
                 trunk_lean_phone_relativa_flexao = fusao["flexao_relativa"]
                 trunk_lean_phone_relativa_lateral = fusao["lateral_relativa"]
+                coxa_lean_phone_sagital = fusao["flexao_absoluta_coxa"]
+                coxa_lean_phone_frontal = fusao["lateral_absoluta_coxa"]
 
     if trunk_lean_phone_sagital is None and pf_l5["acc"] != NONE and pf_l5["acc"] in aligned_raw:
         # Reserva: se não der pra fazer a fusão completa (falta a coxa, por
@@ -1430,11 +1455,29 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 desc_dur = (phases["descida"][1] - phases["descida"][0]) if phases else None
                 sub_dur = (phases["subida"][1] - phases["subida"][0]) if phases else None
 
+                jerk_norm_k = compute_jerk_normalized(vel_kinem_sagital, x_axis, t_start, t_end)
+                jerk_norm_p = compute_jerk_normalized(vel_phone_sagital, x_axis, t_start, t_end)
+
+                # Tempo de estabilização do joelho sagital — usa a
+                # preparação do trial SEGUINTE como referência de repouso
+                # (mesmo esquema já usado na estabilidade de tronco).
+                tempo_estab_joelho_k, tempo_estab_joelho_p = None, None
+                if i < len(valid_trials_summary):
+                    (_, _), prox_phases = valid_trials_summary[i]
+                    basal_ini_j, basal_fim_j = prox_phases["preparacao"]
+                    tempo_estab_joelho_k = compute_stabilization_time(
+                        angle_kinem_sagital, x_axis, basal_ini_j, basal_fim_j, s_start, s_end + 3.0, n_sd=3.0, sustain_seconds=0.5,
+                    )
+                    tempo_estab_joelho_p = compute_stabilization_time(
+                        angle_phone_sagital, x_axis, basal_ini_j, basal_fim_j, s_start, s_end + 3.0, n_sd=3.0, sustain_seconds=0.5,
+                    )
+
                 analise_rows.append({
                     "Trial": str(i),
                     "Nota clínica": nota_clinica if nota_clinica else "—",
                     "Duração Preparação (s)": prep_dur,
                     "Duração Descida (s)": desc_dur,
+                    "Duração Posição Inferior (s)": None,  # não segmentado como fase isolada nesse app (ver nota)
                     "Duração Subida (s)": sub_dur,
                     "ADM Joelho Sagital — Kinem": compute_rom(angle_kinem_sagital, x_axis, t_start, t_end),
                     "ADM Joelho Sagital — Celular": compute_rom(angle_phone_sagital, x_axis, t_start, t_end),
@@ -1456,10 +1499,18 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                     "Tempo até Pico Valgo − Flexão (s) — Celular": diff_t_p,
                     "Razão |Valgo|/Flexão — Kinem": razao_k,
                     "Razão |Valgo|/Flexão — Celular": razao_p,
-                    "ADM Quadril Sagital — Kinem": compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end),
-                    "ADM Quadril Sagital — Celular": compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end),
-                    "ADM Quadril Frontal — Kinem": compute_rom(angle_hip_kinem_frontal, x_axis, t_start, t_end),
-                    "ADM Quadril Frontal — Celular": compute_rom(angle_hip_phone_frontal, x_axis, t_start, t_end),
+                    "Jerk Normalizado Joelho Sagital — Kinem": jerk_norm_k,
+                    "Jerk Normalizado Joelho Sagital — Celular": jerk_norm_p,
+                    "Tempo Estabilização Joelho Sagital (s) — Kinem": tempo_estab_joelho_k,
+                    "Tempo Estabilização Joelho Sagital (s) — Celular": tempo_estab_joelho_p,
+                    "ADM Coxa Sagital — Kinem": compute_rom(coxa_lean_kinem_sagital, x_axis, t_start, t_end),
+                    "ADM Coxa Sagital — Celular": compute_rom(coxa_lean_phone_sagital, x_axis, t_start, t_end),
+                    "ADM Coxa Frontal — Kinem": compute_rom(coxa_lean_kinem_frontal, x_axis, t_start, t_end),
+                    "ADM Coxa Frontal — Celular": compute_rom(coxa_lean_phone_frontal, x_axis, t_start, t_end),
+                    "ROM Tronco-Coxa Sagital (proxy) — Kinem": compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end),
+                    "ROM Tronco-Coxa Sagital (proxy) — Celular": compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end),
+                    "ROM Tronco-Coxa Frontal (proxy) — Kinem": compute_rom(angle_hip_kinem_frontal, x_axis, t_start, t_end),
+                    "ROM Tronco-Coxa Frontal (proxy) — Celular": compute_rom(angle_hip_phone_frontal, x_axis, t_start, t_end),
                     "Estabilidade Tronco — RMS lateral L5 (m)": rms_l5_lateral,
                     "Estabilidade Tronco — Razão caminho/deslocamento": razao_path_rom,
                     "Estabilidade Tronco — RMS Acel. Lateral (Kinem)": rms_accel_trunk_k,
@@ -1507,7 +1558,11 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
             st.caption(
                 "Pico = maior valor atingido no trial (não a variação total). Pico de valgo preserva o sinal "
-                "(positivo/negativo indicam o lado — ver nota do plano frontal)."
+                "(positivo/negativo indicam o lado — ver nota do plano frontal). "
+                "'Duração Posição Inferior' está vazia — não disponível: esse app segmenta em 3 fases "
+                "(preparação/descida/subida), sem uma fase isolada de 'apoio no fundo'. "
+                "'ROM Tronco-Coxa (proxy)' é o ângulo relativo L5-coxa (não um verdadeiro ângulo anatômico do "
+                "quadril, que exigiria um sistema pélvico completo)."
             )
 
             csv_bytes = analise_df_full.to_csv(index=False).encode("utf-8-sig")

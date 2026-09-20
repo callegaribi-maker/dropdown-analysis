@@ -28,6 +28,12 @@ from signal_utils import (
     compute_derivative,
     compute_path_length,
     compute_mean,
+    resultant_magnitude,
+    compute_auc_abs,
+    compute_jerk_normalized,
+    compute_stabilization_time,
+    compute_relative_coordination,
+    compute_cv_across_trials,
     compute_peak,
     compute_rms,
     compute_rom,
@@ -1085,36 +1091,95 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     # forma que dá uma relação consistente entre as duas fontes (ao
     # contrário da posição lateral integrada, que se mostrou pouco confiável). ──
     acc_ml_kinem_trunk = None
+    acc_ap_kinem_trunk = None
     if not kdf_raw.empty:
         acc_ml_kinem_cols = [c for c in kdf_raw.columns if norm(c).lower() == "l 5 a(x)"]
         if acc_ml_kinem_cols:
             acc_ml_kinem_trunk = try_numeric(kdf_raw[acc_ml_kinem_cols[0]]).values.astype(float)
+        acc_ap_kinem_cols = [c for c in kdf_raw.columns if norm(c).lower() == "l 5 a(y)"]
+        if acc_ap_kinem_cols:
+            acc_ap_kinem_trunk = try_numeric(kdf_raw[acc_ap_kinem_cols[0]]).values.astype(float)
 
     acc_ml_phone_trunk = None
+    acc_ap_phone_trunk = None
     if pf_l5["acc"] != NONE and pf_l5["acc"] in aligned_raw:
         acc_ml_phone_trunk = try_numeric(
             aligned_raw[pf_l5["acc"]][phone_axis_col(aligned_raw[pf_l5["acc"]], "l5", "ML")]
         ).values.astype(float)
+        acc_ap_phone_trunk = try_numeric(
+            aligned_raw[pf_l5["acc"]][phone_axis_col(aligned_raw[pf_l5["acc"]], "l5", "AP")]
+        ).values.astype(float)
 
+    acc_h_kinem_trunk = resultant_magnitude(acc_ap_kinem_trunk, acc_ml_kinem_trunk)
+    acc_h_phone_trunk = resultant_magnitude(acc_ap_phone_trunk, acc_ml_phone_trunk)
+
+    trunk_lean_kinem_frontal = None
+    trunk_lean_kinem_sagital = None
     trunk_angvel_kinem = None
     pos_troc_cols_trunk = position_xyz_cols(kdf_raw, "trocanter") if not kdf_raw.empty else {}
     if all(k in pos_l5_cols for k in "XYZ") and all(k in pos_troc_cols_trunk for k in "XYZ"):
         l5_pos_arr = np.column_stack([try_numeric(kdf_raw[pos_l5_cols[a]]).values for a in "XYZ"]).astype(float)
         troc_pos_arr = np.column_stack([try_numeric(kdf_raw[pos_troc_cols_trunk[a]]).values for a in "XYZ"]).astype(float)
         trunk_vec = troc_pos_arr - l5_pos_arr
+
         trunk_vec_frontal = trunk_vec[:, [0, 2]]
-        vertical_ref = np.tile([0.0, -1.0], (len(trunk_vec_frontal), 1))
-        cross = trunk_vec_frontal[:, 0] * vertical_ref[:, 1] - trunk_vec_frontal[:, 1] * vertical_ref[:, 0]
-        dot = trunk_vec_frontal[:, 0] * vertical_ref[:, 0] + trunk_vec_frontal[:, 1] * vertical_ref[:, 1]
-        trunk_lean_kinem_iso = np.degrees(np.arctan2(cross, dot))
-        trunk_angvel_kinem = compute_derivative(trunk_lean_kinem_iso, x_axis)
+        vertical_ref_2d = np.tile([0.0, -1.0], (len(trunk_vec_frontal), 1))
+        cross = trunk_vec_frontal[:, 0] * vertical_ref_2d[:, 1] - trunk_vec_frontal[:, 1] * vertical_ref_2d[:, 0]
+        dot = trunk_vec_frontal[:, 0] * vertical_ref_2d[:, 0] + trunk_vec_frontal[:, 1] * vertical_ref_2d[:, 1]
+        trunk_lean_kinem_frontal = np.degrees(np.arctan2(cross, dot))
+        trunk_angvel_kinem = compute_derivative(trunk_lean_kinem_frontal, x_axis)
+
+        trunk_vec_sagital = trunk_vec[:, [1, 2]]
+        cross_s = trunk_vec_sagital[:, 0] * vertical_ref_2d[:, 1] - trunk_vec_sagital[:, 1] * vertical_ref_2d[:, 0]
+        dot_s = trunk_vec_sagital[:, 0] * vertical_ref_2d[:, 0] + trunk_vec_sagital[:, 1] * vertical_ref_2d[:, 1]
+        trunk_lean_kinem_sagital = np.degrees(np.arctan2(cross_s, dot_s))
+
+    trunk_lean_kinem_iso = trunk_lean_kinem_frontal  # nome antigo, mantido pra não quebrar referências existentes
 
     trunk_angvel_phone = None
+    trunk_angvel_phone_ml = None
+    trunk_angvel_phone_v = None
+    trunk_angvel_phone_resultante = None
+    trunk_lean_phone_sagital = None
+    trunk_lean_phone_frontal = None
     if pf_l5["gyr"] != NONE and pf_l5["gyr"] in aligned_raw:
         gyr_ap_raw = try_numeric(
             aligned_raw[pf_l5["gyr"]][phone_axis_col(aligned_raw[pf_l5["gyr"]], "l5", "AP")]
         ).values.astype(float)
         trunk_angvel_phone = np.degrees(gyr_ap_raw)
+        gyr_ml_raw = try_numeric(
+            aligned_raw[pf_l5["gyr"]][phone_axis_col(aligned_raw[pf_l5["gyr"]], "l5", "ML")]
+        ).values.astype(float)
+        trunk_angvel_phone_ml = np.degrees(gyr_ml_raw)
+        gyr_v_raw = try_numeric(
+            aligned_raw[pf_l5["gyr"]][phone_axis_col(aligned_raw[pf_l5["gyr"]], "l5", "Vertical")]
+        ).values.astype(float)
+        trunk_angvel_phone_v = np.degrees(gyr_v_raw)
+        trunk_angvel_phone_resultante = resultant_magnitude(trunk_angvel_phone, trunk_angvel_phone_ml, trunk_angvel_phone_v)
+
+    if pf_l5["acc"] != NONE and pf_l5["acc"] in aligned_raw:
+        # Inclinação do tronco (L5) pelo acelerômetro — estimativa de
+        # inclinação estática em relação à gravidade (arctan2 entre o eixo
+        # do plano e o eixo vertical). Boa pra movimentos lentos como esse
+        # teste; não integra nada, então não tem deriva.
+        acc_vert_phone = try_numeric(
+            aligned_raw[pf_l5["acc"]][phone_axis_col(aligned_raw[pf_l5["acc"]], "l5", "Vertical")]
+        ).values.astype(float)
+        if acc_ap_phone_trunk is not None:
+            # unwrap evita um artefato de "volta ao redor" (salto de quase
+            # 360° no ROM) que acontece quando a aceleração vertical passa
+            # perto de zero durante o movimento rápido (a aceleração
+            # dinâmica do próprio movimento se soma à da gravidade,
+            # confundindo essa estimativa estática de inclinação —
+            # limitação conhecida desse método em movimento dinâmico,
+            # documentada e esperada, não um erro de cálculo).
+            trunk_lean_phone_sagital = np.degrees(np.unwrap(np.arctan2(acc_ap_phone_trunk, -acc_vert_phone)))
+        if acc_ml_phone_trunk is not None:
+            trunk_lean_phone_frontal = np.degrees(np.unwrap(np.arctan2(acc_ml_phone_trunk, -acc_vert_phone)))
+
+    trunk_angvel_kinem_frontal_dot = trunk_angvel_kinem
+    trunk_angvel_kinem_sagital_dot = compute_derivative(trunk_lean_kinem_sagital, x_axis)
+    trunk_angvel_kinem_resultante = resultant_magnitude(trunk_angvel_kinem_sagital_dot, trunk_angvel_kinem_frontal_dot)
 
     st.markdown("**Sagital — flexão (↑) / extensão (↓) — bruto**")
     st.caption("Fundo cinza = preparação · laranja = descida · azul = subida · linha pontilhada cinza = deslocamento vertical do L5 (eixo direito, cm) · faixa vermelha = janela de calibração usada.")
@@ -1625,6 +1690,116 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         st.info(resumo_md)
     else:
         st.info("📘 **Resumo do resultado do teste** — não há trials segmentados o suficiente pra gerar um resumo automático.")
+
+    # ══════════════════════════════════════════
+    # Estabilidade de tronco — conjunto completo de variáveis
+    # ══════════════════════════════════════════
+    st.divider()
+    st.subheader("🧍 Estabilidade de tronco — conjunto completo de variáveis")
+    st.caption(
+        "Baseado nas variáveis sugeridas pra esse tipo de teste — separadas por preparação/descida/subida "
+        "(ainda não por 'apoio' e 'estabilização final' como fases isoladas). K = Kinem, C = Celular."
+    )
+    if not valid_trials_summary:
+        st.info("Nenhum trial segmentado o suficiente pra calcular essas variáveis.")
+    else:
+        linhas_tronco = []
+        for i, ((t_start, t_end), phases) in enumerate(valid_trials_summary, 1):
+            d_start, d_end = phases["descida"]
+            s_start, s_end = phases["subida"]
+            linha = {"Trial": i}
+
+            # --- ROM e RMS angulares (tronco absoluto) ---
+            linha["ROM Flexão-Extensão Tronco (K)"] = compute_rom(trunk_lean_kinem_sagital, x_axis, t_start, t_end)
+            linha["ROM Flexão-Extensão Tronco (C)"] = compute_rom(trunk_lean_phone_sagital, x_axis, t_start, t_end)
+            linha["ROM Inclinação Lateral Tronco (K)"] = compute_rom(trunk_lean_kinem_frontal, x_axis, t_start, t_end)
+            linha["ROM Inclinação Lateral Tronco (C)"] = compute_rom(trunk_lean_phone_frontal, x_axis, t_start, t_end)
+            linha["RMS Ângulo Sagital Tronco (K)"] = compute_rms(trunk_lean_kinem_sagital, x_axis, t_start, t_end)
+            linha["RMS Ângulo Sagital Tronco (C)"] = compute_rms(trunk_lean_phone_sagital, x_axis, t_start, t_end)
+            linha["RMS Ângulo Lateral Tronco (K)"] = compute_rms(trunk_lean_kinem_frontal, x_axis, t_start, t_end)
+            linha["RMS Ângulo Lateral Tronco (C)"] = compute_rms(trunk_lean_phone_frontal, x_axis, t_start, t_end)
+            linha["AUC |Ângulo| Sagital Tronco (K)"] = compute_auc_abs(trunk_lean_kinem_sagital, x_axis, t_start, t_end)
+            linha["AUC |Ângulo| Sagital Tronco (C)"] = compute_auc_abs(trunk_lean_phone_sagital, x_axis, t_start, t_end)
+            linha["AUC |Ângulo| Lateral Tronco (K)"] = compute_auc_abs(trunk_lean_kinem_frontal, x_axis, t_start, t_end)
+            linha["AUC |Ângulo| Lateral Tronco (C)"] = compute_auc_abs(trunk_lean_phone_frontal, x_axis, t_start, t_end)
+
+            # --- Velocidade angular resultante e suavidade ---
+            linha["RMS Vel.Angular Resultante (K)"] = compute_rms(trunk_angvel_kinem_resultante, x_axis, t_start, t_end)
+            linha["RMS Vel.Angular Resultante (C)"] = compute_rms(trunk_angvel_phone_resultante, x_axis, t_start, t_end)
+            linha["Pico Vel.Angular Resultante (K)"] = compute_peak(trunk_angvel_kinem_resultante, x_axis, t_start, t_end)
+            linha["Pico Vel.Angular Resultante (C)"] = compute_peak(trunk_angvel_phone_resultante, x_axis, t_start, t_end)
+            linha["Jerk Angular Normalizado (K)"] = compute_jerk_normalized(trunk_angvel_kinem_resultante, x_axis, t_start, t_end)
+            linha["Jerk Angular Normalizado (C)"] = compute_jerk_normalized(trunk_angvel_phone_resultante, x_axis, t_start, t_end)
+
+            # --- Aceleração translacional de L5 ---
+            linha["RMS Acel. AP (K)"] = compute_rms(acc_ap_kinem_trunk, x_axis, t_start, t_end)
+            linha["RMS Acel. AP (C)"] = compute_rms(acc_ap_phone_trunk, x_axis, t_start, t_end)
+            linha["RMS Acel. ML (K)"] = compute_rms(acc_ml_kinem_trunk, x_axis, t_start, t_end)
+            linha["RMS Acel. ML (C)"] = compute_rms(acc_ml_phone_trunk, x_axis, t_start, t_end)
+            linha["RMS Acel. Horizontal (K)"] = compute_rms(acc_h_kinem_trunk, x_axis, t_start, t_end)
+            linha["RMS Acel. Horizontal (C)"] = compute_rms(acc_h_phone_trunk, x_axis, t_start, t_end)
+            linha["Pico Acel. Horizontal (K)"] = compute_peak(acc_h_kinem_trunk, x_axis, t_start, t_end)
+            linha["Pico Acel. Horizontal (C)"] = compute_peak(acc_h_phone_trunk, x_axis, t_start, t_end)
+            linha["Jerk Linear Normalizado (K)"] = compute_jerk_normalized(acc_h_kinem_trunk, x_axis, t_start, t_end)
+            linha["Jerk Linear Normalizado (C)"] = compute_jerk_normalized(acc_h_phone_trunk, x_axis, t_start, t_end)
+            linha["Comprimento Trajeto AP+ML (K)"] = compute_path_length(acc_h_kinem_trunk, x_axis, t_start, t_end)
+            linha["Comprimento Trajeto AP+ML (C)"] = compute_path_length(acc_h_phone_trunk, x_axis, t_start, t_end)
+
+            # --- Coordenação/relação lombar-coxa (usa o ângulo de quadril já calculado) ---
+            rom_tronco_k = linha["ROM Inclinação Lateral Tronco (K)"]
+            rom_hip_k = compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end)
+            rom_hip_p = compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end)
+            linha["ROM Relativo Quadril Sagital (K)"] = rom_hip_k
+            linha["ROM Relativo Quadril Sagital (C)"] = rom_hip_p
+            linha["Razão Compensação Tronco/Coxa (K)"] = (rom_tronco_k / rom_hip_k) if (rom_tronco_k is not None and rom_hip_k) else None
+            coord = compute_relative_coordination(trunk_angvel_kinem_frontal_dot, angle_hip_kinem_sagital, x_axis, t_start, t_end, max_lag=1.0, lag_step=0.02)
+            linha["Correlação Tronco-Coxa (K)"] = coord["correlacao"]
+            linha["Atraso Tronco-Coxa, s (K)"] = coord["atraso_s"]
+
+            # --- Tempo de estabilização (usa a preparação do PRÓXIMO trial, se houver, como referência basal) ---
+            if i < len(valid_trials_summary):
+                (_, _), prox_phases = valid_trials_summary[i]
+                basal_ini, basal_fim = prox_phases["preparacao"]
+                linha["Tempo Estabilização Lateral, s (K)"] = compute_stabilization_time(
+                    trunk_lean_kinem_frontal, x_axis, basal_ini, basal_fim, s_start, s_end + 3.0, n_sd=3.0, sustain_seconds=0.5,
+                )
+                linha["Tempo Estabilização Lateral, s (C)"] = compute_stabilization_time(
+                    trunk_lean_phone_frontal, x_axis, basal_ini, basal_fim, s_start, s_end + 3.0, n_sd=3.0, sustain_seconds=0.5,
+                )
+            else:
+                linha["Tempo Estabilização Lateral, s (K)"] = None
+                linha["Tempo Estabilização Lateral, s (C)"] = None
+
+            linhas_tronco.append(linha)
+
+        df_tronco = pd.DataFrame(linhas_tronco)
+
+        # --- Linha de resumo (CV entre repetições) por coluna ---
+        resumo_cv = {"Trial": "CV entre trials (%)"}
+        resumo_media = {"Trial": "Média"}
+        for col in df_tronco.columns:
+            if col == "Trial":
+                continue
+            cv_info = compute_cv_across_trials(df_tronco[col].tolist())
+            resumo_media[col] = cv_info["media"]
+            resumo_cv[col] = cv_info["cv_pct"]
+        df_tronco_completo = pd.concat([df_tronco, pd.DataFrame([resumo_media, resumo_cv])], ignore_index=True)
+
+        st.dataframe(df_tronco_completo.round(3), use_container_width=True, hide_index=True)
+        st.caption(
+            "ROM/RMS/AUC/Jerk calculados sobre o trial inteiro (preparação+descida+subida). Tempo de estabilização usa a "
+            "preparação do trial SEGUINTE como referência de repouso (por isso o último trial fica em branco — não há "
+            "próximo trial pra comparar). Razão de compensação > 1 sugere que o tronco se move mais que a coxa "
+            "proporcionalmente; correlação/atraso tronco-coxa comparam a velocidade angular do tronco com o ângulo do "
+            "quadril, testando um deslocamento de até ±1s pra achar o melhor alinhamento."
+        )
+
+        csv_tronco = df_tronco_completo.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "📥 Exportar estabilidade de tronco (CSV)", csv_tronco,
+            file_name="estabilidade_tronco_completa.csv", mime="text/csv",
+            use_container_width=True,
+        )
 
     # ══════════════════════════════════════════
     # Quadro-detalhe do método de processamento e análise

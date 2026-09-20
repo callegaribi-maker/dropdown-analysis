@@ -34,6 +34,7 @@ from signal_utils import (
     compute_stabilization_time,
     compute_relative_coordination,
     compute_cv_across_trials,
+    trunk_thigh_fused_angles,
     compute_peak,
     compute_rms,
     compute_rom,
@@ -1157,22 +1158,44 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         trunk_angvel_phone_v = np.degrees(gyr_v_raw)
         trunk_angvel_phone_resultante = resultant_magnitude(trunk_angvel_phone, trunk_angvel_phone_ml, trunk_angvel_phone_v)
 
-    if pf_l5["acc"] != NONE and pf_l5["acc"] in aligned_raw:
-        # Inclinação do tronco (L5) pelo acelerômetro — estimativa de
-        # inclinação estática em relação à gravidade (arctan2 entre o eixo
-        # do plano e o eixo vertical). Boa pra movimentos lentos como esse
-        # teste; não integra nada, então não tem deriva.
+    trunk_lean_phone_relativa_flexao = None
+    trunk_lean_phone_relativa_lateral = None
+    if pf_l5["acc"] != NONE and pf_l5["acc"] in aligned_raw and pf_coxa["acc"] != NONE and pf_coxa["acc"] in aligned_raw \
+       and pf_l5["gyr"] != NONE and pf_l5["gyr"] in aligned_raw and pf_coxa["gyr"] != NONE and pf_coxa["gyr"] in aligned_raw:
+        # Ângulo do tronco (L5) e tronco-coxa pelos celulares, por FUSÃO DE
+        # ORIENTAÇÃO 3D completa (giroscópio integrado + correção contínua
+        # pelo acelerômetro, com calibração funcional dos eixos por SVD pra
+        # cada sensor) — bem mais robusto que a inclinação estática pura
+        # (não sofre o artefato de "volta ao redor" durante movimento
+        # rápido, e corrige a montagem de cada celular automaticamente,
+        # sem precisar assumir qual eixo bruto é qual).
+        l5_acc_df, l5_gyr_df = aligned_raw[pf_l5["acc"]], aligned_raw[pf_l5["gyr"]]
+        coxa_acc_df, coxa_gyr_df = aligned_raw[pf_coxa["acc"]], aligned_raw[pf_coxa["gyr"]]
+        n_fus = min(len(l5_acc_df), len(l5_gyr_df), len(coxa_acc_df), len(coxa_gyr_df), len(x_axis))
+        if n_fus > int(2.5 * pfs):
+            l5_acc_arr = np.column_stack([try_numeric(l5_acc_df[a]).values[:n_fus] for a in "XYZ"]).astype(float)
+            l5_gyr_arr = np.column_stack([try_numeric(l5_gyr_df[a]).values[:n_fus] for a in "XYZ"]).astype(float)
+            coxa_acc_arr = np.column_stack([try_numeric(coxa_acc_df[a]).values[:n_fus] for a in "XYZ"]).astype(float)
+            coxa_gyr_arr = np.column_stack([try_numeric(coxa_gyr_df[a]).values[:n_fus] for a in "XYZ"]).astype(float)
+            quiet_mask_fus = (x_axis[:n_fus] >= x_min_data) & (x_axis[:n_fus] <= x_min_data + 2.0)
+            if np.sum(quiet_mask_fus) >= 10:
+                fusao = trunk_thigh_fused_angles(
+                    l5_acc_arr, l5_gyr_arr, coxa_acc_arr, coxa_gyr_arr, pfs, quiet_mask_fus, lowpass_hz=2.5,
+                )
+                trunk_lean_phone_sagital = fusao["flexao_absoluta"]
+                trunk_lean_phone_frontal = fusao["lateral_absoluta"]
+                trunk_lean_phone_relativa_flexao = fusao["flexao_relativa"]
+                trunk_lean_phone_relativa_lateral = fusao["lateral_relativa"]
+
+    if trunk_lean_phone_sagital is None and pf_l5["acc"] != NONE and pf_l5["acc"] in aligned_raw:
+        # Reserva: se não der pra fazer a fusão completa (falta a coxa, por
+        # exemplo), volta pra estimativa mais simples (só acelerômetro,
+        # inclinação estática) — pior em movimento dinâmico, mas melhor
+        # que nada.
         acc_vert_phone = try_numeric(
             aligned_raw[pf_l5["acc"]][phone_axis_col(aligned_raw[pf_l5["acc"]], "l5", "Vertical")]
         ).values.astype(float)
         if acc_ap_phone_trunk is not None:
-            # unwrap evita um artefato de "volta ao redor" (salto de quase
-            # 360° no ROM) que acontece quando a aceleração vertical passa
-            # perto de zero durante o movimento rápido (a aceleração
-            # dinâmica do próprio movimento se soma à da gravidade,
-            # confundindo essa estimativa estática de inclinação —
-            # limitação conhecida desse método em movimento dinâmico,
-            # documentada e esperada, não um erro de cálculo).
             trunk_lean_phone_sagital = np.degrees(np.unwrap(np.arctan2(acc_ap_phone_trunk, -acc_vert_phone)))
         if acc_ml_phone_trunk is not None:
             trunk_lean_phone_frontal = np.degrees(np.unwrap(np.arctan2(acc_ml_phone_trunk, -acc_vert_phone)))

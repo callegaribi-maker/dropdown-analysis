@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 from scipy import interpolate
 from scipy import signal as sp_signal
+from scipy.spatial.transform import Rotation as _Rotation
 
 NONE_LABEL = "— nenhum —"
 
@@ -1664,6 +1665,167 @@ def compute_relative_coordination(series_a: np.ndarray | None, series_b: np.ndar
     if melhor_atraso is None:
         return {"correlacao": None, "atraso_s": None}
     return {"correlacao": melhor_corr, "atraso_s": melhor_atraso}
+
+
+def anatomical_functional_calibration(acc: np.ndarray, gyr: np.ndarray,
+                                      quiet_mask: np.ndarray,
+                                      active_percentile: float = 55.0) -> np.ndarray:
+    """
+    Acha os eixos anatômicos (AP, Vertical, ML) de um sensor, EXPRESSOS NAS
+    COORDENADAS BRUTAS DO SENSOR — corrige uma montagem qualquer (o celular
+    pode estar preso em qualquer orientação), sem precisar saber de
+    antemão qual eixo bruto (X/Y/Z) corresponde a qual direção anatômica.
+
+    1. Vertical: mediana do acelerômetro num trecho parado (quiet_mask),
+       normalizada — assume que ali a única aceleração relevante é a
+       gravidade.
+    2. Eixo de flexão (ML): remove do giroscópio a componente paralela à
+       vertical (rotação em torno do eixo vertical não é flexão/lateral),
+       e acha por PCA/SVD a direção dominante de rotação nos trechos de
+       MAIOR movimento (top (100-active_percentile)% de |giroscópio|
+       horizontal) — a ideia é que o movimento do teste é dominado por um
+       eixo de flexão bem definido, e a SVD encontra essa direção sem
+       precisar de suposição prévia sobre a montagem.
+    3. AP: produto vetorial vertical×ML, reortogonalizando ML em seguida
+       (garante um sistema ortogonal mesmo com pequenos erros numéricos).
+
+    Retorna uma matriz 3×3 cujas COLUNAS são os vetores AP, Vertical, ML
+    (nessa ordem), expressos nas coordenadas brutas X/Y/Z do sensor.
+
+    Atenção: o sinal do eixo ML (e portanto do AP) sai de um SVD — é
+    matematicamente ARBITRÁRIO (pode sair invertido sem nenhum erro).
+    Resolva comparando com outro sensor de referência (ver
+    resolve_axis_sign_ambiguity) antes de usar pra comparar dois sensores.
+    """
+    vertical = np.median(acc[quiet_mask], axis=0)
+    vertical = vertical / np.linalg.norm(vertical)
+
+    gh = gyr - np.outer(gyr @ vertical, vertical)
+    mag_gh = np.linalg.norm(gh, axis=1)
+    limiar = np.percentile(mag_gh, active_percentile)
+    ativo = mag_gh > limiar
+    if np.sum(ativo) < 10:
+        ativo = np.ones(len(gh), dtype=bool)
+
+    _, _, vh = np.linalg.svd(gh[ativo], full_matrices=False)
+    ml = vh[0]
+    ml = ml - np.dot(ml, vertical) * vertical
+    ml = ml / np.linalg.norm(ml)
+    ap = np.cross(vertical, ml)
+    ap = ap / np.linalg.norm(ap)
+    ml = np.cross(ap, vertical)
+    ml = ml / np.linalg.norm(ml)
+    return np.column_stack([ap, vertical, ml])
+
+
+def resolve_axis_sign_ambiguity(gyr_a: np.ndarray, basis_a: np.ndarray,
+                                gyr_b: np.ndarray, basis_b: np.ndarray) -> np.ndarray:
+    """
+    Corrige a ambiguidade de sinal do eixo funcional (ML/AP) de
+    anatomical_functional_calibration comparando dois sensores que deveriam
+    se mover de forma correlacionada (ex.: tronco e coxa, ambos flexionando
+    junto) — inverte os eixos de 'basis_b' se a correlação der negativa,
+    pra deixar os dois na mesma convenção. Retorna basis_b (ajustada).
+    """
+    vel_a_ml = gyr_a @ basis_a[:, 2]
+    vel_b_ml = gyr_b @ basis_b[:, 2]
+    if np.std(vel_a_ml) > 0 and np.std(vel_b_ml) > 0:
+        if np.corrcoef(vel_a_ml, vel_b_ml)[0, 1] < 0:
+            basis_b = basis_b.copy()
+            basis_b[:, [0, 2]] *= -1  # inverte AP e ML (mantém Vertical)
+    return basis_b
+
+
+def fuse_orientation_series(acc: np.ndarray, gyr: np.ndarray, basis: np.ndarray,
+                            fs: float, kp: float = 1.2) -> "_Rotation":
+    """
+    Estima a orientação de um sensor ao longo do tempo por fusão
+    giroscópio+acelerômetro (integra o giroscópio pra acompanhar a
+    rotação rápida, corrige progressivamente com o acelerômetro pra não
+    "derivar" no longo prazo — igual um filtro complementar, mas em 3D
+    completo com matrizes de rotação, não só um ângulo isolado).
+
+    A confiança no acelerômetro cai quando sua magnitude foge de ~9,81
+    m/s² (ou seja, quando há aceleração dinâmica de verdade, não só
+    gravidade) — evita que uma freada/impacto seja interpretado como
+    mudança de inclinação.
+
+    basis: matriz 3×3 de anatomical_functional_calibration (AP/Vertical/ML
+    em coordenadas do sensor) — usada só como referência inicial de
+    orientação (assume que o corpo começa alinhado com o mundo).
+
+    Retorna um objeto scipy Rotation (um por amostra) representando a
+    orientação do sensor em relação ao referencial do mundo/anatômico.
+    """
+    R = _Rotation.from_matrix(basis.T)
+    n = len(acc)
+    out = np.empty((n, 3, 3))
+    world_g = np.array([0.0, 1.0, 0.0])
+    for i in range(n):
+        norma_acc = np.linalg.norm(acc[i])
+        av = acc[i] / (norma_acc + 1e-12)
+        pred = R.inv().apply(world_g)
+        confianca = np.exp(-((norma_acc - 9.81) / 1.5) ** 2)
+        omega = gyr[i] + kp * confianca * np.cross(av, pred)
+        if i:
+            R = R * _Rotation.from_rotvec(omega / fs)
+        out[i] = R.as_matrix()
+    return _Rotation.from_matrix(out)
+
+
+def trunk_thigh_fused_angles(l5_acc: np.ndarray, l5_gyr: np.ndarray,
+                             coxa_acc: np.ndarray, coxa_gyr: np.ndarray,
+                             fs: float, quiet_mask: np.ndarray,
+                             lowpass_hz: float | None = 2.5,
+                             kp: float = 1.2) -> dict:
+    """
+    Pipeline completo de fusão de orientação 3D pro tronco (L5) e a coxa:
+    calibração funcional dos eixos (anatomical_functional_calibration),
+    correção de ambiguidade de sinal entre os dois sensores, fusão
+    giroscópio+acelerômetro (fuse_orientation_series), e extração dos
+    ângulos absolutos do tronco e relativos tronco-coxa (flexão e
+    inclinação lateral).
+
+    l5_acc, l5_gyr, coxa_acc, coxa_gyr: arrays (N,3) — acelerômetro em
+    m/s² e giroscópio em RAD/s (unidade bruta do sensor), na mesma grade
+    de tempo/frequência fs.
+    quiet_mask: booleano (N,) marcando um trecho parado, em pé (referência
+    de vertical e de zero) — tipicamente o começo da gravação.
+
+    Retorna dict com: 'flexao_absoluta', 'lateral_absoluta' (tronco em
+    relação ao mundo/vertical), 'flexao_relativa', 'lateral_relativa'
+    (tronco em relação à coxa) — todos em graus, já zerados no trecho
+    'quiet_mask' e filtrados (passa-baixa) se lowpass_hz for informado.
+    """
+    basis_l5 = anatomical_functional_calibration(l5_acc, l5_gyr, quiet_mask)
+    basis_coxa = anatomical_functional_calibration(coxa_acc, coxa_gyr, quiet_mask)
+    basis_coxa = resolve_axis_sign_ambiguity(l5_gyr, basis_l5, coxa_gyr, basis_coxa)
+
+    r_l5 = fuse_orientation_series(l5_acc, l5_gyr, basis_l5, fs, kp=kp)
+    r_coxa = fuse_orientation_series(coxa_acc, coxa_gyr, basis_coxa, fs, kp=kp)
+
+    r_l5_anat = r_l5 * _Rotation.from_matrix(basis_l5)
+    r_coxa_anat = r_coxa * _Rotation.from_matrix(basis_coxa)
+    r_rel = r_coxa_anat.inv() * r_l5_anat
+
+    e_abs = r_l5_anat.as_euler("xyz", degrees=True)
+    e_rel = r_rel.as_euler("xyz", degrees=True)
+
+    def _finish(x):
+        x_rad_unwrap = np.unwrap(np.deg2rad(x))
+        x_deg = np.degrees(x_rad_unwrap)
+        baseline = np.nanmedian(x_deg[quiet_mask])
+        x_deg = x_deg - baseline
+        if lowpass_hz:
+            x_deg = lowpass_array(x_deg, fs, lowpass_hz)
+        return x_deg
+
+    return {
+        "flexao_absoluta": _finish(e_abs[:, 2]),
+        "lateral_absoluta": _finish(e_abs[:, 0]),
+        "flexao_relativa": _finish(e_rel[:, 2]),
+        "lateral_relativa": _finish(e_rel[:, 0]),
+    }
 
 
 def compute_cv_across_trials(valores: list) -> dict:

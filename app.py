@@ -791,8 +791,29 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 tornozelo_alt = np.column_stack([try_numeric(kdf_raw[pos_mal_alt[a]]).values for a in "XYZ"])
                 vetor_coxa_alt = quadril_alt - joelho_alt
                 vetor_perna_alt = joelho_alt - tornozelo_alt  # invertido em relação ao sagital — convenção própria do frontal
+
+                # O ajuste de cross-talk do frontal (PCA) precisa de uma
+                # janela DIFERENTE da usada na calibração do sagital: uma
+                # referência "neutra" que englobe o instante em que o
+                # movimento começa a estabilizar no platô (não um trecho
+                # limpo bem antes disso), e uma janela funcional BEM mais
+                # larga (o platô inteiro + uma margem depois, cobrindo
+                # parte da descida) — testado com dados reais: usar a
+                # mesma janela do sagital aqui deixava um resíduo de
+                # cross-talk bem maior (~10° em vez de ~1-3°). Calculado
+                # automaticamente a partir do platô detectado, sem exigir
+                # mais nenhum campo novo na tela.
+                if plato_detectado is not None:
+                    t_neutro_frontal_ini = plato_detectado[0] - 0.5
+                    t_neutro_frontal_fim = plato_detectado[0] + 1.5
+                    t_calib_frontal_ini = t_neutro_frontal_ini
+                    t_calib_frontal_fim = plato_detectado[1] + 5.0
+                else:
+                    t_neutro_frontal_ini, t_neutro_frontal_fim = t_neutro_ini, t_neutro_fim
+                    t_calib_frontal_ini, t_calib_frontal_fim = t_calib_ini, t_calib_fim
+
                 angulo_frontal_kinem_alt, rotacao_func, variancia_func = knee_angle_frontal_functional(
-                    vetor_coxa_alt, vetor_perna_alt, x_axis, t_neutro_ini, t_neutro_fim, t_calib_ini, t_calib_fim,
+                    vetor_coxa_alt, vetor_perna_alt, x_axis, t_neutro_frontal_ini, t_neutro_frontal_fim, t_calib_frontal_ini, t_calib_frontal_fim,
                 )
                 if angulo_frontal_kinem_alt is None:
                     st.error("❌ Não deu pra calcular o frontal funcional do Kinem — confira as janelas (precisam ter dados suficientes e um movimento de flexão claro na janela de calibração). Mantendo o método antigo.")

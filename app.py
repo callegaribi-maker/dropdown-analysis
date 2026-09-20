@@ -1311,6 +1311,10 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
         )
         st.plotly_chart(fig_hip_sag, use_container_width=True)
+        st.caption(
+            "ℹ️ Padrão geral esperado: quando o joelho flexiona durante a descida, o tronco normalmente também "
+            "flexiona (inclina pra frente) — os dois retornam à extensão/posição ereta juntos, na subida."
+        )
 
     # --- Inclinação lateral do tronco (fusão 3D, celular) vs. Kinem (vetor L5-trocânter, plano frontal) ---
     if trunk_lean_kinem_frontal is not None or trunk_lean_phone_frontal is not None:
@@ -1339,6 +1343,10 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             "direito (ipsilateral à perna que flexiona, já que o teste é feito com a perna direita). Se não bater "
             "com o que você observou na gravação, os dois sinais (Kinem e celular) estão consistentes entre si, "
             "só o lado pode estar trocado."
+        )
+        st.caption(
+            "ℹ️ Padrão geral esperado: durante a descida, o L5 costuma se deslocar lateralmente na direção "
+            "OPOSTA à do marcador da coxa/trocânter (estratégia compensatória de tronco típica desse tipo de teste)."
         )
 
     # --- Ver análise: trials sobrepostos (ciclo inteiro 0-1, com fases) por métrica ---
@@ -1607,7 +1615,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                         return "{:.4f}m"
                     return "{:.1f}°"
                 fmt_cols = {c: fmt_for_col(c) for c in analise_df_full.columns if c not in ("Trial", "Nota clínica")}
-                st.dataframe(analise_df_full.style.format(fmt_cols), hide_index=True, use_container_width=True)
+                st.dataframe(analise_df_full.style.format(fmt_cols, na_rep="—"), hide_index=True, use_container_width=True)
 
             st.caption(
                 "Pico = maior valor atingido no trial (não a variação total). Pico de valgo preserva o sinal "

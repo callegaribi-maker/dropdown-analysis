@@ -587,21 +587,15 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         )
 
     hip_angle_kw = (GROUPS["l5"]["kinem_kw"], GROUPS["coxa"]["kinem_kw"], ("condilo",))
-    # Nota: invertido (×-1) porque a geometria vetorial do quadril (tronco→coxa)
-    # tem convenção oposta à do joelho — o ângulo bruto DIMINUI quando o quadril
-    # flexiona (vetores ficam mais paralelos), ao contrário do joelho, onde
-    # aumenta. Invertendo, "sobe = flexiona" fica consistente nos dois
-    # segmentos e bate com a convenção do celular (L5 − Coxa).
+    # Ambos os ângulos brutos (Kinem e celular) já vêm no MESMO sentido pra
+    # essa combinação de segmentos (testado com dados reais) — sem precisar
+    # de inversão nenhuma, ao contrário do que a versão anterior assumia.
     angle_hip_kinem_sagital = knee_angle_from_kinem_plane(
         kdf_raw, *hip_angle_kw, plane="sagittal",
     ) if not kdf_raw.empty else None
-    if angle_hip_kinem_sagital is not None:
-        angle_hip_kinem_sagital = -angle_hip_kinem_sagital
     angle_hip_kinem_frontal = knee_angle_from_kinem_plane(
         kdf_raw, *hip_angle_kw, plane="frontal", signed=True,
     ) if not kdf_raw.empty else None
-    if angle_hip_kinem_frontal is not None:
-        angle_hip_kinem_frontal = -angle_hip_kinem_frontal
 
     kinem_angle_kw = (GROUPS["coxa"]["kinem_kw"], ("condilo",), GROUPS["tornozelo"]["kinem_kw"])
     angle_kinem_sagital = knee_angle_from_kinem_plane(
@@ -1153,10 +1147,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         # --- Ângulo do quadril (tronco/L5 vs coxa) ---
         st.divider()
         st.markdown("#### 🦴 Ângulo do quadril (tronco vs coxa)")
-        st.caption(
-            "Mesma lógica do joelho, agora usando L5 (tronco) e Coxa. Sagital = flexão/extensão de quadril; "
-            "frontal = inclinação lateral de tronco / adução-abdução do quadril (sinal com sentido, ver nota)."
-        )
+        st.caption("Mesma lógica do joelho, agora usando L5 (tronco) e Coxa — flexão/extensão de quadril.")
         if angle_hip_phone_sagital is None and angle_hip_kinem_sagital is None:
             st.info("Selecione ACC + GYR de L5 e Coxa (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do quadril.")
         else:
@@ -1174,23 +1165,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
             )
             st.plotly_chart(fig_hip_sag, use_container_width=True)
-
-            st.markdown("**Frontal — inclinação lateral de tronco (↑ ou ↓, ver nota)**")
-            fig_hip_front = go.Figure()
-            add_phase_shading(fig_hip_front)
-            add_angle_trace(fig_hip_front, angle_hip_kinem_frontal, "darkcyan", "Kinem — quadril frontal")
-            add_angle_trace(fig_hip_front, angle_hip_phone_frontal, "deeppink", "Celular — quadril frontal")
-            add_l5_overlay(fig_hip_front)
-            add_phase_markers(fig_hip_front, angle_hip_kinem_frontal)
-            fig_hip_front.add_hline(y=0, line_dash="dot", line_color="lightgray")
-            fig_hip_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
-            fig_hip_front.update_layout(
-                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-                yaxis_title="Ângulo (°)", height=340, template="plotly_white", hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
-            )
-            st.plotly_chart(fig_hip_front, use_container_width=True)
-            st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
 
         # --- Ver análise: trials sobrepostos (ciclo inteiro 0-1, com fases) por métrica ---
         st.divider()

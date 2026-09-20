@@ -46,6 +46,7 @@ from signal_utils import (
     knee_angle_from_kinem_plane,
     knee_angle_gyro_relative_integration,
     knee_angle_frontal_functional,
+    linear_detrend_between,
     calibrate_two_point,
     gyro_relative_velocity,
     angular_velocity_from_angle,
@@ -843,6 +844,24 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                             if base_k_prezero is not None or base_p_prezero is not None:
                                 st.caption(f"↕️ Novo zero definido bem antes do 1º ciclo real ({t_prezero_ini:+.1f}s a {t_prezero_fim:+.1f}s) — reduz o efeito de deriva acumulada até ali.")
 
+                            # Corrige a deriva de integração do celular
+                            # (não tem acelerômetro corrigindo o giroscópio
+                            # continuamente, então a deriva se acumula ao
+                            # longo dos testes) — puxa o início e o fim dos
+                            # ciclos de teste de volta perto de zero,
+                            # assumindo que a deriva é aproximadamente
+                            # constante ao longo do tempo (comum nesse tipo
+                            # de sensor). O Kinem não precisa disso (não
+                            # integra nada, não deriva).
+                            if angle_phone_frontal is not None and len(trials) > 1:
+                                t_fim_testes = trials[-1][1]
+                                antes_detrend = compute_mean(angle_phone_frontal, x_axis, t_fim_testes - 1.0, t_fim_testes)
+                                angle_phone_frontal = linear_detrend_between(
+                                    angle_phone_frontal, x_axis, t_prezero_ini, t_fim_testes, ref_window=1.0,
+                                )
+                                if antes_detrend is not None:
+                                    st.caption(f"📉 Deriva do celular corrigida (correção linear): estava em {antes_detrend:+.1f}° no fim dos testes antes da correção, ajustado pra perto de 0°.")
+
     # ── Estabilidade de tronco: comparação Kinem × Celular via ACELERAÇÃO e
     # VELOCIDADE ANGULAR brutas (sem integrar nada) — testamos e essa é a
     # forma que dá uma relação consistente entre as duas fontes (ao
@@ -1057,7 +1076,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 fig.add_vrect(
                     x0=highlight_window[0], x1=highlight_window[1],
                     fillcolor="rgba(255, 99, 71, 0.18)", line_width=0,
-                    annotation_text="janela de calibração", annotation_position="top left",
+                    annotation_text="janela de calibração", annotation_position="bottom left",
                 )
             add_angle_trace(fig, k_series, "blue", "Kinem — sagital")
             add_angle_trace(fig, p_series, "red", "Celular — sagital")
@@ -1067,7 +1086,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             fig.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig.update_layout(
                 xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-                yaxis_title="Ângulo (graus)", height=380, template="plotly_white", hovermode="x unified",
+                yaxis_title="Ângulo (°)  —  ↑ flexão · ↓ extensão", height=380, template="plotly_white", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -1090,7 +1109,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             fig_front.add_vrect(
                 x0=t_calib_ini, x1=t_calib_fim,
                 fillcolor="rgba(255, 99, 71, 0.18)", line_width=0,
-                annotation_text="janela de calibração", annotation_position="top left",
+                annotation_text="janela de calibração", annotation_position="bottom left",
             )
             add_angle_trace(fig_front, angle_kinem_frontal, "green", "Kinem — frontal")
             add_angle_trace(fig_front, angle_phone_frontal, "darkorange", "Celular — frontal")
@@ -1100,11 +1119,15 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             fig_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig_front.update_layout(
                 xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-                yaxis_title="Ângulo (graus)", height=340, template="plotly_white", hovermode="x unified",
+                yaxis_title="Ângulo (°)  —  ↑ varo · ↓ valgo", height=340, template="plotly_white", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
             )
             st.plotly_chart(fig_front, use_container_width=True)
-            st.caption("ℹ️ " + knee_angle_direction_note("frontal"))
+            st.caption(
+                "ℹ️ Convenção adotada: **negativo = valgo, positivo = varo**. O sinal do Kinem é ajustado "
+                "automaticamente pra manter essa convenção (assumindo valgo dinâmico como padrão predominante "
+                "nesse tipo de teste — ver nota técnica no código se precisar desativar essa correção)."
+            )
 
         # --- Ângulo do quadril (tronco/L5 vs coxa) ---
         st.divider()
@@ -1126,7 +1149,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             fig_hip_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig_hip_sag.update_layout(
                 xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-                yaxis_title="Ângulo (graus)", height=340, template="plotly_white", hovermode="x unified",
+                yaxis_title="Ângulo (°)  —  ↑ flexão · ↓ extensão", height=340, template="plotly_white", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
             )
             st.plotly_chart(fig_hip_sag, use_container_width=True)
@@ -1142,7 +1165,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             fig_hip_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig_hip_front.update_layout(
                 xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-                yaxis_title="Ângulo (graus)", height=340, template="plotly_white", hovermode="x unified",
+                yaxis_title="Ângulo (°)", height=340, template="plotly_white", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
             )
             st.plotly_chart(fig_hip_front, use_container_width=True)

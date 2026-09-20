@@ -1323,6 +1323,40 @@ def apply_lag_to_series(series: np.ndarray | None, x_axis: np.ndarray, atraso: f
     return np.interp(x + atraso, x, series[:n], left=np.nan, right=np.nan)
 
 
+def linear_detrend_between(series: np.ndarray | None, x_axis: np.ndarray,
+                           t_start_ref: float, t_end_ref: float,
+                           ref_window: float = 1.0) -> np.ndarray | None:
+    """
+    Corrige uma deriva aproximadamente linear (comum em ângulo obtido por
+    integração pura de giroscópio, sem acelerômetro) — subtrai uma reta
+    que vale a média de 'series' perto de t_start_ref no início e a média
+    perto de t_end_ref no fim, forçando os dois pontos de volta perto de
+    zero (a deriva costuma se acumular de forma aproximadamente constante
+    ao longo do tempo, então uma correção linear resolve a maior parte).
+
+    Só corrige DEPOIS de t_start_ref (antes disso, a série permanece
+    inalterada) — não mexe no trecho de calibração, só no de teste.
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    x = x_axis[:n]
+    y = series[:n].copy()
+    v_start = compute_mean(y, x, t_start_ref, t_start_ref + ref_window)
+    v_end = compute_mean(y, x, t_end_ref - ref_window, t_end_ref)
+    if v_start is None or v_end is None:
+        return series
+    t_mid_start = t_start_ref + ref_window / 2
+    t_mid_end = t_end_ref - ref_window / 2
+    if t_mid_end <= t_mid_start:
+        return series
+    mask = x >= t_start_ref
+    frac = (x[mask] - t_mid_start) / (t_mid_end - t_mid_start)
+    tendencia = v_start + frac * (v_end - v_start)
+    y[mask] = y[mask] - tendencia
+    return y
+
+
 def knee_angle_gyro_relative_integration(thigh_gyro: pd.DataFrame | None, shank_gyro: pd.DataFrame | None,
                                          fs: float, axis: str = "Z", lowpass_hz: float | None = 5.0,
                                          sign: float = -1.0, x_axis: np.ndarray | None = None,

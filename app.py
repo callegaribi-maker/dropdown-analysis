@@ -1288,6 +1288,29 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         )
         st.plotly_chart(fig_hip_sag, use_container_width=True)
 
+    # --- Inclinação lateral do tronco (fusão 3D, celular) vs. Kinem (vetor L5-trocânter, plano frontal) ---
+    if trunk_lean_kinem_frontal is not None or trunk_lean_phone_frontal is not None:
+        st.markdown("**Inclinação lateral do tronco**")
+        st.caption(
+            "Kinem = proxy 2D pelo vetor L5–trocânter (não é o ângulo anatômico completo do tronco). "
+            "Celular = fusão de orientação 3D (giroscópio + acelerômetro, eixos calibrados por SVD) — ver seção "
+            "'Estabilidade de tronco' pra mais detalhes do método."
+        )
+        fig_trunk_lat = go.Figure()
+        add_phase_shading(fig_trunk_lat)
+        add_angle_trace(fig_trunk_lat, trunk_lean_kinem_frontal, "darkcyan", "Kinem — tronco lateral (proxy)")
+        add_angle_trace(fig_trunk_lat, trunk_lean_phone_frontal, "deeppink", "Celular — tronco lateral (fusão 3D)")
+        add_l5_overlay(fig_trunk_lat)
+        add_phase_markers(fig_trunk_lat, trunk_lean_kinem_frontal)
+        fig_trunk_lat.add_hline(y=0, line_dash="dot", line_color="lightgray")
+        fig_trunk_lat.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
+        fig_trunk_lat.update_layout(
+            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+            yaxis_title="Ângulo (°)", height=340, template="plotly_white", hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
+        )
+        st.plotly_chart(fig_trunk_lat, use_container_width=True)
+
     # --- Ver análise: trials sobrepostos (ciclo inteiro 0-1, com fases) por métrica ---
     st.divider()
     ver_analise_overlay = st.button("🔍 Ver análise", type="primary", use_container_width=True, key="btn_ver_analise_overlay")
@@ -1387,7 +1410,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             with oc3:
                 render_overlay_chart("Quadril — Sagital", angle_hip_kinem_sagital, angle_hip_phone_sagital, "teal", "crimson")
             with oc4:
-                render_overlay_chart("Quadril — Frontal", angle_hip_kinem_frontal, angle_hip_phone_frontal, "darkcyan", "deeppink")
+                render_overlay_chart("Tronco — Lateral", trunk_lean_kinem_frontal, trunk_lean_phone_frontal, "darkcyan", "deeppink")
             oc5, oc6 = st.columns(2)
             with oc5:
                 render_overlay_chart("Vel. Angular — Joelho Sagital", vel_kinem_sagital, vel_phone_sagital, "blue", "red", yaxis_title="Velocidade (°/s)")

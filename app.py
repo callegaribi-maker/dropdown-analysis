@@ -137,7 +137,7 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Lateral Step-Down test data processing")
+st.title("📊 LATERAL STEP-DOWN TEST DATA PROCESSING")
 
 NONE = NONE_LABEL
 
@@ -918,7 +918,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             ))
             fig.update_layout(yaxis2=dict(title="L5 vertical (cm)", overlaying="y", side="right", showgrid=False))
 
-        def render_sagital_chart(k_series, p_series, titulo_extra="", highlight_window=None):
+        def render_sagital_chart(k_series, p_series, titulo_extra="", highlight_window=None, x_range=None):
             fig = go.Figure()
             add_phase_shading(fig)
             if highlight_window is not None:
@@ -934,7 +934,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             add_phase_markers(fig, k_series)
             fig.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
             fig.update_layout(
-                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+                xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=list(x_range) if x_range else [view_start, view_end]),
                 yaxis_title="Ângulo (°)  —  ↑ flexão · ↓ extensão", height=380, template="plotly_white", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
             )
@@ -1317,8 +1317,15 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 st.caption(f"🔄 Kinem (tronco lateral): sinal invertido pra bater com o celular (correlação estava negativa, r={corr_trunk_sign:.2f}).")
 
     st.markdown("**Sagital — flexão (↑) / extensão (↓) — bruto**")
+    corte_visual = st.number_input(
+        "👁️ Mostrar gráficos a partir de (s) — só visual, não afeta cálculo nenhum",
+        min_value=float(view_start), max_value=float(view_end), value=float(view_start), step=0.5,
+        key="corte_visual_calibracao",
+        help="Ajuste pra 'cortar' o platô de calibração da visualização e ver os ciclos de teste com mais zoom. "
+             "Não muda nenhum cálculo, só o que aparece nesses dois gráficos.",
+    )
     st.caption("Fundo cinza = preparação · laranja = descida · azul = subida · linha pontilhada cinza = deslocamento vertical do L5 (eixo direito, cm) · faixa vermelha = janela de calibração usada.")
-    render_sagital_chart(angle_kinem_sagital, angle_phone_sagital, highlight_window=(t_calib_ini, t_calib_fim))
+    render_sagital_chart(angle_kinem_sagital, angle_phone_sagital, highlight_window=(t_calib_ini, t_calib_fim), x_range=(corte_visual, view_end))
 
     if angle_kinem_sagital is None:
         st.caption("⚠️ Ângulo do Kinem não calculado — verifique se as colunas de posição X/Y/Z de Trocânter, Côndilo e Tornozelo estão presentes.")
@@ -1342,7 +1349,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         fig_front.add_hline(y=0, line_dash="dot", line_color="lightgray")
         fig_front.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
         fig_front.update_layout(
-            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[corte_visual, view_end]),
             yaxis_title="Ângulo (°)  —  ↑ varo · ↓ valgo", height=340, template="plotly_white", hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
         )
@@ -1629,6 +1636,13 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 with st.container(border=True):
                     st.markdown(f"**{titulo}**")
                     st.dataframe(df_full.round(3).style.format(na_rep="—", precision=3), hide_index=True, use_container_width=True)
+                    csv_bloco = df_full.to_csv(index=False).encode("utf-8-sig")
+                    nome_arquivo = titulo.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "-")
+                    st.download_button(
+                        f"📥 Exportar {titulo} (CSV)", csv_bloco,
+                        file_name=f"{nome_arquivo}_step_down.csv", mime="text/csv",
+                        use_container_width=True, key=f"dl_{nome_arquivo}",
+                    )
                 return df_full
 
             linhas_tempos, linhas_joelho_sag, linhas_joelho_front = [], [], []
@@ -1878,28 +1892,45 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 linhas_coord[-1]["Dif. Picos Sagitais (s) — Celular"] = (t_pico_tronco_p - t_pico_joelho_p) if (t_pico_tronco_p is not None and t_pico_joelho_p is not None) else None
 
             st.markdown("##### 1️⃣ Tempos das fases")
-            _monta_bloco("Tempos das fases", linhas_tempos)
+            df_b_tempos = _monta_bloco("Tempos das fases", linhas_tempos)
 
             st.markdown("##### 2️⃣ Joelho — plano sagital")
-            _monta_bloco("Joelho sagital", linhas_joelho_sag)
+            df_b_joelho_sag = _monta_bloco("Joelho sagital", linhas_joelho_sag)
 
             st.markdown("##### 3️⃣ Joelho — plano frontal (valgo/varo)")
             st.caption("Convenção: valgo negativo, varo positivo.")
-            _monta_bloco("Joelho frontal", linhas_joelho_front)
+            df_b_joelho_front = _monta_bloco("Joelho frontal", linhas_joelho_front)
 
             st.markdown("##### 4️⃣ Tronco angular (flexão-extensão e inclinação lateral)")
             st.caption(
                 "Celular em L5 = orientação angular do tronco (fusão 3D). Kinem = proxy cinemático projetado "
                 "trocânter-L5 (não é o ângulo anatômico tridimensional completo do tronco)."
             )
-            _monta_bloco("Tronco angular", linhas_tronco)
+            df_b_tronco = _monta_bloco("Tronco angular", linhas_tronco)
 
             st.markdown("##### 5️⃣ Deslocamento translacional de L5")
             st.caption("Posição só pela cinemática (marcador). Aceleração por ambos os instrumentos, quando comparável.")
-            _monta_bloco("L5 translacional", linhas_l5)
+            df_b_l5 = _monta_bloco("L5 translacional", linhas_l5)
 
             st.markdown("##### 6️⃣ Coordenação joelho-tronco")
             df_analise_final = _monta_bloco("Coordenação", linhas_coord)
+
+            # --- Exportação combinada: um Excel com uma aba por bloco ---
+            buf_blocos = io.BytesIO()
+            with pd.ExcelWriter(buf_blocos, engine="openpyxl") as writer:
+                df_b_tempos.to_excel(writer, sheet_name="Tempos", index=False)
+                df_b_joelho_sag.to_excel(writer, sheet_name="Joelho Sagital", index=False)
+                df_b_joelho_front.to_excel(writer, sheet_name="Joelho Frontal", index=False)
+                df_b_tronco.to_excel(writer, sheet_name="Tronco Angular", index=False)
+                df_b_l5.to_excel(writer, sheet_name="L5 Translacional", index=False)
+                df_analise_final.to_excel(writer, sheet_name="Coordenação", index=False)
+            buf_blocos.seek(0)
+            st.download_button(
+                "📦 Exportar TODOS os blocos juntos (Excel, uma aba cada)", buf_blocos,
+                file_name="variaveis_step_down_completo.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, type="primary",
+            )
 
             st.caption(
                 "ℹ️ Cada bloco mostra os valores por repetição e, ao final, um resumo entre repetições (média, desvio "
@@ -1976,39 +2007,62 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     st.divider()
 
     # ══════════════════════════════════════════
-    # Quadro-resumo do resultado do teste
+    # Quadro-resumo do resultado do teste — organizado pelos 6 blocos
     # ══════════════════════════════════════════
     if valid_trials_summary:
-        adm_sag_k, adm_sag_p = [], []
+        tempos_prep, tempos_desc, tempos_sub, tempos_estab_k = [], [], [], []
+        adm_sag_k, adm_sag_p, pico_flex_k_list, pico_flex_p_list = [], [], [], []
+        vel_pico_k, jerk_k_list = [], []
+        adm_front_k, adm_front_p = [], []
         peak_valgo_k, peak_valgo_p = [], []
         peak_valgo_desc_k, peak_valgo_desc_p = [], []
         peak_valgo_sub_k, peak_valgo_sub_p = [], []
-        vel_pico_k, jerk_k_list = [], []
+        rom_tr_lat_k_list, rom_tr_lat_p_list = [], []
+        rom_tr_sag_k_list = []
         rms_acc_k_list, rms_acc_p_list = [], []
         rms_acc_desc_k, rms_acc_desc_p, rms_acc_sub_k, rms_acc_sub_p = [], [], [], []
         rms_angvel_k_list, rms_angvel_p_list = [], []
         rms_angvel_desc_k, rms_angvel_desc_p, rms_angvel_sub_k, rms_angvel_sub_p = [], [], [], []
+        rms_l5_lat_list, razao_path_list = [], []
+        corr_sag_list, atraso_sag_list = [], []
+        dif_pico_lat_valgo_list = []
 
         def _add(lst, val):
             if val is not None:
                 lst.append(val)
 
         for (t_start, t_end), phases in valid_trials_summary:
+            prep_start, prep_end = phases["preparacao"]
             d_start, d_end = phases["descida"]
             s_start, s_end = phases["subida"]
 
+            _add(tempos_prep, prep_end - prep_start)
+            _add(tempos_desc, d_end - d_start)
+            _add(tempos_sub, s_end - s_start)
+
             _add(adm_sag_k, compute_rom(angle_kinem_sagital, x_axis, t_start, t_end))
             _add(adm_sag_p, compute_rom(angle_phone_sagital, x_axis, t_start, t_end))
+            _add(pico_flex_k_list, compute_peak(angle_kinem_sagital, x_axis, t_start, t_end))
+            _add(pico_flex_p_list, compute_peak(angle_phone_sagital, x_axis, t_start, t_end))
+            _add(vel_pico_k, compute_peak(vel_kinem_sagital, x_axis, t_start, t_end))
+            _add(jerk_k_list, compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end))
 
+            _add(adm_front_k, compute_rom(angle_kinem_frontal, x_axis, t_start, t_end))
+            _add(adm_front_p, compute_rom(angle_phone_frontal, x_axis, t_start, t_end))
             _add(peak_valgo_k, compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True))
             _add(peak_valgo_p, compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True))
             _add(peak_valgo_desc_k, compute_peak(angle_kinem_frontal, x_axis, d_start, d_end, signed=True))
             _add(peak_valgo_desc_p, compute_peak(angle_phone_frontal, x_axis, d_start, d_end, signed=True))
             _add(peak_valgo_sub_k, compute_peak(angle_kinem_frontal, x_axis, s_start, s_end, signed=True))
             _add(peak_valgo_sub_p, compute_peak(angle_phone_frontal, x_axis, s_start, s_end, signed=True))
+            t_valgo_k_res, _v = time_to_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True)
 
-            _add(vel_pico_k, compute_peak(vel_kinem_sagital, x_axis, t_start, t_end))
-            _add(jerk_k_list, compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end))
+            _add(rom_tr_lat_k_list, compute_rom(trunk_lean_kinem_frontal, x_axis, t_start, t_end))
+            _add(rom_tr_lat_p_list, compute_rom(trunk_lean_phone_frontal, x_axis, t_start, t_end))
+            _add(rom_tr_sag_k_list, compute_rom(trunk_lean_kinem_sagital, x_axis, t_start, t_end))
+            t_lat_k_res, _v2 = time_to_peak(trunk_lean_kinem_frontal, x_axis, t_start, t_end, signed=True)
+            if t_valgo_k_res is not None and t_lat_k_res is not None:
+                _add(dif_pico_lat_valgo_list, t_lat_k_res - t_valgo_k_res)
 
             _add(rms_acc_k_list, compute_rms(acc_ml_kinem_trunk, x_axis, d_start, s_end))
             _add(rms_acc_p_list, compute_rms(acc_ml_phone_trunk, x_axis, d_start, s_end))
@@ -2017,12 +2071,22 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             _add(rms_acc_sub_k, compute_rms(acc_ml_kinem_trunk, x_axis, s_start, s_end))
             _add(rms_acc_sub_p, compute_rms(acc_ml_phone_trunk, x_axis, s_start, s_end))
 
-            _add(rms_angvel_k_list, compute_rms(trunk_angvel_kinem, x_axis, d_start, s_end))
+            _add(rms_angvel_k_list, compute_rms(trunk_angvel_kinem_frontal_dot, x_axis, d_start, s_end))
             _add(rms_angvel_p_list, compute_rms(trunk_angvel_phone, x_axis, d_start, s_end))
-            _add(rms_angvel_desc_k, compute_rms(trunk_angvel_kinem, x_axis, d_start, d_end))
+            _add(rms_angvel_desc_k, compute_rms(trunk_angvel_kinem_frontal_dot, x_axis, d_start, d_end))
             _add(rms_angvel_desc_p, compute_rms(trunk_angvel_phone, x_axis, d_start, d_end))
-            _add(rms_angvel_sub_k, compute_rms(trunk_angvel_kinem, x_axis, s_start, s_end))
+            _add(rms_angvel_sub_k, compute_rms(trunk_angvel_kinem_frontal_dot, x_axis, s_start, s_end))
             _add(rms_angvel_sub_p, compute_rms(trunk_angvel_phone, x_axis, s_start, s_end))
+
+            _add(rms_l5_lat_list, compute_rms(l5_lateral, x_axis, t_start, t_end))
+            path_l5 = compute_path_length(l5_lateral, x_axis, t_start, t_end)
+            rom_l5 = compute_rom(l5_lateral, x_axis, t_start, t_end)
+            if path_l5 is not None and rom_l5:
+                _add(razao_path_list, path_l5 / rom_l5)
+
+            coord_sag = compute_relative_coordination(angle_kinem_sagital, trunk_lean_kinem_sagital, x_axis, t_start, t_end, max_lag=1.0, lag_step=0.02)
+            _add(corr_sag_list, coord_sag["correlacao"])
+            _add(atraso_sag_list, coord_sag["atraso_s"])
 
         def _fmt(lst, suffix="", casas=1):
             return f"{np.mean(lst):.{casas}f}{suffix}" if lst else "—"
@@ -2037,7 +2101,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         razao_angvel_medias = _razao(rms_angvel_p_list, rms_angvel_k_list)
         nota_txt = nota_clinica if nota_clinica else "não informada"
 
-        # --- leitura interpretativa: joelho, celular x Kinem ---
         if razao_adm is None:
             leitura_adm = "não foi possível comparar (faltam dados de uma das fontes)."
         elif 0.85 <= razao_adm <= 1.15:
@@ -2047,7 +2110,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         else:
             leitura_adm = f"o celular **superestimou** a amplitude em relação ao Kinem (proporção {razao_adm:.2f}×)."
 
-        # --- leitura interpretativa: joelho, descida vs subida ---
         media_desc_k = np.mean([abs(v) for v in peak_valgo_desc_k]) if peak_valgo_desc_k else None
         media_sub_k = np.mean([abs(v) for v in peak_valgo_sub_k]) if peak_valgo_sub_k else None
         if media_desc_k is not None and media_sub_k is not None:
@@ -2060,7 +2122,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         else:
             leitura_fase_joelho = "não foi possível comparar as fases (dados insuficientes)."
 
-        # --- leitura interpretativa: tronco, descida vs subida ---
         media_desc_acc_k = np.mean(rms_acc_desc_k) if rms_acc_desc_k else None
         media_sub_acc_k = np.mean(rms_acc_sub_k) if rms_acc_sub_k else None
         if media_desc_acc_k is not None and media_sub_acc_k is not None:
@@ -2076,33 +2137,127 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         resumo_md = f"""
 ##### 📘 Resumo do resultado do teste
 
-**{len(valid_trials_summary)} trials** analisados (repetições segmentadas com sucesso) · Nota clínica informada: **{nota_txt}**
+**{len(valid_trials_summary)} trials** analisados · Nota clínica informada: **{nota_txt}**
 
 ---
-**🦵 Joelho — Celular vs. Kinem**
-- ADM de flexão (média): Kinem **{_fmt(adm_sag_k, '°')}** · Celular **{_fmt(adm_sag_p, '°')}** — {leitura_adm}
-- Pico de valgo/varo (média, sinal = lado): Kinem **{_fmt(peak_valgo_k, '°')}** · Celular **{_fmt(peak_valgo_p, '°')}**
-- Velocidade de pico na flexão: **{_fmt(vel_pico_k, '°/s', 0)}** · Suavidade (jerk RMS, Kinem): **{_fmt(jerk_k_list, '°/s³', 0)}** (quanto menor, mais suave)
+**1️⃣ Tempos das fases**
+- Preparação: **{_fmt(tempos_prep, 's', 2)}** · Descida: **{_fmt(tempos_desc, 's', 2)}** · Subida: **{_fmt(tempos_sub, 's', 2)}**
 
-**🦵 Joelho — o que aconteceu em cada fase**
-- Valgo na descida: Kinem **{_fmt(peak_valgo_desc_k, '°')}** · Celular **{_fmt(peak_valgo_desc_p, '°')}**
-- Valgo na subida: Kinem **{_fmt(peak_valgo_sub_k, '°')}** · Celular **{_fmt(peak_valgo_sub_p, '°')}**
+**2️⃣ Joelho sagital**
+- ADM de flexão: Kinem **{_fmt(adm_sag_k, '°')}** · Celular **{_fmt(adm_sag_p, '°')}** — {leitura_adm}
+- Pico de flexão: Kinem **{_fmt(pico_flex_k_list, '°')}** · Celular **{_fmt(pico_flex_p_list, '°')}**
+- Velocidade de pico: **{_fmt(vel_pico_k, '°/s', 0)}** · Suavidade (jerk RMS, Kinem): **{_fmt(jerk_k_list, '°/s³', 0)}** (quanto menor, mais suave)
+
+**3️⃣ Joelho frontal (valgo/varo)**
+- ADM frontal: Kinem **{_fmt(adm_front_k, '°')}** · Celular **{_fmt(adm_front_p, '°')}**
+- Pico de valgo/varo (sinal = lado): Kinem **{_fmt(peak_valgo_k, '°')}** · Celular **{_fmt(peak_valgo_p, '°')}**
+- Valgo na descida: Kinem **{_fmt(peak_valgo_desc_k, '°')}** · Celular **{_fmt(peak_valgo_desc_p, '°')}**; na subida: Kinem **{_fmt(peak_valgo_sub_k, '°')}** · Celular **{_fmt(peak_valgo_sub_p, '°')}**
 - {leitura_fase_joelho}
 
----
-**🧍 Coluna/Tronco — Celular vs. Kinem**
+**4️⃣ Tronco angular**
+- ROM lateral: Kinem **{_fmt(rom_tr_lat_k_list, '°')}** · Celular **{_fmt(rom_tr_lat_p_list, '°')}** · ROM sagital (Kinem): **{_fmt(rom_tr_sag_k_list, '°')}**
 - RMS aceleração lateral: Kinem **{_fmt(rms_acc_k_list, '', 3)}** · Celular **{_fmt(rms_acc_p_list, '', 3)}** (razão {f'{razao_acc_medias:.2f}×' if razao_acc_medias else '—'})
 - RMS velocidade angular: Kinem **{_fmt(rms_angvel_k_list, '°/s', 1)}** · Celular **{_fmt(rms_angvel_p_list, '°/s', 1)}** (razão {f'{razao_angvel_medias:.2f}×' if razao_angvel_medias else '—'})
-- *A razão Celular/Kinem se manteve consistente entre trials nos testes que fizemos — é o número mais importante pra validar o sensor, não a escala absoluta.*
-
-**🧍 Coluna/Tronco — o que aconteceu em cada fase**
-- Aceleração lateral (RMS) na descida: Kinem **{_fmt(rms_acc_desc_k, '', 3)}** · Celular **{_fmt(rms_acc_desc_p, '', 3)}**
-- Aceleração lateral (RMS) na subida: Kinem **{_fmt(rms_acc_sub_k, '', 3)}** · Celular **{_fmt(rms_acc_sub_p, '', 3)}**
+- Aceleração lateral (RMS) — descida: Kinem **{_fmt(rms_acc_desc_k, '', 3)}** · subida: Kinem **{_fmt(rms_acc_sub_k, '', 3)}**
 - {leitura_fase_tronco}
 
-*Resumo calculado automaticamente a partir dos trials segmentados — confira a tabela "Ver variáveis" para os valores por trial.*
+**5️⃣ L5 translacional**
+- RMS deslocamento lateral: **{_fmt(rms_l5_lat_list, 'm', 4)}** · Razão caminho/deslocamento: **{_fmt(razao_path_list, '×', 1)}**
+
+**6️⃣ Coordenação joelho-tronco**
+- Correlação sagital joelho-tronco: **{_fmt(corr_sag_list, '', 2)}** · Atraso tronco-joelho: **{_fmt(atraso_sag_list, 's', 2)}**
+- Diferença pico lateral do tronco − pico de valgo: **{_fmt(dif_pico_lat_valgo_list, 's', 2)}**
+
+*A razão Celular/Kinem se manteve consistente entre trials nos testes que fizemos — é o número mais importante pra validar o sensor, não a escala absoluta. Resumo calculado a partir dos trials segmentados — confira os blocos em "Ver variáveis" pros valores por trial.*
 """
         st.info(resumo_md)
+
+        # ══════════════════════════════════════════
+        # Interpretação biomecânica (síntese entre blocos)
+        # ══════════════════════════════════════════
+        pontos_interpretacao = []
+
+        # Padrão geral: joelho vs tronco em amplitude relativa
+        if adm_sag_k and rom_tr_lat_k_list:
+            razao_tronco_joelho = np.mean(rom_tr_lat_k_list) / np.mean(adm_sag_k) if np.mean(adm_sag_k) else None
+            if razao_tronco_joelho is not None:
+                if razao_tronco_joelho > 0.5:
+                    pontos_interpretacao.append(
+                        f"O tronco se moveu lateralmente numa proporção considerável em relação à flexão do joelho "
+                        f"(ROM lateral do tronco ≈ {razao_tronco_joelho*100:.0f}% da ADM sagital do joelho) — "
+                        f"padrão compatível com uma **estratégia compensatória de tronco**, em que o corpo desloca o "
+                        f"peso lateralmente pra reduzir a demanda no joelho/quadril, em vez de controlar o movimento "
+                        f"só com a musculatura do membro inferior."
+                    )
+                else:
+                    pontos_interpretacao.append(
+                        f"O tronco se manteve relativamente estável em relação ao movimento do joelho "
+                        f"(ROM lateral do tronco ≈ {razao_tronco_joelho*100:.0f}% da ADM sagital do joelho) — "
+                        f"não sugere uma compensação de tronco marcante nesse teste."
+                    )
+
+        # Coordenação temporal: valgo e inclinação lateral do tronco andam juntos?
+        if corr_sag_list and np.mean(corr_sag_list) > 0.7:
+            pontos_interpretacao.append(
+                f"A forte correlação entre a flexão do joelho e a flexão do tronco (r ≈ {np.mean(corr_sag_list):.2f}) "
+                f"confirma o padrão esperado — os dois segmentos flexionam e estendem juntos ao longo do ciclo, sem "
+                f"dissociação temporal aparente entre eles."
+            )
+        elif corr_sag_list:
+            pontos_interpretacao.append(
+                f"A correlação entre a flexão do joelho e a flexão do tronco ficou mais fraca do que o esperado "
+                f"(r ≈ {np.mean(corr_sag_list):.2f}) — pode indicar uma dissociação temporal entre os dois "
+                f"segmentos (o tronco não acompanha o joelho de forma tão sincronizada), ou ruído/variabilidade "
+                f"nos sinais."
+            )
+
+        if dif_pico_lat_valgo_list:
+            dif_media = np.mean(dif_pico_lat_valgo_list)
+            if abs(dif_media) < 0.15:
+                pontos_interpretacao.append(
+                    f"O pico de inclinação lateral do tronco ocorreu praticamente **junto** com o pico de valgo do "
+                    f"joelho (diferença média de {dif_media:+.2f}s) — os dois eventos parecem fazer parte do mesmo "
+                    f"momento crítico do movimento, reforçando a hipótese de que estão mecanicamente relacionados."
+                )
+            elif dif_media < 0:
+                pontos_interpretacao.append(
+                    f"O tronco atingiu sua maior inclinação lateral **antes** do pico de valgo do joelho (em média "
+                    f"{abs(dif_media):.2f}s antes) — o desvio de tronco pode estar **antecipando** (e possivelmente "
+                    f"contribuindo para) o valgo, em vez de ser só uma resposta a ele."
+                )
+            else:
+                pontos_interpretacao.append(
+                    f"O tronco atingiu sua maior inclinação lateral **depois** do pico de valgo do joelho (em média "
+                    f"{dif_media:.2f}s depois) — sugere que a inclinação do tronco pode ser mais uma **resposta** ao "
+                    f"desvio do joelho do que sua causa."
+                )
+
+        # Consistência entre repetições (fadiga ou aprendizado) — CV entre trials
+        # já é mostrado nos blocos "Ver variáveis"; aqui só citamos se houver tendência clara.
+        if peak_valgo_k and len(peak_valgo_k) >= 3:
+            tendencia_valgo = np.polyfit(np.arange(len(peak_valgo_k)), [abs(v) for v in peak_valgo_k], 1)[0]
+            if abs(tendencia_valgo) > 0.5:
+                direcao = "aumentando" if tendencia_valgo > 0 else "diminuindo"
+                pontos_interpretacao.append(
+                    f"O valgo do joelho foi **{direcao}** ao longo das repetições (tendência de "
+                    f"{tendencia_valgo:+.1f}°/trial) — pode refletir fadiga muscular progressiva (se aumentando) "
+                    f"ou algum efeito de aprendizado/aquecimento do movimento (se diminuindo). Vale conferir a "
+                    f"tendência de outras variáveis nos blocos de 'Ver variáveis' pra confirmar esse padrão."
+                )
+
+        if not pontos_interpretacao:
+            pontos_interpretacao.append(
+                "Não há dados suficientes nos trials segmentados pra montar uma leitura biomecânica mais "
+                "aprofundada — confira se a segmentação capturou bem os ciclos de teste."
+            )
+
+        interpretacao_md = "##### 🧠 Interpretação biomecânica\n\n" + "\n\n".join(f"- {p}" for p in pontos_interpretacao)
+        interpretacao_md += (
+            "\n\n*Leitura automática, gerada a partir de padrões estatísticos simples (proporções, correlações, "
+            "tendências) — não substitui a avaliação clínica de quem está conduzindo o teste. Use como ponto de "
+            "partida pra investigar, não como conclusão fechada.*"
+        )
+        st.success(interpretacao_md)
     else:
         st.info("📘 **Resumo do resultado do teste** — não há trials segmentados o suficiente pra gerar um resumo automático.")
 
@@ -2115,15 +2270,14 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
 1. **Sincronização bruta**: pico de aceleração vertical do L5 (Kinem) como referência inicial; correlação cruzada alinha Coxa, Tornozelo e os respectivos celulares a esse mesmo instante (±1s de busca por segmento).
 2. **Recentralização (x=0)**: redefinida para o pico de flexão do joelho (Kinem), não o pico de aceleração — evita ambiguidade quando há um movimento preparatório antes do teste.
-3. **Ângulo do joelho e do quadril**: Kinem via vetores 3D entre marcadores (ângulo = arco-cosseno do produto escalar, ou arco-tangente com sinal nos planos frontal/quadril); celular via filtro complementar (giroscópio integrado + correção pelo acelerômetro, peso do giroscópio α=0,995 — valor otimizado empiricamente).
+3. **Ângulo do joelho e do tronco-coxa**: Kinem via vetores 3D entre marcadores (ângulo = arco-cosseno do produto escalar, ou arco-tangente com sinal nos planos frontal); celular via filtro complementar (joelho) ou fusão de orientação 3D completa com calibração funcional dos eixos por SVD (tronco/coxa).
 4. **Correção de atraso**: desloca a curva do celular no tempo pra alinhar seu pico ao pico do Kinem, por plano — compensa o atraso mecânico de resposta do sensor (tecido mole/fixação da faixa).
 5. **Calibração de amplitude**: fator de escala automático por plano (±1s ao redor do pico), ajustando a amplitude do celular à do Kinem **dessa gravação específica** — não é uma calibração permanente do sensor.
 6. **Segmentação de fases**: preparação/descida/subida detectadas pelo deslocamento vertical do L5 (Kinem), com limiar de sensibilidade ajustável (fração do deslocamento total que marca início/fim do movimento).
 7. **Velocidade e jerk**: derivadas numéricas do ângulo (`np.gradient`); ângulo filtrado (passa-baixa Butterworth, 10Hz) antes de derivar — testado com dados reais: reduz o ruído amplificado pela derivação sem alterar o ângulo em si.
 8. **Estabilidade de tronco**: RMS da aceleração e da velocidade angular laterais **brutas** (sem integrar) do L5, comparando Kinem e celular — testado e validado como mais consistente entre trials do que tentar estimar deslocamento lateral via dupla integração (que se mostrou pouco confiável).
 9. **Tempo até o pico / razão valgo-flexão**: instante e valor do maior desvio de cada curva dentro do trial, comparados entre planos e fontes.
-10. **Variabilidade**: desvio padrão de cada métrica entre os trials detectados (linha "Desvio padrão" nas tabelas).
+10. **Variabilidade**: desvio padrão, CV% e tendência linear de cada métrica entre os trials detectados (linhas de resumo nos blocos de "Ver variáveis").
 
 *Trials nas bordas (primeiro/último) podem ter métricas distorcidas — a janela deles inclui trecho antes do início ou depois do fim da gravação real.*
 """)
-

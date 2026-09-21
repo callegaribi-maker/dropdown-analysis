@@ -1193,12 +1193,20 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         cross = trunk_vec_frontal[:, 0] * vertical_ref_2d[:, 1] - trunk_vec_frontal[:, 1] * vertical_ref_2d[:, 0]
         dot = trunk_vec_frontal[:, 0] * vertical_ref_2d[:, 0] + trunk_vec_frontal[:, 1] * vertical_ref_2d[:, 1]
         trunk_lean_kinem_frontal = np.degrees(np.arctan2(cross, dot))
-        trunk_angvel_kinem = compute_derivative(trunk_lean_kinem_frontal, x_axis)
 
         trunk_vec_sagital = trunk_vec[:, [1, 2]]
         cross_s = trunk_vec_sagital[:, 0] * vertical_ref_2d[:, 1] - trunk_vec_sagital[:, 1] * vertical_ref_2d[:, 0]
         dot_s = trunk_vec_sagital[:, 0] * vertical_ref_2d[:, 0] + trunk_vec_sagital[:, 1] * vertical_ref_2d[:, 1]
         trunk_lean_kinem_sagital = np.degrees(np.arctan2(cross_s, dot_s))
+
+        # Zera os dois (sagital e frontal) na mesma janela "parada" usada
+        # pela fusão do celular (x_min_data a +2s) — sem isso, o Kinem
+        # ficava numa escala bruta qualquer (geometria da câmera) enquanto
+        # o celular já saía zerado (a fusão já zera sozinha), fazendo os
+        # gráficos da coluna começarem em pontos diferentes do joelho.
+        trunk_lean_kinem_frontal = zero_reference_angle(trunk_lean_kinem_frontal, x_axis, x_min_data, x_min_data + 2.0)
+        trunk_lean_kinem_sagital = zero_reference_angle(trunk_lean_kinem_sagital, x_axis, x_min_data, x_min_data + 2.0)
+        trunk_angvel_kinem = compute_derivative(trunk_lean_kinem_frontal, x_axis)
 
     # Ângulo ABSOLUTO da coxa (Trocânter→Côndilo vs. vertical) — diferente
     # do ângulo do joelho (coxa vs. perna) e do "quadril"/tronco-coxa (L5
@@ -2277,14 +2285,17 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
 
 1. **Sincronização bruta**: pico de aceleração vertical do L5 (Kinem) como referência inicial; correlação cruzada alinha Coxa, Tornozelo e os respectivos celulares a esse mesmo instante (±1s de busca por segmento).
 2. **Recentralização (x=0)**: redefinida para o pico de flexão do joelho (Kinem), não o pico de aceleração — evita ambiguidade quando há um movimento preparatório antes do teste.
-3. **Ângulo do joelho e do tronco-coxa**: Kinem via vetores 3D entre marcadores (ângulo = arco-cosseno do produto escalar, ou arco-tangente com sinal nos planos frontal); celular via filtro complementar (joelho) ou fusão de orientação 3D completa com calibração funcional dos eixos por SVD (tronco/coxa).
-4. **Correção de atraso**: desloca a curva do celular no tempo pra alinhar seu pico ao pico do Kinem, por plano — compensa o atraso mecânico de resposta do sensor (tecido mole/fixação da faixa).
-5. **Calibração de amplitude**: fator de escala automático por plano (±1s ao redor do pico), ajustando a amplitude do celular à do Kinem **dessa gravação específica** — não é uma calibração permanente do sensor.
-6. **Segmentação de fases**: preparação/descida/subida detectadas pelo deslocamento vertical do L5 (Kinem), com limiar de sensibilidade ajustável (fração do deslocamento total que marca início/fim do movimento).
-7. **Velocidade e jerk**: derivadas numéricas do ângulo (`np.gradient`); ângulo filtrado (passa-baixa Butterworth, 10Hz) antes de derivar — testado com dados reais: reduz o ruído amplificado pela derivação sem alterar o ângulo em si.
-8. **Estabilidade de tronco**: RMS da aceleração e da velocidade angular laterais **brutas** (sem integrar) do L5, comparando Kinem e celular — testado e validado como mais consistente entre trials do que tentar estimar deslocamento lateral via dupla integração (que se mostrou pouco confiável).
-9. **Tempo até o pico / razão valgo-flexão**: instante e valor do maior desvio de cada curva dentro do trial, comparados entre planos e fontes.
-10. **Variabilidade**: desvio padrão, CV% e tendência linear de cada métrica entre os trials detectados (linhas de resumo nos blocos de "Ver variáveis").
+3. **Ângulo do joelho — Kinem**: vetores 3D entre marcadores (coxa = trocânter−côndilo, perna = maléolo−côndilo); ângulo = arco-cosseno do produto escalar (3D) ou arco-tangente com sinal, projetado no plano sagital/frontal.
+4. **Ângulo do joelho — celular**: integração da velocidade angular relativa coxa-perna (giroscópio), sincronizada por correlação cruzada da velocidade angular na janela de calibração, e calibrada em 2 pontos (postura neutra = 0°, platô conhecido = ângulo informado) — substitui o filtro complementar simples (que fica como reserva automática se a calibração de 2 pontos falhar ou der uma amplitude fisiologicamente implausível).
+5. **Ângulo do tronco e da coxa (absolutos) — celular**: fusão de orientação 3D completa (giroscópio integrado continuamente + correção pelo acelerômetro a cada amostra, com a confiança no acelerômetro caindo quando sua magnitude foge de ~9,81 m/s² — ou seja, durante aceleração dinâmica de verdade, não só gravidade); eixos anatômicos (AP/vertical/ML) de cada sensor calibrados por SVD no trecho de maior movimento, sem precisar assumir a orientação física da montagem do celular.
+6. **Ângulo do tronco e da coxa (absolutos) — Kinem**: proxy 2D pelo vetor trocânter−L5 (tronco) ou trocânter−côndilo (coxa), projetado nos planos sagital/frontal contra a vertical — não é um ângulo anatômico tridimensional completo (não temos um sistema pélvico/torácico completo, só L5 e um trocânter).
+7. **Correção de ambiguidade de sinal**: o sinal do ângulo frontal do joelho e da inclinação lateral do tronco (Kinem) pode sair invertido em relação ao celular sem nenhum erro de cálculo (ambiguidade inerente de PCA/SVD e de convenção geométrica) — corrigido comparando a correlação Kinem×Celular na janela de teste e invertendo o Kinem automaticamente se estiver anti-correlacionado.
+8. **Zero de referência**: joelho, tronco e coxa (Kinem e celular) são todos zerados numa janela "parada", em pé, no início da gravação — garante que todos os ângulos comecem do mesmo ponto e sejam comparáveis entre si.
+9. **Segmentação de fases**: preparação/descida/subida detectadas pelo deslocamento vertical do L5 (Kinem), com limiar de sensibilidade ajustável (fração do deslocamento total que marca início/fim do movimento).
+10. **Velocidade e jerk**: derivadas numéricas do ângulo (`np.gradient`); ângulo filtrado (passa-baixa Butterworth) antes de derivar — reduz o ruído amplificado pela derivação sem alterar o ângulo em si. Jerk normalizado pela fórmula jerk RMS × duração³/amplitude.
+11. **Estabilidade de tronco**: além do ângulo (item 5), também calculamos aceleração e velocidade angular **brutas** (sem integrar) do L5 — RMS, pico, jerk — como medidas independentes de instabilidade translacional/rotacional, comparando Kinem e celular.
+12. **Coordenação joelho-tronco**: correlação cruzada entre as curvas (testando um deslocamento de até ±1s pra achar o melhor alinhamento), diferenças temporais entre picos, e razões de amplitude (ROM tronco/ROM joelho).
+13. **Estrutura da saída ("Ver variáveis")**: organizada em 6 blocos — Tempos das fases, Joelho sagital, Joelho frontal (valgo/varo), Tronco angular, L5 translacional, Coordenação joelho-tronco — cada um com os valores por trial e um resumo entre repetições (média, desvio padrão, mínimo, máximo, CV%, diferença 1ª−última e tendência linear).
 
 *Trials nas bordas (primeiro/último) podem ter métricas distorcidas — a janela deles inclui trecho antes do início ou depois do fim da gravação real.*
 """)

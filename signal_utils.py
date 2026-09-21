@@ -1702,12 +1702,22 @@ def anatomical_functional_calibration(acc: np.ndarray, gyr: np.ndarray,
 
     gh = gyr - np.outer(gyr @ vertical, vertical)
     mag_gh = np.linalg.norm(gh, axis=1)
-    limiar = np.percentile(mag_gh, active_percentile)
-    ativo = mag_gh > limiar
+    # Linhas com NaN/Inf (comuns nas bordas depois de alinhar/deslocar os
+    # sinais no tempo) precisam ser excluídas ANTES do percentil e da SVD —
+    # um NaN sozinho corrompe o limiar (vira NaN, a comparação com NaN dá
+    # sempre False, cai no "sem amostras ativas" e acaba incluindo as
+    # próprias linhas com NaN na SVD, que aí não converge).
+    valido = np.isfinite(mag_gh) & np.all(np.isfinite(gh), axis=1)
+    if np.sum(valido) < 10:
+        raise ValueError("Dados insuficientes (sem NaN/Inf) para calibração funcional dos eixos.")
+    gh_valido = gh[valido]
+    mag_gh_valido = mag_gh[valido]
+    limiar = np.percentile(mag_gh_valido, active_percentile)
+    ativo = mag_gh_valido > limiar
     if np.sum(ativo) < 10:
-        ativo = np.ones(len(gh), dtype=bool)
+        ativo = np.ones(len(gh_valido), dtype=bool)
 
-    _, _, vh = np.linalg.svd(gh[ativo], full_matrices=False)
+    _, _, vh = np.linalg.svd(gh_valido[ativo], full_matrices=False)
     ml = vh[0]
     ml = ml - np.dot(ml, vertical) * vertical
     ml = ml / np.linalg.norm(ml)
@@ -1797,6 +1807,22 @@ def trunk_thigh_fused_angles(l5_acc: np.ndarray, l5_gyr: np.ndarray,
     (tronco em relação à coxa) — todos em graus, já zerados no trecho
     'quiet_mask' e filtrados (passa-baixa) se lowpass_hz for informado.
     """
+    def _preencher_nan(arr):
+        # Amostras com NaN (comuns nas bordas depois de alinhar/deslocar os
+        # sinais no tempo — o deslocamento "empurra" parte do sinal pra
+        # fora do trecho com dado real) quebram tanto a SVD quanto a
+        # integração amostra-a-amostra da fusão (um NaN "contamina" tudo
+        # que vem depois). Preenche copiando o valor válido mais próximo
+        # (não inventa dado novo, só repete a borda) — funciona bem porque
+        # esses NaN ficam concentrados nas pontas, não no meio da gravação.
+        df_tmp = pd.DataFrame(arr)
+        return df_tmp.ffill().bfill().to_numpy()
+
+    l5_acc = _preencher_nan(l5_acc)
+    l5_gyr = _preencher_nan(l5_gyr)
+    coxa_acc = _preencher_nan(coxa_acc)
+    coxa_gyr = _preencher_nan(coxa_gyr)
+
     basis_l5 = anatomical_functional_calibration(l5_acc, l5_gyr, quiet_mask)
     basis_coxa = anatomical_functional_calibration(coxa_acc, coxa_gyr, quiet_mask)
     basis_coxa = resolve_axis_sign_ambiguity(l5_gyr, basis_l5, coxa_gyr, basis_coxa)

@@ -1290,24 +1290,27 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             "nesse tipo de teste — ver nota técnica no código se precisar desativar essa correção)."
         )
 
-    # --- Ângulo do quadril (tronco/L5 vs coxa) ---
+    # --- Movimento relativo tronco-coxa (L5 vs Coxa) ---
     st.divider()
-    st.markdown("#### 🦴 Ângulo do quadril (tronco vs coxa)")
-    st.caption("Mesma lógica do joelho, agora usando L5 (tronco) e Coxa — flexão/extensão de quadril.")
+    st.markdown("#### 🦴 Movimento relativo tronco–coxa")
+    st.caption(
+        "Ângulo relativo entre L5 (tronco) e coxa — não é um ângulo anatômico completo de quadril (exigiria um "
+        "sistema pélvico completo, que não temos com um único marcador de L5)."
+    )
     if angle_hip_phone_sagital is None and angle_hip_kinem_sagital is None:
-        st.info("Selecione ACC + GYR de L5 e Coxa (celular) e/ou confirme as colunas do Kinem para calcular o ângulo do quadril.")
+        st.info("Selecione ACC + GYR de L5 e Coxa (celular) e/ou confirme as colunas do Kinem para calcular esse movimento relativo.")
     else:
-        st.markdown("**Sagital — flexão (↑) / extensão (↓)**")
+        st.markdown("**Sagital — extensão (↑) / flexão (↓)**")
         fig_hip_sag = go.Figure()
         add_phase_shading(fig_hip_sag)
-        add_angle_trace(fig_hip_sag, angle_hip_kinem_sagital, "teal", "Kinem — quadril sagital")
-        add_angle_trace(fig_hip_sag, angle_hip_phone_sagital, "crimson", "Celular — quadril sagital")
+        add_angle_trace(fig_hip_sag, angle_hip_kinem_sagital, "teal", "Kinem — tronco-coxa sagital")
+        add_angle_trace(fig_hip_sag, angle_hip_phone_sagital, "crimson", "Celular — tronco-coxa sagital")
         add_l5_overlay(fig_hip_sag)
         add_phase_markers(fig_hip_sag, angle_hip_kinem_sagital)
         fig_hip_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
         fig_hip_sag.update_layout(
             xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-            yaxis_title="Ângulo (°)  —  ↑ flexão · ↓ extensão", height=340, template="plotly_white", hovermode="x unified",
+            yaxis_title="Ângulo (°)  —  ↑ extensão · ↓ flexão", height=340, template="plotly_white", hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
         )
         st.plotly_chart(fig_hip_sag, use_container_width=True)
@@ -1334,15 +1337,15 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         fig_trunk_lat.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
         fig_trunk_lat.update_layout(
             xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
-            yaxis_title="Ângulo (°)  —  → direita (ipsilateral) · ← esquerda (contralateral)", height=340, template="plotly_white", hovermode="x unified",
+            yaxis_title="Ângulo (°)  —  ↑ esquerda/contralateral · ↓ direita/ipsilateral", height=340, template="plotly_white", hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
         )
         st.plotly_chart(fig_trunk_lat, use_container_width=True)
         st.caption(
             "⚠️ Convenção assumida (não verificada de forma independente): positivo = tronco desviando pro lado "
-            "direito (ipsilateral à perna que flexiona, já que o teste é feito com a perna direita). Se não bater "
-            "com o que você observou na gravação, os dois sinais (Kinem e celular) estão consistentes entre si, "
-            "só o lado pode estar trocado."
+            "esquerdo (contralateral); negativo = lado direito (ipsilateral à perna que flexiona, já que o teste "
+            "é feito com a perna direita). Se não bater com o que você observou na gravação, os dois sinais "
+            "(Kinem e celular) estão consistentes entre si, só o lado pode estar trocado."
         )
         st.caption(
             "ℹ️ Padrão geral esperado: durante a descida, o L5 costuma se deslocar lateralmente na direção "
@@ -1446,9 +1449,9 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                 render_overlay_chart("Joelho — Frontal", angle_kinem_frontal, angle_phone_frontal, "green", "darkorange", yaxis_title="Ângulo (°) — ↑ varo · ↓ valgo")
             oc3, oc4 = st.columns(2)
             with oc3:
-                render_overlay_chart("Quadril — Sagital", angle_hip_kinem_sagital, angle_hip_phone_sagital, "teal", "crimson", yaxis_title="Ângulo (°) — ↑ flexão · ↓ extensão")
+                render_overlay_chart("Tronco–Coxa — Sagital", angle_hip_kinem_sagital, angle_hip_phone_sagital, "teal", "crimson", yaxis_title="Ângulo (°) — ↑ extensão · ↓ flexão")
             with oc4:
-                render_overlay_chart("Tronco — Lateral", trunk_lean_kinem_frontal, trunk_lean_phone_frontal, "darkcyan", "deeppink", yaxis_title="Ângulo (°) — → direita (ipsi) · ← esquerda (contra)")
+                render_overlay_chart("Tronco — Lateral", trunk_lean_kinem_frontal, trunk_lean_phone_frontal, "darkcyan", "deeppink", yaxis_title="Ângulo (°) — ↑ esquerda/contra · ↓ direita/ipsi")
             oc5, oc6 = st.columns(2)
             with oc5:
                 render_overlay_chart("Vel. Angular — Joelho Sagital", vel_kinem_sagital, vel_phone_sagital, "blue", "red", yaxis_title="Velocidade (°/s) — ↑ flexão · ↓ extensão")
@@ -1458,7 +1461,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
             with oc7:
                 render_overlay_chart_single("L5 — Deslocamento vertical", l5_vertical, "black", yaxis_title="Posição vertical (m)")
             with oc8:
-                render_overlay_chart_single("L5 — Deslocamento lateral", l5_lateral, "purple", yaxis_title="Posição (m) — → direita (ipsi) · ← esquerda (contra)")
+                render_overlay_chart_single("L5 — Deslocamento lateral", l5_lateral, "purple", yaxis_title="Posição lateral / ML (m)")
             oc9, oc10 = st.columns(2)
             with oc9:
                 render_overlay_chart("Tronco — Acel. Lateral (estabilidade)", acc_ml_kinem_trunk, acc_ml_phone_trunk, "black", "purple", yaxis_title="Aceleração (m/s²)")

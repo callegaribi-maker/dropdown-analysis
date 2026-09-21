@@ -1367,6 +1367,13 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         "Ângulo relativo entre L5 (tronco) e coxa — não é um ângulo anatômico completo de quadril (exigiria um "
         "sistema pélvico completo, que não temos com um único marcador de L5)."
     )
+    corte_visual_tronco = st.number_input(
+        "👁️ Mostrar gráficos da coluna a partir de (s) — só visual, não afeta cálculo nenhum",
+        min_value=float(view_start), max_value=float(view_end), value=float(view_start), step=0.5,
+        key="corte_visual_tronco",
+        help="Ajuste pra 'cortar' o início da visualização (ex.: o platô de calibração) e ver os ciclos de teste "
+             "com mais zoom nos gráficos do tronco/coluna abaixo. Não muda nenhum cálculo, só o que aparece.",
+    )
     if angle_hip_phone_sagital is None and angle_hip_kinem_sagital is None:
         st.info("Selecione ACC + GYR de L5 e Coxa (celular) e/ou confirme as colunas do Kinem para calcular esse movimento relativo.")
     else:
@@ -1379,7 +1386,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         add_phase_markers(fig_hip_sag, angle_hip_kinem_sagital)
         fig_hip_sag.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
         fig_hip_sag.update_layout(
-            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[corte_visual_tronco, view_end]),
             yaxis_title="Ângulo (°)  —  ↑ extensão · ↓ flexão", height=340, template="plotly_white", hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
         )
@@ -1406,7 +1413,7 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         fig_trunk_lat.add_hline(y=0, line_dash="dot", line_color="lightgray")
         fig_trunk_lat.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="pico flexão")
         fig_trunk_lat.update_layout(
-            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[view_start, view_end]),
+            xaxis=dict(title="Tempo (s)  —  0 = pico de flexão do joelho", range=[corte_visual_tronco, view_end]),
             yaxis_title="Ângulo (°)  —  ↑ esquerda/contralateral · ↓ direita/ipsilateral", height=340, template="plotly_white", hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0), margin=dict(t=30, b=40),
         )

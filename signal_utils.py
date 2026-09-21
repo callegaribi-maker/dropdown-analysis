@@ -1830,25 +1830,62 @@ def trunk_thigh_fused_angles(l5_acc: np.ndarray, l5_gyr: np.ndarray,
     }
 
 
+def compute_duration_near_peak(series: np.ndarray | None, x_axis: np.ndarray,
+                               t_start: float, t_end: float, frac: float = 0.95) -> float | None:
+    """
+    Tempo (s) em que 'series' permanece acima de frac×pico dentro da
+    janela — usado pra "duração da posição inferior" (quanto tempo o
+    ângulo fica perto do pico de flexão, não só o instante exato do pico).
+    """
+    if series is None:
+        return None
+    n = min(len(series), len(x_axis))
+    x = x_axis[:n]
+    mask = (x >= t_start) & (x <= t_end)
+    y = series[:n][mask]
+    x_w = x[mask]
+    valid = ~np.isnan(y)
+    if np.sum(valid) < 2:
+        return None
+    pico = np.max(y[valid])
+    limiar = frac * pico
+    acima = y >= limiar
+    acima[~valid] = False
+    if not np.any(acima):
+        return 0.0
+    idx = np.where(acima)[0]
+    return float(x_w[idx[-1]] - x_w[idx[0]])
+
+
 def compute_cv_across_trials(valores: list) -> dict:
     """
     Coeficiente de variação (%) e estatísticas entre repetições, pra uma
     lista de valores (um por trial) de uma mesma métrica — mede
     consistência entre ciclos.
     Retorna dict: media, desvio_padrao, cv_pct, diferenca_primeira_ultima,
-    pior_valor (maior em módulo) — ou tudo None se não houver dados válidos.
+    pior_valor (maior em módulo), minimo, maximo, tendencia_linear
+    (inclinação da reta ajustada por trial, unidade/trial — ou tudo None
+    se não houver dados válidos).
     """
     vals = [v for v in valores if v is not None and np.isfinite(v)]
     if len(vals) < 2:
         return {"media": None, "desvio_padrao": None, "cv_pct": None,
-                "diferenca_primeira_ultima": None, "pior_valor": None}
+                "diferenca_primeira_ultima": None, "pior_valor": None,
+                "minimo": None, "maximo": None, "tendencia_linear": None}
     media = float(np.mean(vals))
     dp = float(np.std(vals, ddof=1))
     cv = float(dp / media * 100) if media != 0 else None
     diff = float(vals[-1] - vals[0])
     pior = float(max(vals, key=abs))
+    tendencia = None
+    if len(vals) >= 3:
+        indices = np.arange(len(vals))
+        coef = np.polyfit(indices, vals, 1)
+        tendencia = float(coef[0])
     return {"media": media, "desvio_padrao": dp, "cv_pct": cv,
-            "diferenca_primeira_ultima": diff, "pior_valor": pior}
+            "diferenca_primeira_ultima": diff, "pior_valor": pior,
+            "minimo": float(np.min(vals)), "maximo": float(np.max(vals)),
+            "tendencia_linear": tendencia}
 
 
 def compute_mean(series: np.ndarray | None, x_axis: np.ndarray,

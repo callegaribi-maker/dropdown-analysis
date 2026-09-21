@@ -30,6 +30,8 @@ from signal_utils import (
     compute_mean,
     resultant_magnitude,
     compute_auc_abs,
+    compute_duration_near_peak,
+    compute_jerk_rms,
     compute_jerk_normalized,
     compute_stabilization_time,
     compute_relative_coordination,
@@ -717,9 +719,11 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
     pos_l5_cols = position_xyz_cols(kdf_raw, "l5", "l 5") if not kdf_raw.empty else {}
     l5_vertical = None
     l5_lateral = None
+    l5_ap = None
     if all(k in pos_l5_cols for k in "XYZ"):
         l5_vertical = try_numeric(kdf_raw[pos_l5_cols["Z"]]).values.astype(float)
         l5_lateral = try_numeric(kdf_raw[pos_l5_cols["X"]]).values.astype(float)
+        l5_ap = try_numeric(kdf_raw[pos_l5_cols["Y"]]).values.astype(float)
 
     # ── Ignora um trecho inicial diferente (ex.: calibração, com o L5 num
     # nível diferente do repouso normal) antes de procurar os trials —
@@ -1543,158 +1547,369 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         if not trials:
             st.info("Não consegui detectar repetições — não dá pra montar a tabela de análise.")
         else:
-            analise_rows = []
+            # ────────────────────────────────────────────────────────────
+            # Funções auxiliares locais (fecham sobre x_axis)
+            # ────────────────────────────────────────────────────────────
+            def _mask(t0, t1, n):
+                return (x_axis[:n] >= t0) & (x_axis[:n] <= t1)
+
+            def _peak_pos(series, t0, t1):
+                if series is None:
+                    return None
+                n = min(len(series), len(x_axis))
+                seg = series[:n][_mask(t0, t1, n)]
+                seg = seg[~np.isnan(seg)]
+                return float(np.max(seg)) if len(seg) else None
+
+            def _peak_neg(series, t0, t1):
+                if series is None:
+                    return None
+                n = min(len(series), len(x_axis))
+                seg = series[:n][_mask(t0, t1, n)]
+                seg = seg[~np.isnan(seg)]
+                return float(np.min(seg)) if len(seg) else None
+
+            def _val_at(series, t):
+                if series is None or t is None:
+                    return None
+                n = min(len(series), len(x_axis))
+                idx = int(np.argmin(np.abs(x_axis[:n] - t)))
+                v = series[idx]
+                return float(v) if np.isfinite(v) else None
+
+            def _auc_from_baseline(series, t0, t1, baseline):
+                if series is None or baseline is None:
+                    return None
+                return compute_auc_abs(series - baseline, x_axis, t0, t1)
+
+            def _auc_valgo(series, t0, t1):
+                if series is None:
+                    return None
+                n = min(len(series), len(x_axis))
+                mask = _mask(t0, t1, n)
+                x_w = x_axis[:n][mask]
+                y = series[:n][mask]
+                valid = ~np.isnan(y)
+                if np.sum(valid) < 2:
+                    return None
+                y_clip = np.where(y < 0, -y, 0.0)
+                return float(np.trapezoid(y_clip[valid], x_w[valid]))
+
+            def _jerk_norm_simples(jerk_rms, duracao, amplitude):
+                if jerk_rms is None or duracao is None or not amplitude:
+                    return None
+                return float(jerk_rms * duracao ** 3 / amplitude)
+
+            def _tempo_pico(series, t0, t1, signed=False):
+                t, v = time_to_peak(series, x_axis, t0, t1, signed=signed)
+                return t, v
+
+            def _estabilizacao(series, i, s_start, s_end):
+                if i >= len(valid_trials_summary):
+                    return None
+                (_, _), prox_phases = valid_trials_summary[i]
+                basal_ini, basal_fim = prox_phases["preparacao"]
+                return compute_stabilization_time(series, x_axis, basal_ini, basal_fim, s_start, s_end + 3.0, n_sd=3.0, sustain_seconds=0.5)
+
+            def _monta_bloco(titulo, linhas, unidades=None):
+                """Monta um DataFrame com linhas por trial + resumo (média, DP, mín, máx, CV%, 1ª−última, tendência)."""
+                df = pd.DataFrame(linhas)
+                resumo_linhas = {"Trial": ["Média", "Desvio padrão", "Mínimo", "Máximo", "CV (%)", "1ª − última", "Tendência/trial"]}
+                for col in df.columns:
+                    if col == "Trial":
+                        continue
+                    cv_info = compute_cv_across_trials(df[col].tolist())
+                    resumo_linhas.setdefault(col, [])
+                    resumo_linhas[col] = [
+                        cv_info["media"], cv_info["desvio_padrao"], cv_info["minimo"], cv_info["maximo"],
+                        cv_info["cv_pct"], cv_info["diferenca_primeira_ultima"], cv_info["tendencia_linear"],
+                    ]
+                df_resumo = pd.DataFrame(resumo_linhas)
+                df_full = pd.concat([df, df_resumo], ignore_index=True)
+                with st.container(border=True):
+                    st.markdown(f"**{titulo}**")
+                    st.dataframe(df_full.round(3).style.format(na_rep="—", precision=3), hide_index=True, use_container_width=True)
+                return df_full
+
+            linhas_tempos, linhas_joelho_sag, linhas_joelho_front = [], [], []
+            linhas_tronco, linhas_l5, linhas_coord = [], [], []
+
             for i, (t_start, t_end) in enumerate(trials, start=1):
                 phases = trial_phases[i - 1] if i - 1 < len(trial_phases) else None
-                d_start, d_end = phases["descida"] if phases else (t_start, t_start)
-                s_start, s_end = phases["subida"] if phases else (t_end, t_end)
-
-                t_flex_k, v_flex_k = time_to_peak(angle_kinem_sagital, x_axis, t_start, t_end)
-                t_flex_p, v_flex_p = time_to_peak(angle_phone_sagital, x_axis, t_start, t_end)
-                t_valgo_k, v_valgo_k = time_to_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True)
-                t_valgo_p, v_valgo_p = time_to_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True)
-                diff_t_k = (t_valgo_k - t_flex_k) if (t_valgo_k is not None and t_flex_k is not None) else None
-                diff_t_p = (t_valgo_p - t_flex_p) if (t_valgo_p is not None and t_flex_p is not None) else None
-                razao_k = (abs(v_valgo_k) / v_flex_k) if (v_valgo_k is not None and v_flex_k not in (None, 0)) else None
-                razao_p = (abs(v_valgo_p) / v_flex_p) if (v_valgo_p is not None and v_flex_p not in (None, 0)) else None
-
-                rms_l5_lateral = compute_rms(l5_lateral, x_axis, t_start, t_end)
-                path_l5_lateral = compute_path_length(l5_lateral, x_axis, t_start, t_end)
-                rom_l5_lateral = compute_rom(l5_lateral, x_axis, t_start, t_end)
-                razao_path_rom = (path_l5_lateral / rom_l5_lateral) if (path_l5_lateral is not None and rom_l5_lateral not in (None, 0)) else None
-
-                jerk_rms_k = compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end)
-                jerk_rms_p = compute_rms(jerk_phone_sagital, x_axis, t_start, t_end)
-
-                rms_accel_trunk_k = compute_rms(acc_ml_kinem_trunk, x_axis, d_start, s_end)
-                rms_accel_trunk_p = compute_rms(acc_ml_phone_trunk, x_axis, d_start, s_end)
-                razao_accel_trunk = (rms_accel_trunk_p / rms_accel_trunk_k) if (rms_accel_trunk_p is not None and rms_accel_trunk_k not in (None, 0)) else None
-
-                rms_angvel_trunk_k = compute_rms(trunk_angvel_kinem, x_axis, d_start, s_end)
-                rms_angvel_trunk_p = compute_rms(trunk_angvel_phone, x_axis, d_start, s_end)
-                razao_angvel_trunk = (rms_angvel_trunk_p / rms_angvel_trunk_k) if (rms_angvel_trunk_p is not None and rms_angvel_trunk_k not in (None, 0)) else None
-
-                prep_dur = (phases["preparacao"][1] - phases["preparacao"][0]) if phases else None
-                desc_dur = (phases["descida"][1] - phases["descida"][0]) if phases else None
-                sub_dur = (phases["subida"][1] - phases["subida"][0]) if phases else None
-
-                jerk_norm_k = compute_jerk_normalized(vel_kinem_sagital, x_axis, t_start, t_end)
-                jerk_norm_p = compute_jerk_normalized(vel_phone_sagital, x_axis, t_start, t_end)
-
-                # Tempo de estabilização do joelho sagital — usa a
-                # preparação do trial SEGUINTE como referência de repouso
-                # (mesmo esquema já usado na estabilidade de tronco).
-                tempo_estab_joelho_k, tempo_estab_joelho_p = None, None
-                if i < len(valid_trials_summary):
-                    (_, _), prox_phases = valid_trials_summary[i]
-                    basal_ini_j, basal_fim_j = prox_phases["preparacao"]
-                    tempo_estab_joelho_k = compute_stabilization_time(
-                        angle_kinem_sagital, x_axis, basal_ini_j, basal_fim_j, s_start, s_end + 3.0, n_sd=3.0, sustain_seconds=0.5,
-                    )
-                    tempo_estab_joelho_p = compute_stabilization_time(
-                        angle_phone_sagital, x_axis, basal_ini_j, basal_fim_j, s_start, s_end + 3.0, n_sd=3.0, sustain_seconds=0.5,
-                    )
-
-                analise_rows.append({
-                    "Trial": str(i),
-                    "Nota clínica": nota_clinica if nota_clinica else "—",
-                    "Duração Preparação (s)": prep_dur,
-                    "Duração Descida (s)": desc_dur,
-                    "Duração Posição Inferior (s)": None,  # não segmentado como fase isolada nesse app (ver nota)
-                    "Duração Subida (s)": sub_dur,
-                    "ADM Joelho Sagital — Kinem": compute_rom(angle_kinem_sagital, x_axis, t_start, t_end),
-                    "ADM Joelho Sagital — Celular": compute_rom(angle_phone_sagital, x_axis, t_start, t_end),
-                    "Pico Flexão Joelho — Kinem": compute_peak(angle_kinem_sagital, x_axis, t_start, t_end),
-                    "Pico Flexão Joelho — Celular": compute_peak(angle_phone_sagital, x_axis, t_start, t_end),
-                    "Vel. Pico Flexão (°/s) — Kinem": compute_peak(vel_kinem_sagital, x_axis, t_start, t_end),
-                    "Vel. Pico Flexão (°/s) — Celular": compute_peak(vel_phone_sagital, x_axis, t_start, t_end),
-                    "ADM Joelho Frontal — Kinem": compute_rom(angle_kinem_frontal, x_axis, t_start, t_end),
-                    "ADM Joelho Frontal — Celular": compute_rom(angle_phone_frontal, x_axis, t_start, t_end),
-                    "Pico Valgo Joelho — Kinem": compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True),
-                    "Pico Valgo Joelho — Celular": compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True),
-                    "Vel. Pico Valgo (°/s) — Kinem": compute_peak(vel_kinem_frontal, x_axis, t_start, t_end, signed=True),
-                    "Vel. Pico Valgo (°/s) — Celular": compute_peak(vel_phone_frontal, x_axis, t_start, t_end, signed=True),
-                    "Pico Valgo (Descida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, d_start, d_end, signed=True),
-                    "Pico Valgo (Descida) — Celular": compute_peak(angle_phone_frontal, x_axis, d_start, d_end, signed=True),
-                    "Pico Valgo (Subida) — Kinem": compute_peak(angle_kinem_frontal, x_axis, s_start, s_end, signed=True),
-                    "Pico Valgo (Subida) — Celular": compute_peak(angle_phone_frontal, x_axis, s_start, s_end, signed=True),
-                    "Tempo até Pico Valgo − Flexão (s) — Kinem": diff_t_k,
-                    "Tempo até Pico Valgo − Flexão (s) — Celular": diff_t_p,
-                    "Razão |Valgo|/Flexão — Kinem": razao_k,
-                    "Razão |Valgo|/Flexão — Celular": razao_p,
-                    "Jerk Normalizado Joelho Sagital — Kinem": jerk_norm_k,
-                    "Jerk Normalizado Joelho Sagital — Celular": jerk_norm_p,
-                    "Tempo Estabilização Joelho Sagital (s) — Kinem": tempo_estab_joelho_k,
-                    "Tempo Estabilização Joelho Sagital (s) — Celular": tempo_estab_joelho_p,
-                    "ADM Coxa Sagital — Kinem": compute_rom(coxa_lean_kinem_sagital, x_axis, t_start, t_end),
-                    "ADM Coxa Sagital — Celular": compute_rom(coxa_lean_phone_sagital, x_axis, t_start, t_end),
-                    "ADM Coxa Frontal — Kinem": compute_rom(coxa_lean_kinem_frontal, x_axis, t_start, t_end),
-                    "ADM Coxa Frontal — Celular": compute_rom(coxa_lean_phone_frontal, x_axis, t_start, t_end),
-                    "ROM Tronco-Coxa Sagital (proxy) — Kinem": compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end),
-                    "ROM Tronco-Coxa Sagital (proxy) — Celular": compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end),
-                    "ROM Tronco-Coxa Frontal (proxy) — Kinem": compute_rom(angle_hip_kinem_frontal, x_axis, t_start, t_end),
-                    "ROM Tronco-Coxa Frontal (proxy) — Celular": compute_rom(angle_hip_phone_frontal, x_axis, t_start, t_end),
-                    "Estabilidade Tronco — RMS lateral L5 (m)": rms_l5_lateral,
-                    "Estabilidade Tronco — Razão caminho/deslocamento": razao_path_rom,
-                    "Estabilidade Tronco — RMS Acel. Lateral (Kinem)": rms_accel_trunk_k,
-                    "Estabilidade Tronco — RMS Acel. Lateral (Celular)": rms_accel_trunk_p,
-                    "Estabilidade Tronco — Razão Acel. Celular/Kinem": razao_accel_trunk,
-                    "Estabilidade Tronco — RMS Vel.Ang. (Kinem)": rms_angvel_trunk_k,
-                    "Estabilidade Tronco — RMS Vel.Ang. (Celular)": rms_angvel_trunk_p,
-                    "Estabilidade Tronco — Razão Vel.Ang. Celular/Kinem": razao_angvel_trunk,
-                    "Suavidade (Jerk RMS) Joelho Sagital — Kinem": jerk_rms_k,
-                    "Suavidade (Jerk RMS) Joelho Sagital — Celular": jerk_rms_p,
-                })
-            analise_df = pd.DataFrame(analise_rows)
-
-            resultante_analise = {"Trial": "Resultante (média)", "Nota clínica": nota_clinica if nota_clinica else "—"}
-            desvio_analise = {"Trial": "Desvio padrão (variabilidade)", "Nota clínica": "—"}
-            for col in analise_df.columns:
-                if col in ("Trial", "Nota clínica"):
+                if not phases:
                     continue
-                resultante_analise[col] = analise_df[col].mean()
-                desvio_analise[col] = analise_df[col].std()
-            analise_df_full = pd.concat(
-                [analise_df, pd.DataFrame([resultante_analise]), pd.DataFrame([desvio_analise])],
-                ignore_index=True,
-            )
+                prep_start, prep_end = phases["preparacao"]
+                d_start, d_end = phases["descida"]
+                s_start, s_end = phases["subida"]
 
-            with st.container(border=True):
-                def fmt_for_col(col):
-                    if "Razão" in col:
-                        return "{:.2f}×"
-                    if "Duração" in col:
-                        return "{:.2f}s"
-                    if "Tempo até" in col:
-                        return "{:+.2f}s"
-                    if "Jerk" in col:
-                        return "{:.0f}°/s³"
-                    if "RMS Acel" in col:
-                        return "{:.3f}m/s²"
-                    if "RMS Vel" in col or "Vel." in col:
-                        return "{:.0f}°/s"
-                    if "RMS lateral" in col:
-                        return "{:.4f}m"
-                    return "{:.1f}°"
-                fmt_cols = {c: fmt_for_col(c) for c in analise_df_full.columns if c not in ("Trial", "Nota clínica")}
-                st.dataframe(analise_df_full.style.format(fmt_cols, na_rep="—"), hide_index=True, use_container_width=True)
+                # ══════════════ 1. TEMPOS DAS FASES ══════════════
+                t_pico_joelho_k, pico_joelho_k = _tempo_pico(angle_kinem_sagital, t_start, t_end)
+                dur_pos_inf_k = compute_duration_near_peak(angle_kinem_sagital, x_axis, t_start, t_end, frac=0.95)
+                tempo_estab_k = _estabilizacao(angle_kinem_sagital, i, s_start, s_end)
+                tempo_estab_p = _estabilizacao(angle_phone_sagital, i, s_start, s_end)
+                linhas_tempos.append({
+                    "Trial": str(i),
+                    "Preparação (s)": prep_end - prep_start,
+                    "Descida (s)": d_end - d_start,
+                    "Posição Inferior (s)": dur_pos_inf_k,
+                    "Subida (s)": s_end - s_start,
+                    "Total (s)": s_end - d_start,
+                    "Estabilização — Kinem (s)": tempo_estab_k,
+                    "Estabilização — Celular (s)": tempo_estab_p,
+                })
+
+                # ══════════════ 2. JOELHO SAGITAL ══════════════
+                ang_ini_k = compute_mean(angle_kinem_sagital, x_axis, max(t_start, d_start - 0.5), d_start)
+                ang_ini_p = compute_mean(angle_phone_sagital, x_axis, max(t_start, d_start - 0.5), d_start)
+                ang_fim_k = compute_mean(angle_kinem_sagital, x_axis, s_end, s_end + 0.5)
+                ang_fim_p = compute_mean(angle_phone_sagital, x_axis, s_end, s_end + 0.5)
+                pico_flex_k = compute_peak(angle_kinem_sagital, x_axis, t_start, t_end)
+                pico_flex_p = compute_peak(angle_phone_sagital, x_axis, t_start, t_end)
+                t_pico_k, _ = _tempo_pico(angle_kinem_sagital, t_start, t_end)
+                t_pico_p, _ = _tempo_pico(angle_phone_sagital, t_start, t_end)
+                vel_pico_flex_k = _peak_pos(vel_kinem_sagital, d_start, d_end)
+                vel_pico_ext_k = _peak_neg(vel_kinem_sagital, s_start, s_end)
+                vel_pico_flex_p = _peak_pos(vel_phone_sagital, d_start, d_end)
+                vel_pico_ext_p = _peak_neg(vel_phone_sagital, s_start, s_end)
+                jerk_rms_sag_k = compute_rms(jerk_kinem_sagital, x_axis, t_start, t_end)
+                jerk_rms_sag_p = compute_rms(jerk_phone_sagital, x_axis, t_start, t_end)
+                adm_sag_k = compute_rom(angle_kinem_sagital, x_axis, t_start, t_end)
+                adm_sag_p = compute_rom(angle_phone_sagital, x_axis, t_start, t_end)
+                linhas_joelho_sag.append({
+                    "Trial": str(i),
+                    "Ângulo Inicial — Kinem": ang_ini_k, "Ângulo Inicial — Celular": ang_ini_p,
+                    "Pico Flexão — Kinem": pico_flex_k, "Pico Flexão — Celular": pico_flex_p,
+                    "Ângulo Final — Kinem": ang_fim_k, "Ângulo Final — Celular": ang_fim_p,
+                    "ADM Sagital — Kinem": adm_sag_k, "ADM Sagital — Celular": adm_sag_p,
+                    "Flexão na Descida — Kinem": (pico_flex_k - ang_ini_k) if None not in (pico_flex_k, ang_ini_k) else None,
+                    "Flexão na Descida — Celular": (pico_flex_p - ang_ini_p) if None not in (pico_flex_p, ang_ini_p) else None,
+                    "Extensão na Subida — Kinem": (pico_flex_k - ang_fim_k) if None not in (pico_flex_k, ang_fim_k) else None,
+                    "Extensão na Subida — Celular": (pico_flex_p - ang_fim_p) if None not in (pico_flex_p, ang_fim_p) else None,
+                    "Tempo até Pico (s) — Kinem": (t_pico_k - t_start) if t_pico_k is not None else None,
+                    "Tempo até Pico (s) — Celular": (t_pico_p - t_start) if t_pico_p is not None else None,
+                    "Pico Vel. Flexão (°/s) — Kinem": vel_pico_flex_k, "Pico Vel. Flexão (°/s) — Celular": vel_pico_flex_p,
+                    "Pico Vel. Extensão (°/s) — Kinem": vel_pico_ext_k, "Pico Vel. Extensão (°/s) — Celular": vel_pico_ext_p,
+                    "Vel. Média Abs. (°/s) — Kinem": compute_mean(np.abs(vel_kinem_sagital) if vel_kinem_sagital is not None else None, x_axis, t_start, t_end),
+                    "Vel. Média Abs. (°/s) — Celular": compute_mean(np.abs(vel_phone_sagital) if vel_phone_sagital is not None else None, x_axis, t_start, t_end),
+                    "Vel. RMS (°/s) — Kinem": compute_rms(vel_kinem_sagital, x_axis, t_start, t_end),
+                    "Vel. RMS (°/s) — Celular": compute_rms(vel_phone_sagital, x_axis, t_start, t_end),
+                    "AUC Angular — Kinem": _auc_from_baseline(angle_kinem_sagital, t_start, t_end, ang_ini_k),
+                    "AUC Angular — Celular": _auc_from_baseline(angle_phone_sagital, t_start, t_end, ang_ini_p),
+                    "Jerk RMS — Kinem": jerk_rms_sag_k, "Jerk RMS — Celular": jerk_rms_sag_p,
+                    "Jerk Normalizado — Kinem": _jerk_norm_simples(jerk_rms_sag_k, t_end - t_start, adm_sag_k),
+                    "Jerk Normalizado — Celular": _jerk_norm_simples(jerk_rms_sag_p, t_end - t_start, adm_sag_p),
+                    "Assimetria Descida/Subida — Kinem": (abs(vel_pico_flex_k) / abs(vel_pico_ext_k)) if (vel_pico_flex_k and vel_pico_ext_k) else None,
+                    "Assimetria Descida/Subida — Celular": (abs(vel_pico_flex_p) / abs(vel_pico_ext_p)) if (vel_pico_flex_p and vel_pico_ext_p) else None,
+                })
+
+                # ══════════════ 3. JOELHO FRONTAL (VALGO/VARO) ══════════════
+                front_ini_k = compute_mean(angle_kinem_frontal, x_axis, max(t_start, d_start - 0.5), d_start)
+                front_ini_p = compute_mean(angle_phone_frontal, x_axis, max(t_start, d_start - 0.5), d_start)
+                pico_valgo_k = _peak_neg(angle_kinem_frontal, t_start, t_end)
+                pico_valgo_p = _peak_neg(angle_phone_frontal, t_start, t_end)
+                pico_varo_k = _peak_pos(angle_kinem_frontal, t_start, t_end)
+                pico_varo_p = _peak_pos(angle_phone_frontal, t_start, t_end)
+                t_valgo_k, v_valgo_k = _tempo_pico(angle_kinem_frontal, t_start, t_end, signed=True)
+                t_valgo_p, v_valgo_p = _tempo_pico(angle_phone_frontal, t_start, t_end, signed=True)
+                adm_front_k = compute_rom(angle_kinem_frontal, x_axis, t_start, t_end)
+                adm_front_p = compute_rom(angle_phone_frontal, x_axis, t_start, t_end)
+                linhas_joelho_front.append({
+                    "Trial": str(i),
+                    "Ângulo Inicial — Kinem": front_ini_k, "Ângulo Inicial — Celular": front_ini_p,
+                    "ADM Frontal — Kinem": adm_front_k, "ADM Frontal — Celular": adm_front_p,
+                    "Pico Valgo — Kinem": pico_valgo_k, "Pico Valgo — Celular": pico_valgo_p,
+                    "Pico Absoluto Valgo — Kinem": abs(pico_valgo_k) if pico_valgo_k is not None else None,
+                    "Pico Absoluto Valgo — Celular": abs(pico_valgo_p) if pico_valgo_p is not None else None,
+                    "Pico Varo — Kinem": pico_varo_k, "Pico Varo — Celular": pico_varo_p,
+                    "Pico Frontal Absoluto — Kinem": compute_peak(angle_kinem_frontal, x_axis, t_start, t_end, signed=True),
+                    "Pico Frontal Absoluto — Celular": compute_peak(angle_phone_frontal, x_axis, t_start, t_end, signed=True),
+                    "Valgo na Descida — Kinem": _peak_neg(angle_kinem_frontal, t_start, d_end), "Valgo na Descida — Celular": _peak_neg(angle_phone_frontal, t_start, d_end),
+                    "Valgo na Subida — Kinem": _peak_neg(angle_kinem_frontal, d_end, s_end), "Valgo na Subida — Celular": _peak_neg(angle_phone_frontal, d_end, s_end),
+                    "Valgo no Pico de Flexão — Kinem": _val_at(angle_kinem_frontal, t_pico_joelho_k), "Valgo no Pico de Flexão — Celular": _val_at(angle_phone_frontal, t_pico_joelho_k),
+                    "RMS Frontal — Kinem": compute_rms(angle_kinem_frontal, x_axis, t_start, t_end), "RMS Frontal — Celular": compute_rms(angle_phone_frontal, x_axis, t_start, t_end),
+                    "AUC do Valgo — Kinem": _auc_valgo(angle_kinem_frontal, t_start, t_end), "AUC do Valgo — Celular": _auc_valgo(angle_phone_frontal, t_start, t_end),
+                    "Vel. RMS Frontal (°/s) — Kinem": compute_rms(vel_kinem_frontal, x_axis, t_start, t_end), "Vel. RMS Frontal (°/s) — Celular": compute_rms(vel_phone_frontal, x_axis, t_start, t_end),
+                    "Vel. Entrada Valgo (°/s) — Kinem": _peak_neg(vel_kinem_frontal, t_start, t_end), "Vel. Entrada Valgo (°/s) — Celular": _peak_neg(vel_phone_frontal, t_start, t_end),
+                    "Vel. Retorno (°/s) — Kinem": _peak_pos(vel_kinem_frontal, t_valgo_k, t_end) if t_valgo_k else None,
+                    "Vel. Retorno (°/s) — Celular": _peak_pos(vel_phone_frontal, t_valgo_p, t_end) if t_valgo_p else None,
+                    "Instante Pico Valgo (s) — Kinem": (t_valgo_k - t_start) if t_valgo_k is not None else None,
+                    "Instante Pico Valgo (s) — Celular": (t_valgo_p - t_start) if t_valgo_p is not None else None,
+                    "Pico Valgo no Ciclo (%) — Kinem": (100 * (t_valgo_k - t_start) / (s_end - t_start)) if t_valgo_k is not None else None,
+                    "Pico Valgo no Ciclo (%) — Celular": (100 * (t_valgo_p - t_start) / (s_end - t_start)) if t_valgo_p is not None else None,
+                    "Dif. Temporal Valgo−Flexão (s) — Kinem": (t_valgo_k - t_pico_joelho_k) if (t_valgo_k is not None and t_pico_joelho_k is not None) else None,
+                    "Dif. Temporal Valgo−Flexão (s) — Celular": (t_valgo_p - t_pico_joelho_k) if (t_valgo_p is not None and t_pico_joelho_k is not None) else None,
+                    "Razão Valgo/Flexão — Kinem": (abs(pico_valgo_k) / pico_flex_k) if (pico_valgo_k is not None and pico_flex_k) else None,
+                    "Razão Valgo/Flexão — Celular": (abs(pico_valgo_p) / pico_flex_p) if (pico_valgo_p is not None and pico_flex_p) else None,
+                    "Razão Frontal/Sagital — Kinem": (adm_front_k / adm_sag_k) if (adm_front_k is not None and adm_sag_k) else None,
+                    "Razão Frontal/Sagital — Celular": (adm_front_p / adm_sag_p) if (adm_front_p is not None and adm_sag_p) else None,
+                })
+
+                # ══════════════ 4. TRONCO ANGULAR (sagital + lateral) ══════════════
+                tr_sag_ini_k = compute_mean(trunk_lean_kinem_sagital, x_axis, max(t_start, d_start - 0.5), d_start)
+                tr_sag_ini_p = compute_mean(trunk_lean_phone_sagital, x_axis, max(t_start, d_start - 0.5), d_start)
+                tr_lat_ini_k = compute_mean(trunk_lean_kinem_frontal, x_axis, max(t_start, d_start - 0.5), d_start)
+                tr_lat_ini_p = compute_mean(trunk_lean_phone_frontal, x_axis, max(t_start, d_start - 0.5), d_start)
+                rom_tr_sag_k = compute_rom(trunk_lean_kinem_sagital, x_axis, t_start, t_end)
+                rom_tr_sag_p = compute_rom(trunk_lean_phone_sagital, x_axis, t_start, t_end)
+                rom_tr_lat_k = compute_rom(trunk_lean_kinem_frontal, x_axis, t_start, t_end)
+                rom_tr_lat_p = compute_rom(trunk_lean_phone_frontal, x_axis, t_start, t_end)
+                t_lat_k, v_lat_k = _tempo_pico(trunk_lean_kinem_frontal, t_start, t_end, signed=True)
+                t_lat_p, v_lat_p = _tempo_pico(trunk_lean_phone_frontal, t_start, t_end, signed=True)
+                jerk_tr_sag_k = compute_jerk_rms(trunk_lean_kinem_sagital, x_axis, t_start, t_end)
+                jerk_tr_sag_p = compute_jerk_rms(trunk_lean_phone_sagital, x_axis, t_start, t_end)
+                linhas_tronco.append({
+                    "Trial": str(i),
+                    "[Sagital] Ângulo Inicial — Kinem": tr_sag_ini_k, "[Sagital] Ângulo Inicial — Celular": tr_sag_ini_p,
+                    "[Sagital] Pico Flexão — Kinem": _peak_pos(trunk_lean_kinem_sagital, t_start, t_end), "[Sagital] Pico Flexão — Celular": _peak_pos(trunk_lean_phone_sagital, t_start, t_end),
+                    "[Sagital] Pico Extensão — Kinem": _peak_neg(trunk_lean_kinem_sagital, t_start, t_end), "[Sagital] Pico Extensão — Celular": _peak_neg(trunk_lean_phone_sagital, t_start, t_end),
+                    "[Sagital] ROM — Kinem": rom_tr_sag_k, "[Sagital] ROM — Celular": rom_tr_sag_p,
+                    "[Sagital] No Pico do Joelho — Kinem": _val_at(trunk_lean_kinem_sagital, t_pico_joelho_k), "[Sagital] No Pico do Joelho — Celular": _val_at(trunk_lean_phone_sagital, t_pico_joelho_k),
+                    "[Sagital] RMS — Kinem": compute_rms(trunk_lean_kinem_sagital, x_axis, t_start, t_end), "[Sagital] RMS — Celular": compute_rms(trunk_lean_phone_sagital, x_axis, t_start, t_end),
+                    "[Sagital] AUC — Kinem": _auc_from_baseline(trunk_lean_kinem_sagital, t_start, t_end, tr_sag_ini_k), "[Sagital] AUC — Celular": _auc_from_baseline(trunk_lean_phone_sagital, t_start, t_end, tr_sag_ini_p),
+                    "[Sagital] Vel. Ang. RMS (°/s) — Kinem": compute_rms(trunk_angvel_kinem_sagital_dot, x_axis, t_start, t_end), "[Sagital] Vel. Ang. RMS (°/s) — Celular": compute_rms(trunk_angvel_phone, x_axis, t_start, t_end),
+                    "[Sagital] Pico Vel. (°/s) — Kinem": compute_peak(trunk_angvel_kinem_sagital_dot, x_axis, t_start, t_end, signed=True), "[Sagital] Pico Vel. (°/s) — Celular": compute_peak(trunk_angvel_phone, x_axis, t_start, t_end, signed=True),
+                    "[Sagital] Jerk RMS — Kinem": jerk_tr_sag_k, "[Sagital] Jerk RMS — Celular": jerk_tr_sag_p,
+                    "[Sagital] Jerk Normalizado — Kinem": _jerk_norm_simples(jerk_tr_sag_k, t_end - t_start, rom_tr_sag_k), "[Sagital] Jerk Normalizado — Celular": _jerk_norm_simples(jerk_tr_sag_p, t_end - t_start, rom_tr_sag_p),
+                    "[Sagital] Estabilização (s) — Kinem": _estabilizacao(trunk_lean_kinem_sagital, i, s_start, s_end), "[Sagital] Estabilização (s) — Celular": _estabilizacao(trunk_lean_phone_sagital, i, s_start, s_end),
+                    "[Lateral] Inclinação Inicial — Kinem": tr_lat_ini_k, "[Lateral] Inclinação Inicial — Celular": tr_lat_ini_p,
+                    "[Lateral] Pico Ipsilateral (−) — Kinem": _peak_neg(trunk_lean_kinem_frontal, t_start, t_end), "[Lateral] Pico Ipsilateral (−) — Celular": _peak_neg(trunk_lean_phone_frontal, t_start, t_end),
+                    "[Lateral] Pico Contralateral (+) — Kinem": _peak_pos(trunk_lean_kinem_frontal, t_start, t_end), "[Lateral] Pico Contralateral (+) — Celular": _peak_pos(trunk_lean_phone_frontal, t_start, t_end),
+                    "[Lateral] ROM — Kinem": rom_tr_lat_k, "[Lateral] ROM — Celular": rom_tr_lat_p,
+                    "[Lateral] No Pico do Joelho — Kinem": _val_at(trunk_lean_kinem_frontal, t_pico_joelho_k), "[Lateral] No Pico do Joelho — Celular": _val_at(trunk_lean_phone_frontal, t_pico_joelho_k),
+                    "[Lateral] RMS — Kinem": compute_rms(trunk_lean_kinem_frontal, x_axis, t_start, t_end), "[Lateral] RMS — Celular": compute_rms(trunk_lean_phone_frontal, x_axis, t_start, t_end),
+                    "[Lateral] AUC — Kinem": _auc_from_baseline(trunk_lean_kinem_frontal, t_start, t_end, tr_lat_ini_k), "[Lateral] AUC — Celular": _auc_from_baseline(trunk_lean_phone_frontal, t_start, t_end, tr_lat_ini_p),
+                    "[Lateral] Vel. RMS (°/s) — Kinem": compute_rms(trunk_angvel_kinem_frontal_dot, x_axis, t_start, t_end), "[Lateral] Vel. RMS (°/s) — Celular": compute_rms(trunk_angvel_phone_ml, x_axis, t_start, t_end),
+                    "[Lateral] Pico Vel. (°/s) — Kinem": compute_peak(trunk_angvel_kinem_frontal_dot, x_axis, t_start, t_end, signed=True), "[Lateral] Pico Vel. (°/s) — Celular": compute_peak(trunk_angvel_phone_ml, x_axis, t_start, t_end, signed=True),
+                    "[Lateral] Instante Pico (s) — Kinem": (t_lat_k - t_start) if t_lat_k is not None else None, "[Lateral] Instante Pico (s) — Celular": (t_lat_p - t_start) if t_lat_p is not None else None,
+                    "[Lateral] Pico no Ciclo (%) — Kinem": (100 * (t_lat_k - t_start) / (s_end - t_start)) if t_lat_k is not None else None,
+                    "[Lateral] Pico no Ciclo (%) — Celular": (100 * (t_lat_p - t_start) / (s_end - t_start)) if t_lat_p is not None else None,
+                    "[Lateral] Tempo Lateral−Flexão (s) — Kinem": (t_lat_k - t_pico_joelho_k) if (t_lat_k is not None and t_pico_joelho_k is not None) else None,
+                    "[Lateral] Tempo Lateral−Flexão (s) — Celular": (t_lat_p - t_pico_joelho_k) if (t_lat_p is not None and t_pico_joelho_k is not None) else None,
+                })
+
+                # ══════════════ 5. L5 TRANSLACIONAL ══════════════
+                l5_ap_ini = _val_at(l5_ap, t_start)
+                l5_lat_ini = _val_at(l5_lateral, t_start)
+                l5_vert_ini = _val_at(l5_vertical, t_start)
+                vel_l5_ap = compute_derivative(l5_ap, x_axis)
+                vel_l5_lat = compute_derivative(l5_lateral, x_axis)
+                vel_l5_vert = compute_derivative(l5_vertical, x_axis)
+                vel_l5_resultante = resultant_magnitude(vel_l5_ap, vel_l5_lat, vel_l5_vert)
+                path3d = compute_path_length(resultant_magnitude(l5_ap, l5_lateral, l5_vertical), x_axis, t_start, t_end) if l5_ap is not None else None
+                path_h = compute_path_length(resultant_magnitude(l5_ap, l5_lateral), x_axis, t_start, t_end) if l5_ap is not None else None
+                if l5_ap is not None:
+                    n_l5 = min(len(l5_ap), len(l5_lateral), len(l5_vertical), len(x_axis))
+                    mask_l5 = _mask(t_start, t_end, n_l5)
+                    idxs = np.where(mask_l5)[0]
+                    if len(idxs) >= 2:
+                        p_ini = np.array([l5_ap[idxs[0]], l5_lateral[idxs[0]], l5_vertical[idxs[0]]])
+                        p_fim = np.array([l5_ap[idxs[-1]], l5_lateral[idxs[-1]], l5_vertical[idxs[-1]]])
+                        desloc_resultante = float(np.linalg.norm(p_fim - p_ini))
+                    else:
+                        desloc_resultante = None
+                else:
+                    desloc_resultante = None
+                rom_l5_h_resultante = compute_rom(resultant_magnitude(l5_ap, l5_lateral), x_axis, t_start, t_end) if l5_ap is not None else None
+                jerk_lin_ap_k = compute_jerk_rms(acc_ap_kinem_trunk, x_axis, t_start, t_end)
+                jerk_lin_ap_p = compute_jerk_rms(acc_ap_phone_trunk, x_axis, t_start, t_end)
+                jerk_lin_ml_k = compute_jerk_rms(acc_ml_kinem_trunk, x_axis, t_start, t_end)
+                jerk_lin_ml_p = compute_jerk_rms(acc_ml_phone_trunk, x_axis, t_start, t_end)
+                jerk_lin_h_k = compute_jerk_rms(acc_h_kinem_trunk, x_axis, t_start, t_end)
+                jerk_lin_h_p = compute_jerk_rms(acc_h_phone_trunk, x_axis, t_start, t_end)
+                linhas_l5.append({
+                    "Trial": str(i),
+                    "ROM AP (m) — Kinem": compute_rom(l5_ap, x_axis, t_start, t_end),
+                    "ROM ML (m) — Kinem": compute_rom(l5_lateral, x_axis, t_start, t_end),
+                    "ROM Vertical (m) — Kinem": compute_rom(l5_vertical, x_axis, t_start, t_end),
+                    "Desloc. AP no Pico (m) — Kinem": (_val_at(l5_ap, t_pico_joelho_k) - l5_ap_ini) if (l5_ap_ini is not None and t_pico_joelho_k is not None) else None,
+                    "Desloc. ML no Pico (m) — Kinem": (_val_at(l5_lateral, t_pico_joelho_k) - l5_lat_ini) if (l5_lat_ini is not None and t_pico_joelho_k is not None) else None,
+                    "Queda Vertical no Pico (m) — Kinem": (l5_vert_ini - _val_at(l5_vertical, t_pico_joelho_k)) if (l5_vert_ini is not None and t_pico_joelho_k is not None) else None,
+                    "RMS AP (m) — Kinem": compute_rms(l5_ap, x_axis, t_start, t_end),
+                    "RMS ML (m) — Kinem": compute_rms(l5_lateral, x_axis, t_start, t_end),
+                    "RMS Vertical (m) — Kinem": compute_rms(l5_vertical, x_axis, t_start, t_end),
+                    "Deslocamento Resultante (m) — Kinem": desloc_resultante,
+                    "Trajetória 3D (m) — Kinem": path3d,
+                    "Trajetória Horizontal (m) — Kinem": path_h,
+                    "Razão Caminho/Deslocamento — Kinem": (path3d / desloc_resultante) if (path3d is not None and desloc_resultante) else None,
+                    "Razão Caminho/ROM — Kinem": (path_h / rom_l5_h_resultante) if (path_h is not None and rom_l5_h_resultante) else None,
+                    "Velocidade Média (m/s) — Kinem": compute_mean(np.abs(vel_l5_resultante) if vel_l5_resultante is not None else None, x_axis, t_start, t_end),
+                    "Velocidade RMS (m/s) — Kinem": compute_rms(vel_l5_resultante, x_axis, t_start, t_end),
+                    "Pico Velocidade (m/s) — Kinem": compute_peak(vel_l5_resultante, x_axis, t_start, t_end),
+                    "RMS Acel. AP (m/s²) — Kinem": compute_rms(acc_ap_kinem_trunk, x_axis, t_start, t_end), "RMS Acel. AP (m/s²) — Celular": compute_rms(acc_ap_phone_trunk, x_axis, t_start, t_end),
+                    "RMS Acel. ML (m/s²) — Kinem": compute_rms(acc_ml_kinem_trunk, x_axis, t_start, t_end), "RMS Acel. ML (m/s²) — Celular": compute_rms(acc_ml_phone_trunk, x_axis, t_start, t_end),
+                    "RMS Acel. Horizontal (m/s²) — Kinem": compute_rms(acc_h_kinem_trunk, x_axis, t_start, t_end), "RMS Acel. Horizontal (m/s²) — Celular": compute_rms(acc_h_phone_trunk, x_axis, t_start, t_end),
+                    "Pico Acel. AP (m/s²) — Kinem": compute_peak(acc_ap_kinem_trunk, x_axis, t_start, t_end, signed=True), "Pico Acel. AP (m/s²) — Celular": compute_peak(acc_ap_phone_trunk, x_axis, t_start, t_end, signed=True),
+                    "Pico Acel. ML (m/s²) — Kinem": compute_peak(acc_ml_kinem_trunk, x_axis, t_start, t_end, signed=True), "Pico Acel. ML (m/s²) — Celular": compute_peak(acc_ml_phone_trunk, x_axis, t_start, t_end, signed=True),
+                    "Pico Acel. Horizontal (m/s²) — Kinem": compute_peak(acc_h_kinem_trunk, x_axis, t_start, t_end), "Pico Acel. Horizontal (m/s²) — Celular": compute_peak(acc_h_phone_trunk, x_axis, t_start, t_end),
+                    "Jerk Linear AP — Kinem": jerk_lin_ap_k, "Jerk Linear AP — Celular": jerk_lin_ap_p,
+                    "Jerk Linear ML — Kinem": jerk_lin_ml_k, "Jerk Linear ML — Celular": jerk_lin_ml_p,
+                    "Jerk Linear Horizontal — Kinem": jerk_lin_h_k, "Jerk Linear Horizontal — Celular": jerk_lin_h_p,
+                    "Estabilização pela Acel. (s) — Kinem": _estabilizacao(acc_h_kinem_trunk, i, s_start, s_end), "Estabilização pela Acel. (s) — Celular": _estabilizacao(acc_h_phone_trunk, i, s_start, s_end),
+                })
+
+                # ══════════════ 6. COORDENAÇÃO JOELHO-TRONCO ══════════════
+                coord_sag_k = compute_relative_coordination(angle_kinem_sagital, trunk_lean_kinem_sagital, x_axis, t_start, t_end, max_lag=1.0, lag_step=0.02)
+                coord_sag_p = compute_relative_coordination(angle_phone_sagital, trunk_lean_phone_sagital, x_axis, t_start, t_end, max_lag=1.0, lag_step=0.02)
+                coord_front_k = compute_relative_coordination(angle_kinem_frontal, trunk_lean_kinem_frontal, x_axis, t_start, t_end, max_lag=1.0, lag_step=0.02)
+                coord_front_p = compute_relative_coordination(angle_phone_frontal, trunk_lean_phone_frontal, x_axis, t_start, t_end, max_lag=1.0, lag_step=0.02)
+                rom_coxa_sag_k = compute_rom(coxa_lean_kinem_sagital, x_axis, t_start, t_end)
+                rom_coxa_sag_p = compute_rom(coxa_lean_phone_sagital, x_axis, t_start, t_end)
+                linhas_coord.append({
+                    "Trial": str(i),
+                    "Correlação Sagital Joelho-Tronco — Kinem": coord_sag_k["correlacao"], "Correlação Sagital Joelho-Tronco — Celular": coord_sag_p["correlacao"],
+                    "Atraso Tronco-Joelho (s) — Kinem": coord_sag_k["atraso_s"], "Atraso Tronco-Joelho (s) — Celular": coord_sag_p["atraso_s"],
+                    "Dif. Picos Sagitais (s) — Kinem": (compute_peak(trunk_lean_kinem_sagital, x_axis, t_start, t_end) is not None) and None,  # placeholder abaixo
+                    "Razão ROM Tronco/Joelho — Kinem": (rom_tr_sag_k / adm_sag_k) if (rom_tr_sag_k is not None and adm_sag_k) else None,
+                    "Razão ROM Tronco/Joelho — Celular": (rom_tr_sag_p / adm_sag_p) if (rom_tr_sag_p is not None and adm_sag_p) else None,
+                    "Correlação Valgo-Inclinação — Kinem": coord_front_k["correlacao"], "Correlação Valgo-Inclinação — Celular": coord_front_p["correlacao"],
+                    "Dif. Pico Lateral-Valgo (s) — Kinem": (t_lat_k - t_valgo_k) if (t_lat_k is not None and t_valgo_k is not None) else None,
+                    "Dif. Pico Lateral-Valgo (s) — Celular": (t_lat_p - t_valgo_p) if (t_lat_p is not None and t_valgo_p is not None) else None,
+                    "Razão Inclinação/Valgo — Kinem": (abs(v_lat_k) / abs(pico_valgo_k)) if (v_lat_k is not None and pico_valgo_k) else None,
+                    "Razão Inclinação/Valgo — Celular": (abs(v_lat_p) / abs(pico_valgo_p)) if (v_lat_p is not None and pico_valgo_p) else None,
+                    "Flexão do Tronco no Pico de Valgo — Kinem": _val_at(trunk_lean_kinem_sagital, t_valgo_k), "Flexão do Tronco no Pico de Valgo — Celular": _val_at(trunk_lean_phone_sagital, t_valgo_p),
+                    "Inclinação no Pico de Valgo — Kinem": _val_at(trunk_lean_kinem_frontal, t_valgo_k), "Inclinação no Pico de Valgo — Celular": _val_at(trunk_lean_phone_frontal, t_valgo_p),
+                    "Valgo no Pico Lateral — Kinem": _val_at(angle_kinem_frontal, t_lat_k), "Valgo no Pico Lateral — Celular": _val_at(angle_phone_frontal, t_lat_p),
+                })
+                # corrige "Dif. Picos Sagitais" de verdade (tempo do pico do tronco − tempo do pico do joelho)
+                t_pico_tronco_k, _ = _tempo_pico(trunk_lean_kinem_sagital, t_start, t_end)
+                linhas_coord[-1]["Dif. Picos Sagitais (s) — Kinem"] = (t_pico_tronco_k - t_pico_joelho_k) if (t_pico_tronco_k is not None and t_pico_joelho_k is not None) else None
+                t_pico_tronco_p, _ = _tempo_pico(trunk_lean_phone_sagital, t_start, t_end)
+                t_pico_joelho_p, _ = _tempo_pico(angle_phone_sagital, t_start, t_end)
+                linhas_coord[-1]["Dif. Picos Sagitais (s) — Celular"] = (t_pico_tronco_p - t_pico_joelho_p) if (t_pico_tronco_p is not None and t_pico_joelho_p is not None) else None
+
+            st.markdown("##### 1️⃣ Tempos das fases")
+            _monta_bloco("Tempos das fases", linhas_tempos)
+
+            st.markdown("##### 2️⃣ Joelho — plano sagital")
+            _monta_bloco("Joelho sagital", linhas_joelho_sag)
+
+            st.markdown("##### 3️⃣ Joelho — plano frontal (valgo/varo)")
+            st.caption("Convenção: valgo negativo, varo positivo.")
+            _monta_bloco("Joelho frontal", linhas_joelho_front)
+
+            st.markdown("##### 4️⃣ Tronco angular (flexão-extensão e inclinação lateral)")
+            st.caption(
+                "Celular em L5 = orientação angular do tronco (fusão 3D). Kinem = proxy cinemático projetado "
+                "trocânter-L5 (não é o ângulo anatômico tridimensional completo do tronco)."
+            )
+            _monta_bloco("Tronco angular", linhas_tronco)
+
+            st.markdown("##### 5️⃣ Deslocamento translacional de L5")
+            st.caption("Posição só pela cinemática (marcador). Aceleração por ambos os instrumentos, quando comparável.")
+            _monta_bloco("L5 translacional", linhas_l5)
+
+            st.markdown("##### 6️⃣ Coordenação joelho-tronco")
+            df_analise_final = _monta_bloco("Coordenação", linhas_coord)
 
             st.caption(
-                "Pico = maior valor atingido no trial (não a variação total). Pico de valgo preserva o sinal "
-                "(positivo/negativo indicam o lado — ver nota do plano frontal). "
-                "'Duração Posição Inferior' está vazia — não disponível: esse app segmenta em 3 fases "
-                "(preparação/descida/subida), sem uma fase isolada de 'apoio no fundo'. "
-                "'ROM Tronco-Coxa (proxy)' é o ângulo relativo L5-coxa (não um verdadeiro ângulo anatômico do "
-                "quadril, que exigiria um sistema pélvico completo)."
+                "ℹ️ Cada bloco mostra os valores por repetição e, ao final, um resumo entre repetições (média, desvio "
+                "padrão, mínimo, máximo, CV%, diferença 1ª−última e tendência linear por trial). "
+                "Nomenclatura: 'Tronco' = orientação estimada pelo celular em L5 ou proxy cinemático trocânter-L5 "
+                "(nunca chamado de ângulo anatômico verdadeiro da coluna); 'ADM/ROM' = amplitude de movimento "
+                f"(máximo − mínimo). Nota clínica registrada para esse teste: **{nota_clinica if nota_clinica else 'não informada'}**."
             )
 
-            csv_bytes = analise_df_full.to_csv(index=False).encode("utf-8-sig")
-            st.download_button(
-                "📥 Exportar análise (CSV)", csv_bytes,
-                file_name="analise_clinica_step_down.csv", mime="text/csv",
-                use_container_width=True,
-            )
-    # --- Fases do movimento por trial: duração já incluída na tabela "Ver variáveis" acima ---
+    # --- Fases do movimento por trial: duração já incluída nos blocos "Ver variáveis" acima ---
 
     st.divider()
 
@@ -1890,116 +2105,6 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
         st.info(resumo_md)
     else:
         st.info("📘 **Resumo do resultado do teste** — não há trials segmentados o suficiente pra gerar um resumo automático.")
-
-    # ══════════════════════════════════════════
-    # Estabilidade de tronco — conjunto completo de variáveis
-    # ══════════════════════════════════════════
-    st.divider()
-    st.subheader("🧍 Estabilidade de tronco — conjunto completo de variáveis")
-    st.caption(
-        "Baseado nas variáveis sugeridas pra esse tipo de teste — separadas por preparação/descida/subida "
-        "(ainda não por 'apoio' e 'estabilização final' como fases isoladas). K = Kinem, C = Celular."
-    )
-    if not valid_trials_summary:
-        st.info("Nenhum trial segmentado o suficiente pra calcular essas variáveis.")
-    else:
-        linhas_tronco = []
-        for i, ((t_start, t_end), phases) in enumerate(valid_trials_summary, 1):
-            d_start, d_end = phases["descida"]
-            s_start, s_end = phases["subida"]
-            linha = {"Trial": i}
-
-            # --- ROM e RMS angulares (tronco absoluto) ---
-            linha["ROM Flexão-Extensão Tronco (K)"] = compute_rom(trunk_lean_kinem_sagital, x_axis, t_start, t_end)
-            linha["ROM Flexão-Extensão Tronco (C)"] = compute_rom(trunk_lean_phone_sagital, x_axis, t_start, t_end)
-            linha["ROM Inclinação Lateral Tronco (K)"] = compute_rom(trunk_lean_kinem_frontal, x_axis, t_start, t_end)
-            linha["ROM Inclinação Lateral Tronco (C)"] = compute_rom(trunk_lean_phone_frontal, x_axis, t_start, t_end)
-            linha["RMS Ângulo Sagital Tronco (K)"] = compute_rms(trunk_lean_kinem_sagital, x_axis, t_start, t_end)
-            linha["RMS Ângulo Sagital Tronco (C)"] = compute_rms(trunk_lean_phone_sagital, x_axis, t_start, t_end)
-            linha["RMS Ângulo Lateral Tronco (K)"] = compute_rms(trunk_lean_kinem_frontal, x_axis, t_start, t_end)
-            linha["RMS Ângulo Lateral Tronco (C)"] = compute_rms(trunk_lean_phone_frontal, x_axis, t_start, t_end)
-            linha["AUC |Ângulo| Sagital Tronco (K)"] = compute_auc_abs(trunk_lean_kinem_sagital, x_axis, t_start, t_end)
-            linha["AUC |Ângulo| Sagital Tronco (C)"] = compute_auc_abs(trunk_lean_phone_sagital, x_axis, t_start, t_end)
-            linha["AUC |Ângulo| Lateral Tronco (K)"] = compute_auc_abs(trunk_lean_kinem_frontal, x_axis, t_start, t_end)
-            linha["AUC |Ângulo| Lateral Tronco (C)"] = compute_auc_abs(trunk_lean_phone_frontal, x_axis, t_start, t_end)
-
-            # --- Velocidade angular resultante e suavidade ---
-            linha["RMS Vel.Angular Resultante (K)"] = compute_rms(trunk_angvel_kinem_resultante, x_axis, t_start, t_end)
-            linha["RMS Vel.Angular Resultante (C)"] = compute_rms(trunk_angvel_phone_resultante, x_axis, t_start, t_end)
-            linha["Pico Vel.Angular Resultante (K)"] = compute_peak(trunk_angvel_kinem_resultante, x_axis, t_start, t_end)
-            linha["Pico Vel.Angular Resultante (C)"] = compute_peak(trunk_angvel_phone_resultante, x_axis, t_start, t_end)
-            linha["Jerk Angular Normalizado (K)"] = compute_jerk_normalized(trunk_angvel_kinem_resultante, x_axis, t_start, t_end)
-            linha["Jerk Angular Normalizado (C)"] = compute_jerk_normalized(trunk_angvel_phone_resultante, x_axis, t_start, t_end)
-
-            # --- Aceleração translacional de L5 ---
-            linha["RMS Acel. AP (K)"] = compute_rms(acc_ap_kinem_trunk, x_axis, t_start, t_end)
-            linha["RMS Acel. AP (C)"] = compute_rms(acc_ap_phone_trunk, x_axis, t_start, t_end)
-            linha["RMS Acel. ML (K)"] = compute_rms(acc_ml_kinem_trunk, x_axis, t_start, t_end)
-            linha["RMS Acel. ML (C)"] = compute_rms(acc_ml_phone_trunk, x_axis, t_start, t_end)
-            linha["RMS Acel. Horizontal (K)"] = compute_rms(acc_h_kinem_trunk, x_axis, t_start, t_end)
-            linha["RMS Acel. Horizontal (C)"] = compute_rms(acc_h_phone_trunk, x_axis, t_start, t_end)
-            linha["Pico Acel. Horizontal (K)"] = compute_peak(acc_h_kinem_trunk, x_axis, t_start, t_end)
-            linha["Pico Acel. Horizontal (C)"] = compute_peak(acc_h_phone_trunk, x_axis, t_start, t_end)
-            linha["Jerk Linear Normalizado (K)"] = compute_jerk_normalized(acc_h_kinem_trunk, x_axis, t_start, t_end)
-            linha["Jerk Linear Normalizado (C)"] = compute_jerk_normalized(acc_h_phone_trunk, x_axis, t_start, t_end)
-            linha["Comprimento Trajeto AP+ML (K)"] = compute_path_length(acc_h_kinem_trunk, x_axis, t_start, t_end)
-            linha["Comprimento Trajeto AP+ML (C)"] = compute_path_length(acc_h_phone_trunk, x_axis, t_start, t_end)
-
-            # --- Coordenação/relação lombar-coxa (usa o ângulo de quadril já calculado) ---
-            rom_tronco_k = linha["ROM Inclinação Lateral Tronco (K)"]
-            rom_hip_k = compute_rom(angle_hip_kinem_sagital, x_axis, t_start, t_end)
-            rom_hip_p = compute_rom(angle_hip_phone_sagital, x_axis, t_start, t_end)
-            linha["ROM Relativo Quadril Sagital (K)"] = rom_hip_k
-            linha["ROM Relativo Quadril Sagital (C)"] = rom_hip_p
-            linha["Razão Compensação Tronco/Coxa (K)"] = (rom_tronco_k / rom_hip_k) if (rom_tronco_k is not None and rom_hip_k) else None
-            coord = compute_relative_coordination(trunk_angvel_kinem_frontal_dot, angle_hip_kinem_sagital, x_axis, t_start, t_end, max_lag=1.0, lag_step=0.02)
-            linha["Correlação Tronco-Coxa (K)"] = coord["correlacao"]
-            linha["Atraso Tronco-Coxa, s (K)"] = coord["atraso_s"]
-
-            # --- Tempo de estabilização (usa a preparação do PRÓXIMO trial, se houver, como referência basal) ---
-            if i < len(valid_trials_summary):
-                (_, _), prox_phases = valid_trials_summary[i]
-                basal_ini, basal_fim = prox_phases["preparacao"]
-                linha["Tempo Estabilização Lateral, s (K)"] = compute_stabilization_time(
-                    trunk_lean_kinem_frontal, x_axis, basal_ini, basal_fim, s_start, s_end + 3.0, n_sd=3.0, sustain_seconds=0.5,
-                )
-                linha["Tempo Estabilização Lateral, s (C)"] = compute_stabilization_time(
-                    trunk_lean_phone_frontal, x_axis, basal_ini, basal_fim, s_start, s_end + 3.0, n_sd=3.0, sustain_seconds=0.5,
-                )
-            else:
-                linha["Tempo Estabilização Lateral, s (K)"] = None
-                linha["Tempo Estabilização Lateral, s (C)"] = None
-
-            linhas_tronco.append(linha)
-
-        df_tronco = pd.DataFrame(linhas_tronco)
-
-        # --- Linha de resumo (CV entre repetições) por coluna ---
-        resumo_cv = {"Trial": "CV entre trials (%)"}
-        resumo_media = {"Trial": "Média"}
-        for col in df_tronco.columns:
-            if col == "Trial":
-                continue
-            cv_info = compute_cv_across_trials(df_tronco[col].tolist())
-            resumo_media[col] = cv_info["media"]
-            resumo_cv[col] = cv_info["cv_pct"]
-        df_tronco_completo = pd.concat([df_tronco, pd.DataFrame([resumo_media, resumo_cv])], ignore_index=True)
-
-        st.dataframe(df_tronco_completo.round(3), use_container_width=True, hide_index=True)
-        st.caption(
-            "ROM/RMS/AUC/Jerk calculados sobre o trial inteiro (preparação+descida+subida). Tempo de estabilização usa a "
-            "preparação do trial SEGUINTE como referência de repouso (por isso o último trial fica em branco — não há "
-            "próximo trial pra comparar). Razão de compensação > 1 sugere que o tronco se move mais que a coxa "
-            "proporcionalmente; correlação/atraso tronco-coxa comparam a velocidade angular do tronco com o ângulo do "
-            "quadril, testando um deslocamento de até ±1s pra achar o melhor alinhamento."
-        )
-
-        csv_tronco = df_tronco_completo.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "📥 Exportar estabilidade de tronco (CSV)", csv_tronco,
-            file_name="estabilidade_tronco_completa.csv", mime="text/csv",
-            use_container_width=True,
-        )
 
     # ══════════════════════════════════════════
     # Quadro-detalhe do método de processamento e análise

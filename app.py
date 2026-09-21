@@ -76,6 +76,65 @@ from signal_utils import (
 )
 
 st.set_page_config(page_title="Lateral Step-Down test data processing", layout="wide")
+
+# ══════════════════════════════════════════
+# Estilo visual: paleta azul-petróleo + laranja queimado, títulos em
+# estilo "kicker" (versalete, com espaçamento entre letras), tabelas com
+# linhas alternadas (zebra).
+# ══════════════════════════════════════════
+_COR_PRIMARIA = "#1B4B5A"   # azul-petróleo
+_COR_DESTAQUE = "#C1541C"   # laranja queimado
+_COR_ZEBRA = "#F2EFEA"      # bege bem claro, pra linhas alternadas
+st.markdown(f"""
+<style>
+    .stApp {{
+        font-family: "Source Sans Pro", "Helvetica Neue", sans-serif;
+    }}
+    /* Título principal */
+    h1 {{
+        color: {_COR_PRIMARIA} !important;
+        font-weight: 700 !important;
+        border-bottom: 3px solid {_COR_DESTAQUE};
+        padding-bottom: 0.4rem;
+    }}
+    /* Títulos de seção (st.subheader, st.markdown "###"/"####") — estilo
+       "kicker": versalete, espaçamento entre letras, discreto */
+    h2, h3, h4 {{
+        text-transform: uppercase !important;
+        letter-spacing: 0.09em !important;
+        font-size: 1.0rem !important;
+        font-weight: 700 !important;
+        color: {_COR_PRIMARIA} !important;
+        border-left: 4px solid {_COR_DESTAQUE};
+        padding-left: 0.6rem;
+        margin-top: 1.8rem !important;
+        margin-bottom: 0.6rem !important;
+    }}
+    /* Botões principais (type="primary") na cor de destaque */
+    .stButton > button[kind="primary"], .stDownloadButton > button {{
+        background-color: {_COR_DESTAQUE} !important;
+        border-color: {_COR_DESTAQUE} !important;
+    }}
+    .stButton > button[kind="primary"]:hover, .stDownloadButton > button:hover {{
+        background-color: {_COR_PRIMARIA} !important;
+        border-color: {_COR_PRIMARIA} !important;
+    }}
+    /* Divisores mais sutis */
+    hr {{
+        border-color: #D9D2C7 !important;
+    }}
+    /* Linhas alternadas (zebra) nas tabelas */
+    div[data-testid="stDataFrame"] div[role="row"]:nth-of-type(even) {{
+        background-color: {_COR_ZEBRA} !important;
+    }}
+    div[data-testid="stDataFrame"] div[role="columnheader"] {{
+        background-color: {_COR_PRIMARIA} !important;
+        color: white !important;
+        font-weight: 600 !important;
+    }}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("📊 Lateral Step-Down test data processing")
 
 NONE = NONE_LABEL
@@ -864,8 +923,8 @@ if st.session_state.synced and st.session_state.raw_synced and st.session_state.
                     fillcolor="rgba(255, 99, 71, 0.18)", line_width=0,
                     annotation_text="janela de calibração", annotation_position="bottom left",
                 )
-            add_angle_trace(fig, k_series, "blue", "Kinem — sagital")
-            add_angle_trace(fig, p_series, "red", "Celular — sagital")
+            add_angle_trace(fig, k_series, "#1B4B5A", "Kinem — sagital")
+            add_angle_trace(fig, p_series, "#C1541C", "Celular — sagital")
             add_angle_trace(fig, angle_kinem_3d, "gray", "Kinem — 3D total", dash="dot")
             add_l5_overlay(fig)
             add_phase_markers(fig, k_series)
